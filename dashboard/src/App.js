@@ -290,7 +290,7 @@ export default function App() {
         <div style={s.card}>
           <div style={s.row}>
             <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>SKU:</span>
-            <SkuSearch skus={skus} value={selSku} onChange={setSelSku} />
+            <SkuSearch skus={skus} value={selSku} onChange={(v) => { setSelSku(v); setResult(null); setError(''); }} />
             <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Semanas:</span>
             <select style={{ ...s.input, fontSize: 13, padding: '6px 10px', cursor: 'pointer' }}
               value={periods} onChange={e => setPeriods(e.target.value)}>
@@ -300,7 +300,7 @@ export default function App() {
             </select>
             <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Canal:</span>
             <select style={{ ...s.input, fontSize: 13, padding: '6px 10px', cursor: 'pointer', minWidth: 180 }}
-              value={canal} onChange={e => setCanal(e.target.value)}>
+              value={canal} onChange={e => { setCanal(e.target.value); setResult(null); setError(''); }}>
               <option value="">Todos los canales</option>
               {canales.filter(c => c !== 'OFICINA').map(c => (
                 <option key={c} value={c}>{c}</option>

@@ -141,6 +141,7 @@ def forecast_sku(req: ForecastRequest):
     try:
         df     = get_sales_df(req.use_csv)
         events = [e.model_dump() for e in req.events] if req.events else None
+        logger.warning(f">>> REQUEST: sku={req.sku} canal={repr(req.canal)} zona={repr(req.zona)} force_retrain={req.force_retrain}")
         return run_sku_pipeline(
             df=df, sku=req.sku, canal=req.canal, zona=req.zona,
             extra_events=events, forecast_periods=req.periods,
