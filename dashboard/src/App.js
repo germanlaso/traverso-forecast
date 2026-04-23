@@ -72,11 +72,11 @@ function SkuSearch({ skus, value, onChange }) {
   const selected = skus.find(s => s.sku === value);
 
   const filtered = query.trim() === ''
-    ? skus.slice(0, 80)
+    ? skus.slice(0, 100)
     : skus.filter(s =>
         s.sku.toLowerCase().includes(query.toLowerCase()) ||
         (s.descripcion || '').toLowerCase().includes(query.toLowerCase())
-      ).slice(0, 80);
+      );
 
   useEffect(() => {
     const handler = (e) => {
@@ -118,7 +118,7 @@ function SkuSearch({ skus, value, onChange }) {
         }}>
           {query.trim() === '' && (
             <div style={{ fontSize: 10, color: C.textMuted, padding: '6px 12px', borderBottom: `0.5px solid ${C.border}` }}>
-              Mostrando top 80 por volumen · escribe para filtrar
+              Mostrando top 100 por volumen · escribe para buscar entre todos los SKUs
             </div>
           )}
           {filtered.map((sk, i) => (
