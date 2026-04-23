@@ -26,6 +26,9 @@ services:
     container_name: traverso_dashboard
     ports:
       - "3000:3000"
+    volumes:
+      - ./dashboard/src:/app/src
+      - ./dashboard/public:/app/public
     depends_on:
       - forecast
     restart: unless-stopped
