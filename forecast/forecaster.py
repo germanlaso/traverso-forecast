@@ -258,6 +258,7 @@ def run_sku_pipeline(df: pd.DataFrame,
 
     # Regressores automáticos según categoría
     regressors = get_category_regressors(categoria)
+    logger.info(f"SKU={sku} | categoria='{categoria}' | regressors={[r['name'] for r in regressors]}")
 
     # Intentar modelo en caché (solo si no hay eventos manuales que cambien el modelo)
     if not force_retrain and not extra_events:
