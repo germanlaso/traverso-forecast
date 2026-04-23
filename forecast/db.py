@@ -1,16 +1,18 @@
 """
 db.py — Conexión a SQL Server y extracción de historial de ventas
 Traverso S.A. · Piloto de Forecast
+Tabla: dbo.ventas
+Segmento: COMERCIAL
+Granularidad: semanal
 """
 
 import os
 import pandas as pd
-import pyodbc
 from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus
 
 
-# ── Configuración de conexión ─────────────────────────────────────────────────
+# ── Conexión ──────────────────────────────────────────────────────────────────
 
 def get_connection_string() -> str:
     server   = os.environ["SQL_SERVER"]
@@ -18,7 +20,6 @@ def get_connection_string() -> str:
     username = os.environ["SQL_USERNAME"]
     password = os.environ["SQL_PASSWORD"]
     driver   = os.environ.get("SQL_DRIVER", "ODBC Driver 18 for SQL Server")
-
     return (
         f"DRIVER={{{driver}}};"
         f"SERVER={server};"
@@ -31,144 +32,158 @@ def get_connection_string() -> str:
 
 
 def get_engine():
-    conn_str = get_connection_string()
-    quoted   = quote_plus(conn_str)
-    return create_engine(f"mssql+pyodbc:///?odbc_connect={quoted}", fast_executemany=True)
+    quoted = quote_plus(get_connection_string())
+    return create_engine(
+        f"mssql+pyodbc:///?odbc_connect={quoted}",
+        fast_executemany=True
+    )
 
 
 def test_connection() -> dict:
-    """Verifica que la conexión al SQL Server funcione."""
     try:
-        engine = get_engine()
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT @@VERSION AS version"))
-            version = result.fetchone()[0]
+        with get_engine().connect() as conn:
+            version = conn.execute(text("SELECT @@VERSION")).fetchone()[0]
         return {"ok": True, "version": version[:80]}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
-# ── Extracción de ventas ──────────────────────────────────────────────────────
+# ── Query principal ───────────────────────────────────────────────────────────
+# Filtros aplicados:
+#   - Segmento = 'COMERCIAL'
+#   - Todas las empresas (TR, CS, MON) consolidadas como Traverso
+#   - Solo Facturas y Boletas (excluye NC y ND)
+#   - Cantidad > 0 (excluye devoluciones)
+#   - Dimensiones: SKU x Canal de comercializacion x Zona
+#   - Agrupación: lunes de cada semana
 
 SALES_QUERY = """
--- ╔══════════════════════════════════════════════════════════════════╗
--- ║  CONFIGURA ESTA QUERY CON TUS NOMBRES DE TABLA Y COLUMNAS       ║
--- ║  Reemplaza:                                                      ║
--- ║    tu_tabla_ventas  → nombre real de tu tabla                    ║
--- ║    col_fecha        → columna de fecha de venta                  ║
--- ║    col_sku          → columna de código de producto/SKU          ║
--- ║    col_cantidad     → columna de cantidad vendida                ║
--- ║    col_descripcion  → columna de descripción del producto        ║
--- ╚══════════════════════════════════════════════════════════════════╝
 SELECT
-    CAST(col_fecha AS DATE)        AS fecha,
-    col_sku                        AS sku,
-    col_descripcion                AS descripcion,
-    SUM(col_cantidad)              AS cantidad
+    CAST(DATEADD(DAY, 1 - DATEPART(WEEKDAY, [Fecha]), CAST([Fecha] AS DATE)) AS DATE)
+                                        AS fecha_semana,
+    [Codigo Articulo]                   AS sku,
+    [Nombre Articulo]                   AS descripcion,
+    [Canal de comercializacion]         AS canal,
+    [Zona]                              AS zona,
+    SUM([Cantidad])                     AS cantidad,
+    SUM([Total Linea])                  AS venta_total_clp,
+    AVG([Precio])                       AS precio_promedio,
+    [Marca]                             AS marca,
+    [Categ. Comercial]                  AS categoria,
+    [Sub Familia]                       AS sub_familia
 FROM
-    tu_tabla_ventas
+    dbo.ventas
 WHERE
-    col_fecha >= DATEADD(MONTH, -48, GETDATE())   -- últimos 48 meses
-    AND col_cantidad > 0
-    AND col_sku IS NOT NULL
+    [Segmento] = 'COMERCIAL'
+    AND [Fecha] >= DATEADD(MONTH, -48, GETDATE())
+    AND [Tipo Doc] IN ('Factura', 'Boleta')
+    AND [Cantidad] > 0
+    AND [Codigo Articulo] IS NOT NULL AND [Codigo Articulo] <> ''
+    AND [Zona] IS NOT NULL AND [Zona] <> ''
+    AND [Canal de comercializacion] IS NOT NULL AND [Canal de comercializacion] <> ''
 GROUP BY
-    CAST(col_fecha AS DATE),
-    col_sku,
-    col_descripcion
+    CAST(DATEADD(DAY, 1 - DATEPART(WEEKDAY, [Fecha]), CAST([Fecha] AS DATE)) AS DATE),
+    [Codigo Articulo], [Nombre Articulo],
+    [Canal de comercializacion], [Zona],
+    [Marca], [Categ. Comercial], [Sub Familia]
 ORDER BY
-    sku, fecha
+    sku, fecha_semana
 """
 
 
-def load_sales(skus: list[str] | None = None,
-               months: int = 48,
-               query_override: str | None = None) -> pd.DataFrame:
-    """
-    Carga el historial de ventas desde SQL Server.
+# ── Carga de datos ────────────────────────────────────────────────────────────
 
-    Args:
-        skus:            Lista de SKUs a filtrar. None = todos.
-        months:          Meses de historial a cargar.
-        query_override:  Query SQL personalizada (reemplaza la default).
-
-    Returns:
-        DataFrame con columnas: fecha, sku, descripcion, cantidad
-    """
-    engine = get_engine()
-    query  = query_override or SALES_QUERY
-
-    df = pd.read_sql(query, engine)
-
-    # Normalización básica
-    df["fecha"]    = pd.to_datetime(df["fecha"])
-    df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
-    df["sku"]      = df["sku"].astype(str).str.strip()
-
+def load_sales(skus: list[str] | None = None) -> pd.DataFrame:
+    df = pd.read_sql(SALES_QUERY, get_engine())
+    df["fecha_semana"]    = pd.to_datetime(df["fecha_semana"])
+    df["cantidad"]        = pd.to_numeric(df["cantidad"],        errors="coerce").fillna(0)
+    df["venta_total_clp"] = pd.to_numeric(df["venta_total_clp"], errors="coerce").fillna(0)
+    df["precio_promedio"] = pd.to_numeric(df["precio_promedio"], errors="coerce").fillna(0)
+    df["sku"]             = df["sku"].astype(str).str.strip()
+    df["canal"]           = df["canal"].astype(str).str.strip()
+    df["zona"]            = df["zona"].astype(str).str.strip()
     if skus:
         df = df[df["sku"].isin(skus)]
-
     return df
 
 
 def get_sku_list() -> pd.DataFrame:
-    """Retorna la lista de SKUs disponibles con su volumen total."""
-    engine = get_engine()
-
-    # Ajusta con tu query real
+    """Lista de SKUs del segmento COMERCIAL con volumen y cobertura."""
     query = """
     SELECT
-        col_sku         AS sku,
-        col_descripcion AS descripcion,
-        SUM(col_cantidad) AS volumen_total,
-        MIN(col_fecha)    AS primera_venta,
-        MAX(col_fecha)    AS ultima_venta,
-        COUNT(DISTINCT CAST(col_fecha AS DATE)) AS dias_con_venta
-    FROM tu_tabla_ventas
-    WHERE col_cantidad > 0 AND col_sku IS NOT NULL
-    GROUP BY col_sku, col_descripcion
+        [Codigo Articulo]               AS sku,
+        [Nombre Articulo]               AS descripcion,
+        [Marca]                         AS marca,
+        [Categ. Comercial]              AS categoria,
+        [Sub Familia]                   AS sub_familia,
+        SUM([Cantidad])                 AS volumen_total,
+        SUM([Total Linea])              AS venta_total_clp,
+        MIN([Fecha])                    AS primera_venta,
+        MAX([Fecha])                    AS ultima_venta,
+        COUNT(DISTINCT
+            CAST(DATEADD(DAY, 1 - DATEPART(WEEKDAY,[Fecha]),
+                CAST([Fecha] AS DATE)) AS DATE))  AS semanas_con_venta,
+        COUNT(DISTINCT [Canal de comercializacion]) AS n_canales,
+        COUNT(DISTINCT [Zona])                      AS n_zonas
+    FROM dbo.ventas
+    WHERE
+        [Segmento] = 'COMERCIAL'
+        AND [Tipo Doc] IN ('Factura', 'Boleta')
+        AND [Cantidad] > 0
+        AND [Codigo Articulo] IS NOT NULL AND [Codigo Articulo] <> ''
+        AND [Fecha] >= DATEADD(MONTH, -48, GETDATE())
+    GROUP BY [Codigo Articulo], [Nombre Articulo], [Marca], [Categ. Comercial], [Sub Familia]
     ORDER BY volumen_total DESC
     """
+    df = pd.read_sql(query, get_engine())
+    df["primera_venta"] = pd.to_datetime(df["primera_venta"]).dt.strftime("%Y-%m-%d")
+    df["ultima_venta"]  = pd.to_datetime(df["ultima_venta"]).dt.strftime("%Y-%m-%d")
+    return df
 
-    return pd.read_sql(query, engine)
+
+def get_dimension_summary() -> dict:
+    """Valores únicos de Canal y Zona del segmento COMERCIAL."""
+    query = """
+    SELECT DISTINCT
+        [Canal de comercializacion] AS canal,
+        [Zona]                      AS zona
+    FROM dbo.ventas
+    WHERE
+        [Segmento] = 'COMERCIAL'
+        AND [Tipo Doc] IN ('Factura', 'Boleta')
+        AND [Cantidad] > 0
+        AND [Canal de comercializacion] IS NOT NULL AND [Canal de comercializacion] <> ''
+        AND [Zona] IS NOT NULL AND [Zona] <> ''
+    ORDER BY canal, zona
+    """
+    df = pd.read_sql(query, get_engine())
+    return {
+        "canales": sorted(df["canal"].unique().tolist()),
+        "zonas":   sorted(df["zona"].unique().tolist()),
+    }
 
 
-# ── Carga desde CSV (modo offline / piloto sin SQL) ───────────────────────────
+# ── Modo CSV offline ──────────────────────────────────────────────────────────
 
 def load_sales_from_csv(path: str) -> pd.DataFrame:
-    """
-    Alternativa offline: carga ventas desde un CSV exportado.
-    
-    El CSV debe tener columnas: fecha, sku, descripcion, cantidad
-    Formato fecha aceptado: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY
-    """
     df = pd.read_csv(path)
-
-    # Detectar y normalizar columnas comunes
     col_map = {}
     for col in df.columns:
-        c = col.lower().strip()
-        if c in ("fecha", "date", "fecha_venta", "sale_date"):
-            col_map[col] = "fecha"
-        elif c in ("sku", "codigo", "código", "producto", "product_code", "item"):
-            col_map[col] = "sku"
-        elif c in ("descripcion", "descripción", "description", "nombre", "product_name"):
-            col_map[col] = "descripcion"
-        elif c in ("cantidad", "qty", "quantity", "units", "unidades", "ventas"):
-            col_map[col] = "cantidad"
-
+        c = col.lower().strip().replace(" ", "_")
+        if c in ("fecha_semana", "fecha", "date", "week"):           col_map[col] = "fecha_semana"
+        elif c in ("sku", "codigo_articulo", "codigo"):              col_map[col] = "sku"
+        elif c in ("descripcion", "nombre_articulo", "nombre"):      col_map[col] = "descripcion"
+        elif c in ("cantidad", "qty", "quantity", "ventas"):         col_map[col] = "cantidad"
+        elif c in ("canal", "canal_de_comercializacion", "channel"): col_map[col] = "canal"
+        elif c in ("zona", "zone", "region"):                        col_map[col] = "zona"
     df = df.rename(columns=col_map)
-
-    required = {"fecha", "sku", "cantidad"}
-    missing  = required - set(df.columns)
+    missing = {"fecha_semana", "sku", "cantidad"} - set(df.columns)
     if missing:
-        raise ValueError(f"Columnas faltantes en CSV: {missing}. "
-                         f"Columnas disponibles: {list(df.columns)}")
-
-    df["fecha"]    = pd.to_datetime(df["fecha"], dayfirst=True, errors="coerce")
-    df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
-    df["sku"]      = df["sku"].astype(str).str.strip()
-
-    if "descripcion" not in df.columns:
-        df["descripcion"] = df["sku"]
-
-    return df.dropna(subset=["fecha"])
+        raise ValueError(f"Columnas faltantes: {missing}. Disponibles: {list(df.columns)}")
+    df["fecha_semana"] = pd.to_datetime(df["fecha_semana"], dayfirst=True, errors="coerce")
+    df["cantidad"]     = pd.to_numeric(df["cantidad"], errors="coerce").fillna(0)
+    df["sku"]          = df["sku"].astype(str).str.strip()
+    for col in ("canal", "zona", "descripcion", "marca", "categoria", "sub_familia"):
+        if col not in df.columns:
+            df[col] = "Sin definir"
+    return df.dropna(subset=["fecha_semana"])

@@ -1,29 +1,20 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ComposedChart, Line, Area, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ResponsiveContainer, ReferenceLine
+  Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
 import axios from 'axios';
 
-const API = '';  // proxy via package.json → forecast:8000
+const API = '';
 
-// ── Paleta ────────────────────────────────────────────────────────────────────
 const C = {
-  teal:      '#1D9E75',
-  tealLt:    '#E1F5EE',
-  blue:      '#185FA5',
-  blueLt:    '#E6F1FB',
-  purple:    '#534AB7',
-  purpleLt:  '#EEEDFE',
-  amber:     '#EF9F27',
-  amberLt:   '#FAEEDA',
-  gray:      '#5F5E5A',
-  grayLt:    '#F1EFE8',
-  danger:    '#E24B4A',
-  dangerLt:  '#FCEBEB',
-  border:    '#D3D1C7',
-  text:      '#2C2C2A',
-  textMuted: '#888780',
+  teal: '#1D9E75', tealLt: '#E1F5EE', tealMid: '#0F6E56',
+  blue: '#185FA5', blueLt: '#E6F1FB',
+  purple: '#534AB7', purpleLt: '#EEEDFE',
+  amber: '#EF9F27', amberLt: '#FAEEDA',
+  gray: '#5F5E5A', grayLt: '#F1EFE8',
+  danger: '#E24B4A', dangerLt: '#FCEBEB',
+  border: '#D3D1C7', text: '#2C2C2A', textMuted: '#888780',
 };
 
 const s = {
@@ -40,7 +31,6 @@ const s = {
   mSub:      { fontSize: 11, color: C.textMuted, marginTop: 2 },
   grid4:     { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 },
   grid2:     { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 },
-  select:    { fontSize: 13, padding: '6px 10px', borderRadius: 7, border: `0.5px solid ${C.border}`, background: '#fff', color: C.text, cursor: 'pointer' },
   btn:       { fontSize: 12, padding: '7px 14px', borderRadius: 7, border: `0.5px solid ${C.border}`, background: '#fff', color: C.text, cursor: 'pointer', fontWeight: 600 },
   btnPrimary:{ fontSize: 12, padding: '7px 14px', borderRadius: 7, border: 'none', background: C.teal, color: '#fff', cursor: 'pointer', fontWeight: 600 },
   badge:     (bg, color) => ({ display: 'inline-block', background: bg, color, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 10 }),
@@ -56,7 +46,7 @@ const s = {
   }),
 };
 
-// ── Tooltip personalizado ─────────────────────────────────────────────────────
+// ── Tooltip ───────────────────────────────────────────────────────────────────
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -72,30 +62,114 @@ const CustomTooltip = ({ active, payload, label }) => {
   );
 };
 
-// ── Componente principal ──────────────────────────────────────────────────────
+// ── SKU Searchable ────────────────────────────────────────────────────────────
+function SkuSearch({ skus, value, onChange }) {
+  const [query,   setQuery]   = useState('');
+  const [open,    setOpen]    = useState(false);
+  const [focused, setFocused] = useState(false);
+  const ref = useRef(null);
+
+  const selected = skus.find(s => s.sku === value);
+
+  const filtered = query.trim() === ''
+    ? skus.slice(0, 80)
+    : skus.filter(s =>
+        s.sku.toLowerCase().includes(query.toLowerCase()) ||
+        (s.descripcion || '').toLowerCase().includes(query.toLowerCase())
+      ).slice(0, 80);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const select = (sku) => {
+    onChange(sku.sku);
+    setQuery('');
+    setOpen(false);
+  };
+
+  return (
+    <div ref={ref} style={{ position: 'relative', flex: 1, maxWidth: 480 }}>
+      <input
+        style={{
+          ...s.input, width: '100%', fontSize: 13, padding: '7px 10px',
+          borderColor: focused ? C.teal : C.border,
+          outline: 'none', boxSizing: 'border-box',
+        }}
+        placeholder="Buscar por código o nombre de SKU..."
+        value={open ? query : (selected ? `${selected.sku} — ${selected.descripcion}` : '')}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setFocused(true); setOpen(true); setQuery(''); }}
+        onBlur={() => setFocused(false)}
+      />
+      {open && filtered.length > 0 && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
+          background: '#fff', border: `0.5px solid ${C.border}`, borderRadius: 8,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.10)', maxHeight: 320, overflowY: 'auto',
+          marginTop: 2,
+        }}>
+          {query.trim() === '' && (
+            <div style={{ fontSize: 10, color: C.textMuted, padding: '6px 12px', borderBottom: `0.5px solid ${C.border}` }}>
+              Mostrando top 80 por volumen · escribe para filtrar
+            </div>
+          )}
+          {filtered.map((sk, i) => (
+            <div key={sk.sku}
+              onMouseDown={() => select(sk)}
+              style={{
+                padding: '8px 12px', cursor: 'pointer', fontSize: 12,
+                background: sk.sku === value ? C.tealLt : i % 2 === 0 ? '#fff' : C.grayLt,
+                borderBottom: `0.5px solid ${C.border}`,
+                display: 'flex', gap: 8, alignItems: 'baseline',
+              }}>
+              <span style={{ fontWeight: 700, color: C.teal, minWidth: 90, flexShrink: 0 }}>{sk.sku}</span>
+              <span style={{ color: C.text }}>{sk.descripcion}</span>
+              <span style={{ color: C.textMuted, marginLeft: 'auto', fontSize: 11, flexShrink: 0 }}>
+                {Math.round(sk.volumen_total || 0).toLocaleString('es-CL')} u.
+              </span>
+            </div>
+          ))}
+          {filtered.length === 0 && (
+            <div style={{ padding: '12px', color: C.textMuted, fontSize: 12, textAlign: 'center' }}>
+              Sin resultados para "{query}"
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [skus,       setSkus]       = useState([]);
-  const [selSku,     setSelSku]     = useState('');
-  const [result,     setResult]     = useState(null);
-  const [loading,    setLoading]    = useState(false);
-  const [error,      setError]      = useState('');
-  const [dbStatus,   setDbStatus]   = useState(null);
-  const [csvMode,    setCsvMode]    = useState(false);
-  const [csvPath,    setCsvPath]    = useState('/app/data/ventas.csv');
-  const [periods,    setPeriods]    = useState(12);
-  const [events,     setEvents]     = useState([
-    { name: 'promo_verano', label: 'Promo verano', dates: '', value: 1.25, active: false },
-    { name: 'nuevo_competidor', label: 'Nuevo competidor', dates: '', value: 0.88, active: false },
+  const [skus,     setSkus]     = useState([]);
+  const [selSku,   setSelSku]   = useState('');
+  const [result,   setResult]   = useState(null);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState('');
+  const [dbStatus, setDbStatus] = useState(null);
+  const [csvMode,  setCsvMode]  = useState(false);
+  const [csvPath,  setCsvPath]  = useState('/app/data/ventas.csv');
+  const [periods,  setPeriods]  = useState(26);
+  const [events,   setEvents]   = useState([
+    { name: 'promo_verano',      label: 'Promo verano',      dates: '', value: 1.25, active: false },
+    { name: 'nuevo_competidor',  label: 'Nuevo competidor',  dates: '', value: 0.88, active: false },
   ]);
 
-  // ── Health check ────────────────────────────────────────────────────────────
   useEffect(() => {
     axios.get(`${API}/health`)
       .then(r => setDbStatus(r.data))
       .catch(() => setDbStatus({ status: 'error' }));
   }, []);
 
-  // ── Cargar lista de SKUs ─────────────────────────────────────────────────
   useEffect(() => {
     const params = csvMode ? { use_csv: csvPath } : {};
     axios.get(`${API}/skus`, { params })
@@ -106,13 +180,9 @@ export default function App() {
       .catch(e => setError(`Error cargando SKUs: ${e.message}`));
   }, [csvMode, csvPath]);
 
-  // ── Generar forecast ─────────────────────────────────────────────────────
   const runForecast = useCallback(async (forceRetrain = false) => {
     if (!selSku) return;
-    setLoading(true);
-    setError('');
-    setResult(null);
-
+    setLoading(true); setError(''); setResult(null);
     const activeEvents = events
       .filter(e => e.active && e.dates.trim())
       .map(e => ({
@@ -121,15 +191,11 @@ export default function App() {
         value: parseFloat(e.value),
         label: e.label,
       }));
-
     try {
       const { data } = await axios.post(`${API}/forecast`, {
-        sku:           selSku,
-        periods:       Number(periods),
-        freq:          'MS',
-        events:        activeEvents,
-        force_retrain: forceRetrain,
-        use_csv:       csvMode ? csvPath : null,
+        sku: selSku, periods: Number(periods), freq: 'W',
+        events: activeEvents, force_retrain: forceRetrain,
+        use_csv: csvMode ? csvPath : null,
       });
       setResult(data);
     } catch (e) {
@@ -139,24 +205,21 @@ export default function App() {
     }
   }, [selSku, periods, events, csvMode, csvPath]);
 
-  // ── Combinar historial + forecast para el gráfico ─────────────────────────
   const chartData = React.useMemo(() => {
     if (!result) return [];
     const hist = (result.history || []).map(h => ({
-      fecha: h.fecha?.slice(0, 7),
-      real:  Math.round(h.real),
+      fecha: h.fecha?.slice(0, 10), real: Math.round(h.real),
     }));
     const lastHistDate = hist[hist.length - 1]?.fecha;
     const fore = (result.forecast || [])
       .filter(f => f.ds >= (lastHistDate || ''))
       .map(f => ({
-        fecha:      f.ds?.slice(0, 7),
+        fecha: f.ds?.slice(0, 10),
         forecast:   Math.round(f.yhat),
         lowerBound: Math.round(f.yhat_lower),
         upperBound: Math.round(f.yhat_upper),
         trend:      Math.round(f.trend),
       }));
-    // Merge: historial primero, luego forecast
     const merged = {};
     hist.forEach(h => { merged[h.fecha] = { ...merged[h.fecha], ...h }; });
     fore.forEach(f => { merged[f.fecha] = { ...merged[f.fecha], ...f }; });
@@ -166,7 +229,8 @@ export default function App() {
   const metrics  = result?.metrics || {};
   const mapeOk   = metrics.mape !== null && metrics.mape !== undefined;
   const mapeType = !mapeOk ? 'warn' : metrics.mape < 10 ? 'ok' : metrics.mape < 20 ? 'warn' : 'error';
-  const todayStr = new Date().toISOString().slice(0, 7);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const selectedSku = skus.find(s => s.sku === selSku);
 
   return (
     <div style={s.app}>
@@ -174,7 +238,7 @@ export default function App() {
       <div style={s.topbar}>
         <div>
           <div style={s.topTitle}>Traverso S.A. — Sistema de Forecast de Demanda</div>
-          <div style={s.topSub}>Motor Prophet · Piloto v1.0</div>
+          <div style={s.topSub}>Motor Prophet · Segmento Comercial · Piloto v1.0</div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           {dbStatus && (
@@ -191,22 +255,20 @@ export default function App() {
 
       <div style={s.main}>
 
-        {/* Modo de datos */}
+        {/* Fuente de datos */}
         <div style={{ ...s.card, marginBottom: 12 }}>
           <div style={s.row}>
             <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Fuente de datos:</span>
             <label style={{ fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-              <input type="radio" checked={!csvMode} onChange={() => setCsvMode(false)} />
-              SQL Server (directo)
+              <input type="radio" checked={!csvMode} onChange={() => setCsvMode(false)} /> SQL Server (directo)
             </label>
             <label style={{ fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-              <input type="radio" checked={csvMode} onChange={() => setCsvMode(true)} />
-              CSV (modo offline)
+              <input type="radio" checked={csvMode} onChange={() => setCsvMode(true)} /> CSV (modo offline)
             </label>
             {csvMode && (
               <input style={{ ...s.input, flex: 1, minWidth: 280 }}
                 value={csvPath} onChange={e => setCsvPath(e.target.value)}
-                placeholder="Ruta al CSV: /app/data/ventas.csv" />
+                placeholder="/app/data/ventas.csv" />
             )}
           </div>
         </div>
@@ -215,26 +277,31 @@ export default function App() {
         <div style={s.card}>
           <div style={s.row}>
             <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>SKU:</span>
-            <select style={{ ...s.select, flex: 1, maxWidth: 400 }}
-              value={selSku} onChange={e => setSelSku(e.target.value)}>
-              {skus.map(sk => (
-                <option key={sk.sku} value={sk.sku}>
-                  {sk.sku} — {sk.descripcion} ({Math.round(sk.volumen_total || 0).toLocaleString('es-CL')} u. total)
-                </option>
+            <SkuSearch skus={skus} value={selSku} onChange={setSelSku} />
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Semanas:</span>
+            <select style={{ ...s.input, fontSize: 13, padding: '6px 10px', cursor: 'pointer' }}
+              value={periods} onChange={e => setPeriods(e.target.value)}>
+              {[4,8,12,16,26,39,52].map(p => (
+                <option key={p} value={p}>{p} sem. (~{Math.round(p/4.3)} meses)</option>
               ))}
-            </select>
-            <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Períodos:</span>
-            <select style={s.select} value={periods} onChange={e => setPeriods(e.target.value)}>
-              {[3,6,9,12,18,24].map(p => <option key={p} value={p}>{p} meses</option>)}
             </select>
             <button style={s.btnPrimary} onClick={() => runForecast(false)} disabled={loading || !selSku}>
               {loading ? 'Calculando...' : '▶ Generar forecast'}
             </button>
             <button style={s.btn} onClick={() => runForecast(true)} disabled={loading || !selSku}
-              title="Reentrena el modelo con los datos actuales">
+              title="Reentrena el modelo con datos actuales">
               ↺ Reentrenar
             </button>
           </div>
+          {selectedSku && (
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: -6 }}>
+              <span style={{ marginRight: 16 }}>Marca: <strong>{selectedSku.marca || '—'}</strong></span>
+              <span style={{ marginRight: 16 }}>Categoría: <strong>{selectedSku.categoria || '—'}</strong></span>
+              <span style={{ marginRight: 16 }}>Semanas con venta: <strong>{selectedSku.semanas_con_venta}</strong></span>
+              <span style={{ marginRight: 16 }}>Canales: <strong>{selectedSku.n_canales}</strong></span>
+              <span>Zonas: <strong>{selectedSku.n_zonas}</strong></span>
+            </div>
+          )}
         </div>
 
         {error && <div style={s.alert('error')}>{error}</div>}
@@ -250,28 +317,30 @@ export default function App() {
               <div style={s.mSub}>Error promedio</div>
             </div>
             <div style={s.metric}>
-              <div style={s.mLabel}>MAE</div>
+              <div style={s.mLabel}>MAE (unidades)</div>
               <div style={s.mValue}>{mapeOk ? Math.round(metrics.mae).toLocaleString('es-CL') : 'N/D'}</div>
               <div style={s.mSub}>Error absoluto medio</div>
             </div>
             <div style={s.metric}>
-              <div style={s.mLabel}>Historial</div>
+              <div style={s.mLabel}>Semanas entrenamiento</div>
               <div style={s.mValue}>{metrics.n_train ?? '—'}</div>
-              <div style={s.mSub}>Períodos de entrenamiento</div>
+              <div style={s.mSub}>Historial usado</div>
             </div>
             <div style={s.metric}>
-              <div style={s.mLabel}>Forecast</div>
-              <div style={s.mValue}>{Math.round(result.forecast?.find(f => f.ds >= todayStr)?.yhat || 0).toLocaleString('es-CL')}</div>
-              <div style={s.mSub}>Próximo mes (u.)</div>
+              <div style={s.mLabel}>Próxima semana</div>
+              <div style={s.mValue}>
+                {Math.round(result.forecast?.find(f => f.ds >= todayStr)?.yhat || 0).toLocaleString('es-CL')}
+              </div>
+              <div style={s.mSub}>unidades forecast</div>
             </div>
           </div>
         )}
 
-        {/* Gráfico principal */}
+        {/* Gráfico */}
         {result && chartData.length > 0 && (
           <div style={s.card}>
             <div style={s.cardTitle}>
-              Demanda histórica y forecast — {selSku}
+              Demanda histórica y forecast semanal — {selSku} · {selectedSku?.descripcion}
               {result.from_cache && <span style={{ ...s.badge(C.grayLt, C.textMuted), marginLeft: 8 }}>desde caché</span>}
             </div>
             {mapeOk && (
@@ -280,44 +349,42 @@ export default function App() {
                   ? `Precisión del modelo: MAPE ${metrics.mape}% — Excelente (objetivo: <10%)`
                   : mapeType === 'warn'
                   ? `Precisión del modelo: MAPE ${metrics.mape}% — Aceptable. Mejorará con más historial y regressores.`
-                  : `Precisión del modelo: MAPE ${metrics.mape}% — Alta. Considerar más historial o ajuste de parámetros.`}
+                  : `Precisión del modelo: MAPE ${metrics.mape}% — Revisar. Considerar ajuste de parámetros o más historial.`}
               </div>
             )}
-            {/* Leyenda custom */}
             <div style={{ display: 'flex', gap: 18, marginBottom: 10, fontSize: 12, color: C.textMuted }}>
-              {[['Venta real', C.blue], ['Forecast', C.teal], ['Intervalo 90%', C.teal]].map(([label, color]) => (
+              {[['Venta real (sem.)', C.blue], ['Forecast', C.teal], ['Intervalo 90%', C.teal], ['Tendencia', C.purple]].map(([label, color]) => (
                 <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ ...s.pill(color), opacity: label.includes('Intervalo') ? 0.3 : 1 }} />
-                  {label}
+                  <span style={{ ...s.pill(color), opacity: label.includes('Intervalo') ? 0.3 : 1 }} />{label}
                 </span>
               ))}
             </div>
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="fecha" tick={{ fontSize: 11, fill: C.textMuted }}
-                  tickFormatter={v => v?.slice(0, 7)} interval="preserveStartEnd" />
+                <XAxis dataKey="fecha" tick={{ fontSize: 10, fill: C.textMuted }}
+                  tickFormatter={v => v?.slice(0, 10)} interval={Math.floor(chartData.length / 12)} />
                 <YAxis tick={{ fontSize: 11, fill: C.textMuted }}
                   tickFormatter={v => v >= 1000 ? `${Math.round(v/1000)}k` : v} />
                 <Tooltip content={<CustomTooltip />} />
                 <ReferenceLine x={todayStr} stroke={C.amber} strokeDasharray="4 4"
                   label={{ value: 'Hoy', fill: C.amber, fontSize: 10 }} />
                 <Area dataKey="upperBound" fill={C.teal} stroke="none" fillOpacity={0.12} name="Límite superior" />
-                <Area dataKey="lowerBound" fill="#fff" stroke="none" fillOpacity={1} name="Límite inferior" />
-                <Bar dataKey="real"     fill={C.blueLt}  stroke={C.blue}  strokeWidth={1} name="Venta real" barSize={14} />
-                <Line dataKey="forecast" stroke={C.teal}  strokeWidth={2.5} dot={false}  name="Forecast" />
-                <Line dataKey="trend"    stroke={C.purple} strokeWidth={1}   dot={false}  strokeDasharray="4 3" name="Tendencia" />
+                <Area dataKey="lowerBound" fill="#fff"  stroke="none" fillOpacity={1}    name="Límite inferior" />
+                <Bar  dataKey="real"       fill={C.blueLt} stroke={C.blue} strokeWidth={1} name="Venta real (sem.)" barSize={10} />
+                <Line dataKey="forecast"   stroke={C.teal}   strokeWidth={2.5} dot={false} name="Forecast" />
+                <Line dataKey="trend"      stroke={C.purple} strokeWidth={1}   dot={false} strokeDasharray="4 3" name="Tendencia" />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
         )}
 
-        {/* Eventos comerciales */}
+        {/* Eventos comerciales + tabla forecast */}
         <div style={s.grid2}>
           <div style={s.card}>
             <div style={s.cardTitle}>Ajustes comerciales (regressores)</div>
             <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
-              Activa eventos para ver su impacto en el forecast. Ingresa fechas separadas por coma (AAAA-MM-DD).
+              Activa eventos para ver su impacto. Ingresa fechas separadas por coma (AAAA-MM-DD).
             </div>
             {events.map((ev, i) => (
               <div key={i} style={s.eventRow}>
@@ -325,31 +392,34 @@ export default function App() {
                   onChange={e => setEvents(events.map((x, j) => j === i ? { ...x, active: e.target.checked } : x))} />
                 <input style={{ ...s.input, width: 130 }} value={ev.label}
                   onChange={e => setEvents(events.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
-                <input style={{ ...s.input, flex: 1 }} placeholder="2025-02-01, 2025-02-28"
+                <input style={{ ...s.input, flex: 1 }} placeholder="2025-02-03, 2025-02-10"
                   value={ev.dates}
                   onChange={e => setEvents(events.map((x, j) => j === i ? { ...x, dates: e.target.value } : x))} />
                 <input type="number" style={{ ...s.input, width: 64 }} step="0.01" min="0"
-                  value={ev.value} title="1.25 = +25%, 0.85 = -15%"
+                  value={ev.value}
                   onChange={e => setEvents(events.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
                 <span style={{ fontSize: 10, color: C.textMuted, width: 50 }}>
-                  {ev.value >= 1 ? `+${Math.round((ev.value - 1) * 100)}%` : `-${Math.round((1 - ev.value) * 100)}%`}
+                  {ev.value >= 1 ? `+${Math.round((ev.value-1)*100)}%` : `-${Math.round((1-ev.value)*100)}%`}
                 </span>
               </div>
             ))}
-            <button style={{ ...s.btn, marginTop: 10, fontSize: 11 }}
-              onClick={() => setEvents([...events, { name: `evento_${events.length + 1}`, label: 'Nuevo evento', dates: '', value: 1.0, active: true }])}>
+            <button style={{ ...s.btn, marginTop: 10, fontSize: 11, width: '100%' }}
+              onClick={() => setEvents([...events, {
+                name: `evento_${events.length+1}`, label: 'Nuevo evento',
+                dates: '', value: 1.0, active: true
+              }])}>
               + Agregar evento
             </button>
           </div>
 
-          {/* Tabla de forecast */}
+          {/* Tabla forecast SEMANAL */}
           <div style={s.card}>
-            <div style={s.cardTitle}>Forecast mensual detallado</div>
+            <div style={s.cardTitle}>Forecast semanal detallado</div>
             <div style={{ overflowY: 'auto', maxHeight: 280 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: C.grayLt }}>
-                    {['Mes', 'Forecast', 'Mín (90%)', 'Máx (90%)'].map(h => (
+                    {['Semana', 'Forecast', 'Mín (90%)', 'Máx (90%)'].map(h => (
                       <th key={h} style={{ padding: '6px 10px', textAlign: 'left', color: C.textMuted,
                         borderBottom: `0.5px solid ${C.border}`, fontWeight: 600, fontSize: 11 }}>{h}</th>
                     ))}
@@ -358,7 +428,7 @@ export default function App() {
                 <tbody>
                   {(result?.forecast || []).filter(f => f.ds >= todayStr).map((f, i) => (
                     <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : C.grayLt }}>
-                      <td style={{ padding: '5px 10px', color: C.textMuted }}>{f.ds?.slice(0, 7)}</td>
+                      <td style={{ padding: '5px 10px', color: C.textMuted }}>{f.ds?.slice(0, 10)}</td>
                       <td style={{ padding: '5px 10px', fontWeight: 700, color: C.teal }}>
                         {Math.round(f.yhat).toLocaleString('es-CL')}
                       </td>
@@ -381,37 +451,42 @@ export default function App() {
           </div>
         </div>
 
-        {/* SKUs disponibles */}
+        {/* Tabla de SKUs */}
         {skus.length > 0 && (
           <div style={s.card}>
-            <div style={s.cardTitle}>SKUs disponibles en el historial ({skus.length})</div>
+            <div style={s.cardTitle}>
+              SKUs disponibles — Segmento Comercial ({skus.length.toLocaleString('es-CL')} productos)
+            </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: C.grayLt }}>
-                    {['SKU', 'Descripción', 'Vol. total', 'Primera venta', 'Última venta', 'Meses'].map(h => (
+                    {['Código', 'Descripción', 'Marca', 'Categoría', 'Vol. total', 'Semanas', 'Canales', 'Zonas'].map(h => (
                       <th key={h} style={{ padding: '6px 10px', textAlign: 'left', color: C.textMuted,
                         borderBottom: `0.5px solid ${C.border}`, fontWeight: 600, fontSize: 11 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {skus.slice(0, 20).map((sk, i) => (
-                    <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : C.grayLt, cursor: 'pointer' }}
+                  {skus.slice(0, 30).map((sk, i) => (
+                    <tr key={i}
+                      style={{ background: sk.sku === selSku ? C.tealLt : i % 2 === 0 ? '#fff' : C.grayLt, cursor: 'pointer' }}
                       onClick={() => setSelSku(sk.sku)}>
                       <td style={{ padding: '5px 10px', fontWeight: 700, color: C.teal }}>{sk.sku}</td>
                       <td style={{ padding: '5px 10px' }}>{sk.descripcion}</td>
-                      <td style={{ padding: '5px 10px' }}>{Math.round(sk.volumen_total || 0).toLocaleString('es-CL')}</td>
-                      <td style={{ padding: '5px 10px', color: C.textMuted }}>{sk.primera_venta?.slice(0, 7)}</td>
-                      <td style={{ padding: '5px 10px', color: C.textMuted }}>{sk.ultima_venta?.slice(0, 7)}</td>
-                      <td style={{ padding: '5px 10px' }}>{sk.meses_con_venta}</td>
+                      <td style={{ padding: '5px 10px', color: C.textMuted }}>{sk.marca}</td>
+                      <td style={{ padding: '5px 10px', color: C.textMuted }}>{sk.categoria}</td>
+                      <td style={{ padding: '5px 10px' }}>{Math.round(sk.volumen_total||0).toLocaleString('es-CL')}</td>
+                      <td style={{ padding: '5px 10px' }}>{sk.semanas_con_venta}</td>
+                      <td style={{ padding: '5px 10px' }}>{sk.n_canales}</td>
+                      <td style={{ padding: '5px 10px' }}>{sk.n_zonas}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {skus.length > 20 && (
+              {skus.length > 30 && (
                 <div style={{ fontSize: 11, color: C.textMuted, padding: '8px 10px' }}>
-                  Mostrando 20 de {skus.length} SKUs. Usa el selector para acceder a todos.
+                  Mostrando 30 de {skus.length.toLocaleString('es-CL')} SKUs. Usa el buscador para acceder a todos.
                 </div>
               )}
             </div>
