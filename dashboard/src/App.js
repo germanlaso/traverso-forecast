@@ -159,6 +159,10 @@ export default function App() {
   const [csvMode,  setCsvMode]  = useState(false);
   const [csvPath,  setCsvPath]  = useState('/app/data/ventas.csv');
   const [periods,  setPeriods]  = useState(26);
+  const [canal,    setCanal]    = useState('');
+  const [zona,     setZona]     = useState('');
+  const [canales,  setCanales]  = useState([]);
+  const [zonas,    setZonas]    = useState([]);
   const [events,   setEvents]   = useState([
     { name: 'promo_verano',      label: 'Promo verano',      dates: '', value: 1.25, active: false },
     { name: 'nuevo_competidor',  label: 'Nuevo competidor',  dates: '', value: 0.88, active: false },
@@ -168,6 +172,15 @@ export default function App() {
     axios.get(`${API}/health`)
       .then(r => setDbStatus(r.data))
       .catch(() => setDbStatus({ status: 'error' }));
+  }, []);
+
+  useEffect(() => {
+    axios.get(`${API}/dimensions`)
+      .then(r => {
+        setCanales(r.data.canales || []);
+        setZonas(r.data.zonas || []);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -193,7 +206,7 @@ export default function App() {
       }));
     try {
       const { data } = await axios.post(`${API}/forecast`, {
-        sku: selSku, periods: Number(periods), freq: 'W',
+        sku: selSku, canal: canal || null, zona: zona || null, periods: Number(periods), freq: 'W',
         events: activeEvents, force_retrain: forceRetrain,
         use_csv: csvMode ? csvPath : null,
       });
@@ -285,6 +298,14 @@ export default function App() {
                 <option key={p} value={p}>{p} sem. (~{Math.round(p/4.3)} meses)</option>
               ))}
             </select>
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Canal:</span>
+            <select style={{ ...s.input, fontSize: 13, padding: '6px 10px', cursor: 'pointer', minWidth: 180 }}
+              value={canal} onChange={e => setCanal(e.target.value)}>
+              <option value="">Todos los canales</option>
+              {canales.filter(c => c !== 'OFICINA').map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
             <button style={s.btnPrimary} onClick={() => runForecast(false)} disabled={loading || !selSku}>
               {loading ? 'Calculando...' : '▶ Generar forecast'}
             </button>
@@ -340,7 +361,7 @@ export default function App() {
         {result && chartData.length > 0 && (
           <div style={s.card}>
             <div style={s.cardTitle}>
-              Demanda histórica y forecast semanal — {selSku} · {selectedSku?.descripcion}
+              Demanda histórica y forecast semanal — {selSku} · {selectedSku?.descripcion}{canal ? ` · ${canal}` : ' · Todos los canales'}
               {result.from_cache && <span style={{ ...s.badge(C.grayLt, C.textMuted), marginLeft: 8 }}>desde caché</span>}
             </div>
             {mapeOk && (
