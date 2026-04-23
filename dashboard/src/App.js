@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ComposedChart, Line, Area, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine
@@ -161,6 +161,8 @@ export default function App() {
   const [periods,  setPeriods]  = useState(26);
   const [canal,    setCanal]    = useState('');
   const [zona,     setZona]     = useState('');
+  const canalRef = React.useRef('');
+  const zonaRef  = React.useRef('');
   const [canales,  setCanales]  = useState([]);
   const [zonas,    setZonas]    = useState([]);
   const [events,   setEvents]   = useState([
@@ -193,9 +195,12 @@ export default function App() {
       .catch(e => setError(`Error cargando SKUs: ${e.message}`));
   }, [csvMode, csvPath]);
 
-  const runForecast = useCallback(async (forceRetrain = false) => {
+  const runForecast = async (forceRetrain = false) => {
     if (!selSku) return;
     setLoading(true); setError(''); setResult(null);
+    const canalVal = canalRef.current || null;
+    const zonaVal  = zonaRef.current  || null;
+    console.log('DEBUG canal:', canalVal, 'sku:', selSku);
     const activeEvents = events
       .filter(e => e.active && e.dates.trim())
       .map(e => ({
@@ -206,7 +211,8 @@ export default function App() {
       }));
     try {
       const { data } = await axios.post(`${API}/forecast`, {
-        sku: selSku, canal: canal || null, zona: zona || null, periods: Number(periods), freq: 'W',
+        sku: selSku, canal: canalVal, zona: zonaVal,
+        periods: Number(periods), freq: 'W',
         events: activeEvents, force_retrain: forceRetrain,
         use_csv: csvMode ? csvPath : null,
       });
@@ -216,7 +222,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [selSku, periods, events, csvMode, csvPath]);
+  };
 
   const chartData = React.useMemo(() => {
     if (!result) return [];
@@ -300,7 +306,7 @@ export default function App() {
             </select>
             <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted }}>Canal:</span>
             <select style={{ ...s.input, fontSize: 13, padding: '6px 10px', cursor: 'pointer', minWidth: 180 }}
-              value={canal} onChange={e => { setCanal(e.target.value); setResult(null); setError(''); }}>
+              value={canal} onChange={e => { canalRef.current = e.target.value; setCanal(e.target.value); setResult(null); setError(''); }}>
               <option value="">Todos los canales</option>
               {canales.filter(c => c !== 'OFICINA').map(c => (
                 <option key={c} value={c}>{c}</option>
