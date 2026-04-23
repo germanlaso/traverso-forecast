@@ -143,7 +143,7 @@ def forecast_sku(req: ForecastRequest):
         events = [e.model_dump() for e in req.events] if req.events else None
         return run_sku_pipeline(
             df=df, sku=req.sku, canal=req.canal, zona=req.zona,
-            events=events, forecast_periods=req.periods,
+            extra_events=events, forecast_periods=req.periods,
             force_retrain=req.force_retrain,
         )
     except ValueError as e:
@@ -165,7 +165,7 @@ async def train_batch(req: TrainBatchRequest, background_tasks: BackgroundTasks)
         for sku in req.skus:
             try:
                 run_sku_pipeline(df, sku, req.canal, req.zona,
-                                 events, req.periods, force_retrain=True)
+                                 extra_events=events, forecast_periods=req.periods, force_retrain=True)
                 logger.info(f"[{job_id}] {make_key(sku, req.canal, req.zona)} OK")
             except Exception as e:
                 logger.warning(f"[{job_id}] {sku} error: {e}")
