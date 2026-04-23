@@ -1,6 +1,6 @@
 """
-main.py — API FastAPI del sistema de forecast Traverso S.A.
-Endpoints: /health, /skus, /forecast, /train, /models
+main.py — API FastAPI · Traverso S.A. Sistema de Forecast
+Dimensiones: SKU x Canal x Zona | Granularidad: semanal
 """
 
 import logging
@@ -11,110 +11,118 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from db import test_connection, load_sales, load_sales_from_csv, get_sku_list
-from forecaster import (
-    run_sku_pipeline, list_trained_models,
-    prepare_prophet_df, evaluate_model
-)
+from db import (test_connection, load_sales, load_sales_from_csv,
+                get_sku_list, get_dimension_summary)
+from forecaster import (run_sku_pipeline, list_trained_models,
+                        prepare_prophet_df, evaluate_model, make_key)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── App ───────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Traverso Forecast API iniciando...")
     yield
-    logger.info("Traverso Forecast API detenida.")
 
 app = FastAPI(
     title="Traverso S.A. — API de Forecast",
-    description="Motor de predicción de demanda con Prophet. Piloto v1.0",
+    description="Motor Prophet · SKU x Canal x Zona · Granularidad semanal · v1.0",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
+
 
 # ── Modelos Pydantic ──────────────────────────────────────────────────────────
 
 class EventoComercial(BaseModel):
     name:   str
-    dates:  list[str]          # ["2025-02-01", "2025-02-28"]
-    value:  float = 1.0        # 1.25 = +25%, 0.85 = -15%
+    dates:  list[str]
+    value:  float        = 1.0    # 1.25 = +25%, 0.85 = -15%
     label:  Optional[str] = None
 
 class ForecastRequest(BaseModel):
-    sku:              str
-    periods:          int              = 12
-    freq:             str              = "MS"   # MS=mensual, W=semanal, D=diario
-    events:           list[EventoComercial] = []
-    force_retrain:    bool             = False
-    use_csv:          Optional[str]    = None   # Ruta a CSV si no hay SQL
+    sku:            str
+    canal:          Optional[str] = None   # None = consolidado todos los canales
+    zona:           Optional[str] = None   # None = consolidado todas las zonas
+    periods:        int           = 26     # semanas (26 = ~6 meses)
+    events:         list[EventoComercial] = []
+    force_retrain:  bool          = False
+    use_csv:        Optional[str] = None
 
 class TrainBatchRequest(BaseModel):
-    skus:    list[str]
-    periods: int   = 12
-    freq:    str   = "MS"
-    events:  list[EventoComercial] = []
+    skus:           list[str]
+    canal:          Optional[str] = None
+    zona:           Optional[str] = None
+    periods:        int           = 26
+    events:         list[EventoComercial] = []
 
-# ── Cache en memoria (para piloto) ───────────────────────────────────────────
+
+# ── Cache en memoria ──────────────────────────────────────────────────────────
 _sales_cache: dict = {}
 
 def get_sales_df(use_csv: str | None = None):
-    """Carga ventas desde SQL o CSV, con cache en memoria."""
-    cache_key = use_csv or "sql"
-    if cache_key not in _sales_cache:
+    key = use_csv or "sql"
+    if key not in _sales_cache:
         if use_csv:
-            logger.info(f"Cargando ventas desde CSV: {use_csv}")
-            _sales_cache[cache_key] = load_sales_from_csv(use_csv)
+            logger.info(f"Cargando desde CSV: {use_csv}")
+            _sales_cache[key] = load_sales_from_csv(use_csv)
         else:
-            logger.info("Cargando ventas desde SQL Server...")
-            _sales_cache[cache_key] = load_sales()
-        logger.info(f"Ventas cargadas: {len(_sales_cache[cache_key])} registros")
-    return _sales_cache[cache_key]
+            logger.info("Cargando desde SQL Server (dbo.ventas)...")
+            _sales_cache[key] = load_sales()
+        logger.info(f"Cargados {len(_sales_cache[key])} registros")
+    return _sales_cache[key]
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Sistema"])
 def health():
-    """Estado del servicio y conexión a la base de datos."""
-    db_status = test_connection()
+    """Estado del servicio y conexión SQL."""
     return {
-        "status":    "ok",
-        "db":        db_status,
-        "models_ok": len(list_trained_models()),
+        "status":       "ok",
+        "db":           test_connection(),
+        "models_count": len(list_trained_models()),
     }
+
+
+@app.get("/dimensions", tags=["Datos"])
+def dimensions():
+    """Valores únicos de Canal y Zona disponibles en dbo.ventas."""
+    try:
+        return get_dimension_summary()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/skus", tags=["Datos"])
 def list_skus(use_csv: Optional[str] = Query(None)):
     """
-    Lista todos los SKUs disponibles en el historial con volumen y cobertura.
-    Usa ?use_csv=/app/data/ventas.csv para modo offline.
+    Lista todos los SKUs con volumen, cobertura de historial,
+    número de canales y zonas en que se venden.
     """
     try:
         if use_csv:
-            df   = get_sales_df(use_csv)
-            skus = (
+            df = get_sales_df(use_csv)
+            result = (
                 df.groupby(["sku", "descripcion"])
-                  .agg(volumen_total=("cantidad", "sum"),
-                       primera_venta=("fecha", "min"),
-                       ultima_venta=("fecha", "max"),
-                       meses_con_venta=("fecha", lambda x: x.dt.to_period("M").nunique()))
+                  .agg(
+                      volumen_total=("cantidad", "sum"),
+                      primera_venta=("fecha_semana", "min"),
+                      ultima_venta=("fecha_semana", "max"),
+                      semanas_con_venta=("fecha_semana", "nunique"),
+                      n_canales=("canal", "nunique"),
+                      n_zonas=("zona", "nunique"),
+                  )
                   .reset_index()
                   .sort_values("volumen_total", ascending=False)
             )
-            skus["primera_venta"] = skus["primera_venta"].dt.strftime("%Y-%m-%d")
-            skus["ultima_venta"]  = skus["ultima_venta"].dt.strftime("%Y-%m-%d")
-            return skus.to_dict(orient="records")
+            result["primera_venta"] = result["primera_venta"].dt.strftime("%Y-%m-%d")
+            result["ultima_venta"]  = result["ultima_venta"].dt.strftime("%Y-%m-%d")
+            return result.to_dict(orient="records")
         else:
             return get_sku_list().to_dict(orient="records")
     except Exception as e:
@@ -124,50 +132,43 @@ def list_skus(use_csv: Optional[str] = Query(None)):
 @app.post("/forecast", tags=["Forecast"])
 def forecast_sku(req: ForecastRequest):
     """
-    Genera el forecast para un SKU específico.
-    
-    - Si el modelo ya existe en disco, lo reutiliza (rápido).
-    - Si force_retrain=true, reentrena con datos frescos.
-    - Incluye historial real + predicción + intervalos de confianza + métricas.
+    Genera el forecast para un segmento SKU x Canal x Zona.
+
+    - canal=None y zona=None → forecast consolidado del SKU completo
+    - Incluye historial real + predicción + intervalos de confianza + métricas
+    - Reutiliza modelo en caché si existe (force_retrain=true para reentrenar)
     """
     try:
         df     = get_sales_df(req.use_csv)
         events = [e.model_dump() for e in req.events] if req.events else None
-
-        result = run_sku_pipeline(
-            df=df,
-            sku=req.sku,
-            events=events,
-            forecast_periods=req.periods,
-            freq=req.freq,
+        return run_sku_pipeline(
+            df=df, sku=req.sku, canal=req.canal, zona=req.zona,
+            events=events, forecast_periods=req.periods,
             force_retrain=req.force_retrain,
         )
-        return result
-
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception(f"Error en forecast de SKU {req.sku}")
+        logger.exception(f"Error forecast {req.sku}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/train/batch", tags=["Entrenamiento"])
 async def train_batch(req: TrainBatchRequest, background_tasks: BackgroundTasks):
-    """
-    Entrena modelos para múltiples SKUs en segundo plano.
-    Retorna inmediatamente con un job_id para consultar el estado.
-    """
-    job_id = f"batch_{len(req.skus)}skus_{int(__import__('time').time())}"
+    """Entrena modelos para múltiples SKUs en segundo plano."""
+    import time
+    job_id = f"batch_{len(req.skus)}skus_{int(time.time())}"
 
     def _train():
         df     = get_sales_df()
         events = [e.model_dump() for e in req.events] if req.events else None
         for sku in req.skus:
             try:
-                run_sku_pipeline(df, sku, events, req.periods, req.freq, force_retrain=True)
-                logger.info(f"[{job_id}] SKU {sku} entrenado OK")
+                run_sku_pipeline(df, sku, req.canal, req.zona,
+                                 events, req.periods, force_retrain=True)
+                logger.info(f"[{job_id}] {make_key(sku, req.canal, req.zona)} OK")
             except Exception as e:
-                logger.warning(f"[{job_id}] SKU {sku} error: {e}")
+                logger.warning(f"[{job_id}] {sku} error: {e}")
 
     background_tasks.add_task(_train)
     return {"job_id": job_id, "skus": req.skus, "status": "en_proceso"}
@@ -175,27 +176,38 @@ async def train_batch(req: TrainBatchRequest, background_tasks: BackgroundTasks)
 
 @app.get("/models", tags=["Modelos"])
 def get_models():
-    """Lista todos los modelos entrenados y guardados en disco."""
+    """Lista todos los modelos entrenados con sus métricas."""
     return list_trained_models()
+
+
+@app.get("/metrics/{sku}", tags=["Evaluación"])
+def get_metrics(sku: str,
+                canal: Optional[str] = Query(None),
+                zona: Optional[str]  = Query(None),
+                use_csv: Optional[str] = Query(None)):
+    """Evalúa la precisión del modelo para un segmento con hold-out."""
+    try:
+        df         = get_sales_df(use_csv)
+        prophet_df = prepare_prophet_df(df, sku, canal, zona)
+        metrics    = evaluate_model(prophet_df)
+        return {"key": make_key(sku, canal, zona), "sku": sku,
+                "canal": canal, "zona": zona, **metrics}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/cache", tags=["Sistema"])
 def clear_cache():
-    """Limpia el cache de ventas en memoria para forzar recarga desde SQL."""
+    """Limpia el cache en memoria para forzar recarga desde SQL."""
     _sales_cache.clear()
-    return {"ok": True, "message": "Cache limpiado"}
+    return {"ok": True, "message": "Cache limpiado — próxima petición recargará desde SQL"}
 
 
-@app.get("/metrics/{sku}", tags=["Evaluación"])
-def get_metrics(sku: str, use_csv: Optional[str] = Query(None)):
+@app.get("/regressors", tags=["Estacionalidad"])
+def get_regressors():
     """
-    Evalúa la precisión del modelo para un SKU usando validación cruzada.
-    Devuelve MAPE, MAE y RMSE.
+    Retorna todos los regressores de estacionalidad definidos por categoría.
+    Útil para entender qué ajustes automáticos aplica el modelo a cada SKU.
     """
-    try:
-        df         = get_sales_df(use_csv)
-        prophet_df = prepare_prophet_df(df, sku)
-        metrics    = evaluate_model(prophet_df)
-        return {"sku": sku, **metrics}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    from seasonality import get_all_regressors_summary
+    return get_all_regressors_summary()

@@ -1,108 +1,132 @@
 """
 forecaster.py — Motor de forecast con Prophet
 Traverso S.A. · Piloto de Forecast
+Granularidad: semanal (W) | Dimensiones: SKU x Canal x Zona
+Regressores: automáticos por Categ. Comercial via seasonality.py
 """
 
-import os
-import json
 import pickle
 import logging
 from pathlib import Path
-from datetime import datetime, date
+from datetime import datetime
 
 import pandas as pd
 import numpy as np
 from prophet import Prophet
-from prophet.diagnostics import cross_validation, performance_metrics
 from sklearn.metrics import mean_absolute_percentage_error
 
-logger = logging.getLogger(__name__)
+from seasonality import get_category_regressors
 
+logger     = logging.getLogger(__name__)
 MODELS_DIR = Path("/app/models")
 MODELS_DIR.mkdir(exist_ok=True)
 
+FREQ = "W"  # Semanal
 
-# ── Preparación de datos para Prophet ────────────────────────────────────────
+
+# ── Clave de segmento ─────────────────────────────────────────────────────────
+
+def make_key(sku: str, canal: str | None = None, zona: str | None = None) -> str:
+    parts = [sku.strip()]
+    if canal: parts.append(canal.strip())
+    if zona:  parts.append(zona.strip())
+    return "__".join(parts)
+
+
+# ── Preparación de datos ──────────────────────────────────────────────────────
 
 def prepare_prophet_df(df: pd.DataFrame,
                        sku: str,
-                       freq: str = "MS") -> pd.DataFrame:
-    """
-    Convierte el historial de ventas de un SKU al formato Prophet (ds, y).
+                       canal: str | None = None,
+                       zona: str | None  = None) -> pd.DataFrame:
+    mask = df["sku"] == sku
+    if canal: mask &= df["canal"] == canal
+    if zona:  mask &= df["zona"]  == zona
 
-    Args:
-        df:   DataFrame con columnas fecha, sku, cantidad
-        sku:  SKU a preparar
-        freq: Frecuencia de agregación — 'D' diaria, 'W' semanal, 'MS' mensual
+    seg = df[mask].copy()
+    if seg.empty:
+        dims = f"SKU={sku}" + (f", canal={canal}" if canal else "") + (f", zona={zona}" if zona else "")
+        raise ValueError(f"Sin datos para: {dims}")
 
-    Returns:
-        DataFrame con columnas ds (fecha) y y (cantidad agregada)
-    """
-    sku_df = df[df["sku"] == sku].copy()
-
-    if sku_df.empty:
-        raise ValueError(f"SKU '{sku}' no encontrado en el historial.")
-
-    # Agregar a la frecuencia deseada
-    sku_df = (
-        sku_df
-        .set_index("fecha")["cantidad"]
-        .resample(freq)
-        .sum()
-        .reset_index()
-        .rename(columns={"fecha": "ds", "cantidad": "y"})
+    prophet_df = (
+        seg.set_index("fecha_semana")["cantidad"]
+           .resample(FREQ).sum()
+           .reset_index()
+           .rename(columns={"fecha_semana": "ds", "cantidad": "y"})
     )
+    prophet_df["y"] = prophet_df["y"].clip(lower=0)
+    return prophet_df
 
-    # Prophet requiere y >= 0
-    sku_df["y"] = sku_df["y"].clip(lower=0)
 
-    return sku_df
+def get_categoria(df: pd.DataFrame, sku: str) -> str:
+    """Obtiene la Categ. Comercial de un SKU desde el DataFrame de ventas."""
+    rows = df[df["sku"] == sku]["categoria"]
+    if rows.empty:
+        return ""
+    val = rows.dropna().mode()
+    return str(val.iloc[0]).strip().upper() if not val.empty else ""
 
 
 # ── Entrenamiento ─────────────────────────────────────────────────────────────
 
-def train_model(prophet_df: pd.DataFrame,
-                events: list[dict] | None = None,
-                yearly_seasonality: bool = True,
-                weekly_seasonality: bool = False,
-                changepoint_prior_scale: float = 0.05) -> Prophet:
+def _apply_regressors(model: Prophet,
+                      df_train: pd.DataFrame,
+                      regressors: list[dict]) -> pd.DataFrame:
     """
-    Entrena un modelo Prophet para un SKU.
+    Agrega columnas de regressores al DataFrame y los registra en el modelo.
+    Retorna el DataFrame con las columnas nuevas.
+    """
+    ev_dates_cache = {}
+    for reg in regressors:
+        col = reg["name"]
+        if col not in ev_dates_cache:
+            ev_dates_cache[col] = pd.to_datetime(reg["dates"])
+        df_train[col] = df_train["ds"].apply(
+            lambda d: 1.0 if d in ev_dates_cache[col].values else 0.0
+        )
+        model.add_regressor(col, standardize=False)
+    return df_train
+
+
+def train_model(prophet_df: pd.DataFrame,
+                regressors: list[dict] | None    = None,
+                extra_events: list[dict] | None  = None,
+                changepoint_prior_scale: float   = 0.05) -> Prophet:
+    """
+    Entrena un modelo Prophet semanal.
 
     Args:
-        prophet_df:               DataFrame con ds, y (y opcionalmente columnas de regressores)
-        events:                   Lista de eventos comerciales como regressores
-                                  [{"name": "promo_verano", "dates": ["2023-02-01", ...], "value": 1.25}]
-        yearly_seasonality:       Capturar estacionalidad anual
-        weekly_seasonality:       Capturar estacionalidad semanal (útil si datos son diarios)
-        changepoint_prior_scale:  Flexibilidad de la tendencia (0.01=rígida, 0.5=flexible)
-
-    Returns:
-        Modelo Prophet entrenado
+        prophet_df:             DataFrame ds/y
+        regressors:             Regressores automáticos de estacionalidad (de seasonality.py)
+        extra_events:           Eventos comerciales adicionales ingresados manualmente
+        changepoint_prior_scale: Flexibilidad de tendencia (0.01=rígida, 0.5=flexible)
     """
     model = Prophet(
-        yearly_seasonality=yearly_seasonality,
-        weekly_seasonality=weekly_seasonality,
+        yearly_seasonality=True,
+        weekly_seasonality=True,
         daily_seasonality=False,
         changepoint_prior_scale=changepoint_prior_scale,
         seasonality_prior_scale=10.0,
-        interval_width=0.90,          # Intervalo de confianza 90%
+        interval_width=0.90,
         seasonality_mode="multiplicative",
     )
-
-    # Feriados chilenos
     model.add_country_holidays(country_name="CL")
 
-    # Regressores de eventos comerciales
     df_train = prophet_df.copy()
-    if events:
-        for event in events:
-            col_name = event["name"]
-            event_dates = pd.to_datetime(event["dates"])
-            df_train[col_name] = df_train["ds"].apply(
-                lambda d: event.get("value", 1.0) if d in event_dates.values else 0.0
-            )
-            model.add_regressor(col_name, standardize=False)
+
+    # Regressores automáticos por categoría
+    all_regressors = list(regressors or [])
+
+    # Eventos manuales adicionales del equipo comercial
+    for ev in (extra_events or []):
+        all_regressors.append({
+            "name":  ev["name"],
+            "dates": ev["dates"],
+            "value": ev.get("value", 1.0),
+        })
+
+    if all_regressors:
+        df_train = _apply_regressors(model, df_train, all_regressors)
 
     model.fit(df_train)
     return model
@@ -111,95 +135,75 @@ def train_model(prophet_df: pd.DataFrame,
 # ── Forecast ──────────────────────────────────────────────────────────────────
 
 def make_forecast(model: Prophet,
-                  periods: int = 12,
-                  freq: str = "MS",
-                  events: list[dict] | None = None) -> pd.DataFrame:
-    """
-    Genera el forecast para los próximos `periods` períodos.
+                  periods: int = 26,
+                  regressors: list[dict] | None   = None,
+                  extra_events: list[dict] | None = None) -> pd.DataFrame:
+    future = model.make_future_dataframe(periods=periods, freq=FREQ)
 
-    Returns:
-        DataFrame con: ds, yhat, yhat_lower, yhat_upper, trend
-    """
-    future = model.make_future_dataframe(periods=periods, freq=freq)
+    all_regressors = list(regressors or [])
+    for ev in (extra_events or []):
+        all_regressors.append({"name": ev["name"], "dates": ev["dates"]})
 
-    # Agregar regressores de eventos futuros al dataframe futuro
-    if events:
-        for event in events:
-            col_name    = event["name"]
-            event_dates = pd.to_datetime(event["dates"])
-            future[col_name] = future["ds"].apply(
-                lambda d: event.get("value", 1.0) if d in event_dates.values else 0.0
-            )
+    ev_dates_cache = {}
+    for reg in all_regressors:
+        col = reg["name"]
+        if col not in ev_dates_cache:
+            ev_dates_cache[col] = pd.to_datetime(reg["dates"])
+        future[col] = future["ds"].apply(
+            lambda d: 1.0 if d in ev_dates_cache[col].values else 0.0
+        )
 
-    forecast = model.predict(future)
-
-    # Clip negativos (no tiene sentido demanda negativa)
-    for col in ["yhat", "yhat_lower", "yhat_upper"]:
-        forecast[col] = forecast[col].clip(lower=0)
-
-    return forecast[["ds", "yhat", "yhat_lower", "yhat_upper", "trend"]]
+    fc = model.predict(future)
+    for col in ("yhat", "yhat_lower", "yhat_upper"):
+        fc[col] = fc[col].clip(lower=0)
+    return fc[["ds", "yhat", "yhat_lower", "yhat_upper", "trend"]]
 
 
 # ── Evaluación ────────────────────────────────────────────────────────────────
 
 def evaluate_model(prophet_df: pd.DataFrame,
-                   freq: str = "MS") -> dict:
-    """
-    Evalúa la precisión del modelo con validación cruzada.
-    Usa el 20% final del historial como set de prueba.
+                   regressors: list[dict] | None = None) -> dict:
+    n      = len(prophet_df)
+    cutoff = max(4, int(n * 0.8))
+    train  = prophet_df.iloc[:cutoff]
+    test   = prophet_df.iloc[cutoff:]
 
-    Returns:
-        Dict con métricas: mape, mae, rmse
-    """
-    n       = len(prophet_df)
-    cutoff  = max(3, int(n * 0.8))
-    train   = prophet_df.iloc[:cutoff]
-    test    = prophet_df.iloc[cutoff:]
-
-    if len(train) < 6:
+    if len(train) < 8:
         return {"mape": None, "mae": None, "rmse": None,
-                "note": "Historial insuficiente para evaluación"}
+                "note": "Historial insuficiente (mín. 8 semanas)"}
 
-    model    = train_model(train)
-    forecast = make_forecast(model, periods=len(test), freq=freq)
+    model = train_model(train, regressors=regressors)
+    fc    = make_forecast(model, periods=len(test), regressors=regressors)
+    pred  = fc.iloc[-len(test):]["yhat"].values
+    real  = test["y"].values
+    mask  = real > 0
 
-    pred = forecast.iloc[-len(test):]["yhat"].values
-    real = test["y"].values
-
-    # Evitar división por cero en MAPE
-    mask = real > 0
     if mask.sum() == 0:
-        return {"mape": None, "mae": None, "rmse": None,
-                "note": "Todos los valores reales son 0"}
-
-    mape = float(mean_absolute_percentage_error(real[mask], pred[mask]))
-    mae  = float(np.mean(np.abs(real - pred)))
-    rmse = float(np.sqrt(np.mean((real - pred) ** 2)))
+        return {"mape": None, "mae": None, "rmse": None, "note": "Demanda cero en período de prueba"}
 
     return {
-        "mape":         round(mape * 100, 2),
-        "mae":          round(mae, 1),
-        "rmse":         round(rmse, 1),
-        "n_train":      len(train),
-        "n_test":       len(test),
+        "mape":         round(float(mean_absolute_percentage_error(real[mask], pred[mask])) * 100, 2),
+        "mae":          round(float(np.mean(np.abs(real - pred))), 1),
+        "rmse":         round(float(np.sqrt(np.mean((real - pred) ** 2))), 1),
+        "n_train":      int(len(train)),
+        "n_test":       int(len(test)),
+        "n_regressors": len(regressors) if regressors else 0,
         "evaluated_at": datetime.utcnow().isoformat(),
     }
 
 
-# ── Persistencia de modelos ───────────────────────────────────────────────────
+# ── Persistencia ──────────────────────────────────────────────────────────────
 
-def save_model(model: Prophet, sku: str, metadata: dict | None = None):
-    """Guarda el modelo entrenado en disco."""
-    path = MODELS_DIR / f"{sku}.pkl"
+def save_model(model: Prophet, key: str, metadata: dict | None = None):
+    path = MODELS_DIR / f"{key}.pkl"
     with open(path, "wb") as f:
-        pickle.dump({"model": model, "metadata": metadata or {}, 
+        pickle.dump({"model": model, "metadata": metadata or {},
                      "saved_at": datetime.utcnow().isoformat()}, f)
     logger.info(f"Modelo guardado: {path}")
 
 
-def load_model(sku: str) -> tuple[Prophet, dict] | None:
-    """Carga un modelo previamente entrenado."""
-    path = MODELS_DIR / f"{sku}.pkl"
+def load_model(key: str) -> tuple[Prophet, dict] | None:
+    path = MODELS_DIR / f"{key}.pkl"
     if not path.exists():
         return None
     with open(path, "rb") as f:
@@ -208,89 +212,113 @@ def load_model(sku: str) -> tuple[Prophet, dict] | None:
 
 
 def list_trained_models() -> list[dict]:
-    """Lista todos los modelos entrenados con su metadata."""
-    models = []
+    result = []
     for pkl in MODELS_DIR.glob("*.pkl"):
         try:
             with open(pkl, "rb") as f:
                 data = pickle.load(f)
-            models.append({
-                "sku":      pkl.stem,
+            parts = pkl.stem.split("__")
+            result.append({
+                "key":      pkl.stem,
+                "sku":      parts[0] if parts else pkl.stem,
+                "canal":    parts[1] if len(parts) > 1 else None,
+                "zona":     parts[2] if len(parts) > 2 else None,
                 "saved_at": data.get("saved_at"),
-                "metadata": data.get("metadata", {}),
+                "metrics":  data.get("metadata", {}).get("metrics", {}),
+                "categoria": data.get("metadata", {}).get("categoria", ""),
+                "n_regressors": data.get("metadata", {}).get("n_regressors", 0),
             })
         except Exception:
             pass
-    return sorted(models, key=lambda x: x["sku"])
+    return sorted(result, key=lambda x: x["key"])
 
 
-# ── Pipeline completo para un SKU ─────────────────────────────────────────────
+# ── Pipeline completo ─────────────────────────────────────────────────────────
 
 def run_sku_pipeline(df: pd.DataFrame,
                      sku: str,
-                     events: list[dict] | None = None,
-                     forecast_periods: int = 12,
-                     freq: str = "MS",
-                     force_retrain: bool = False) -> dict:
+                     canal: str | None          = None,
+                     zona: str | None           = None,
+                     extra_events: list[dict] | None = None,
+                     forecast_periods: int      = 26,
+                     force_retrain: bool        = False) -> dict:
     """
-    Pipeline completo: prepara datos → entrena → evalúa → genera forecast → guarda.
+    Pipeline completo para un segmento SKU x Canal x Zona.
 
-    Args:
-        df:               DataFrame completo de ventas
-        sku:              SKU a procesar
-        events:           Eventos comerciales como regressores
-        forecast_periods: Períodos a forecastear
-        freq:             Frecuencia ('MS' mensual, 'W' semanal, 'D' diaria)
-        force_retrain:    Si True, reentrena aunque ya exista modelo guardado
-
-    Returns:
-        Dict con forecast, métricas e historial
+    Flujo:
+      1. Detecta la Categ. Comercial del SKU
+      2. Carga los regressores de estacionalidad correspondientes (seasonality.py)
+      3. Evalúa con hold-out (80/20)
+      4. Entrena con historial completo + regressores + eventos manuales
+      5. Genera forecast a `forecast_periods` semanas
+      6. Guarda el modelo en disco
     """
-    # Intentar cargar modelo existente
-    if not force_retrain:
-        cached = load_model(sku)
+    key       = make_key(sku, canal, zona)
+    categoria = get_categoria(df, sku)
+
+    # Regressores automáticos según categoría
+    regressors = get_category_regressors(categoria)
+
+    # Intentar modelo en caché (solo si no hay eventos manuales que cambien el modelo)
+    if not force_retrain and not extra_events:
+        cached = load_model(key)
         if cached:
             model, meta = cached
-            forecast = make_forecast(model, forecast_periods, freq, events)
+            fc = make_forecast(model, forecast_periods, regressors)
             return {
-                "sku":       sku,
-                "forecast":  forecast.to_dict(orient="records"),
-                "metrics":   meta.get("metrics", {}),
-                "from_cache": True,
+                "key":         key, "sku": sku, "canal": canal, "zona": zona,
+                "categoria":   categoria,
+                "regressors":  [r["name"] for r in regressors],
+                "forecast":    _format_forecast(fc),
+                "metrics":     meta.get("metrics", {}),
+                "from_cache":  True,
             }
 
-    # Preparar datos
-    prophet_df = prepare_prophet_df(df, sku, freq)
+    prophet_df = prepare_prophet_df(df, sku, canal, zona)
+    if len(prophet_df) < 8:
+        raise ValueError(
+            f"Segmento '{key}' tiene solo {len(prophet_df)} semanas. Mínimo requerido: 8."
+        )
 
-    if len(prophet_df) < 6:
-        raise ValueError(f"SKU '{sku}' tiene menos de 6 períodos de historial. "
-                         f"Mínimo recomendado: 24 meses.")
-
-    # Evaluar antes de entrenar con todos los datos
-    metrics = evaluate_model(prophet_df, freq)
+    # Evaluar con regressores
+    metrics = evaluate_model(prophet_df, regressors)
 
     # Entrenar con historial completo
-    model    = train_model(prophet_df, events)
-    forecast = make_forecast(model, forecast_periods, freq, events)
+    model = train_model(prophet_df, regressors=regressors, extra_events=extra_events)
+    fc    = make_forecast(model, forecast_periods, regressors, extra_events)
 
-    # Guardar
-    save_model(model, sku, metadata={
+    save_model(model, key, metadata={
         "metrics":        metrics,
         "n_history":      len(prophet_df),
-        "freq":           freq,
+        "freq":           FREQ,
         "forecast_periods": forecast_periods,
+        "categoria":      categoria,
+        "regressors":     [r["name"] for r in regressors],
+        "n_regressors":   len(regressors),
         "trained_at":     datetime.utcnow().isoformat(),
     })
 
-    # Historial formateado para respuesta
-    history = prophet_df.rename(columns={"ds": "fecha", "y": "real"})
-    history["fecha"] = history["fecha"].dt.strftime("%Y-%m-%d")
+    history = (
+        prophet_df
+        .rename(columns={"ds": "fecha", "y": "real"})
+        .assign(fecha=lambda x: x["fecha"].dt.strftime("%Y-%m-%d"))
+        .to_dict(orient="records")
+    )
 
     return {
-        "sku":       sku,
-        "forecast":  forecast.assign(ds=forecast["ds"].dt.strftime("%Y-%m-%d"))
-                             .to_dict(orient="records"),
-        "history":   history.to_dict(orient="records"),
-        "metrics":   metrics,
+        "key":        key, "sku": sku, "canal": canal, "zona": zona,
+        "categoria":  categoria,
+        "regressors": [r["name"] for r in regressors],
+        "forecast":   _format_forecast(fc),
+        "history":    history,
+        "metrics":    metrics,
         "from_cache": False,
     }
+
+
+def _format_forecast(fc: pd.DataFrame) -> list[dict]:
+    return (
+        fc.assign(ds=fc["ds"].dt.strftime("%Y-%m-%d"))
+          .round({"yhat": 1, "yhat_lower": 1, "yhat_upper": 1, "trend": 1})
+          .to_dict(orient="records")
+    )
