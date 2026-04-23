@@ -266,11 +266,20 @@ def run_sku_pipeline(df: pd.DataFrame,
         if cached:
             model, meta = cached
             fc = make_forecast(model, forecast_periods, regressors)
+            # Siempre devolver historial aunque venga del caché
+            prophet_df = prepare_prophet_df(df, sku, canal, zona)
+            history = (
+                prophet_df
+                .rename(columns={"ds": "fecha", "y": "real"})
+                .assign(fecha=lambda x: x["fecha"].dt.strftime("%Y-%m-%d"))
+                .to_dict(orient="records")
+            )
             return {
                 "key":         key, "sku": sku, "canal": canal, "zona": zona,
                 "categoria":   categoria,
                 "regressors":  [r["name"] for r in regressors],
                 "forecast":    _format_forecast(fc),
+                "history":     history,
                 "metrics":     meta.get("metrics", {}),
                 "from_cache":  True,
             }
