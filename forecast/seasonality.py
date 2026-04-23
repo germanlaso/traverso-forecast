@@ -1,39 +1,45 @@
 """
-seasonality.py — Regressores de estacionalidad por categoría comercial
+seasonality.py — Regressores de estacionalidad por categoria comercial
 Traverso S.A. · Piloto de Forecast
 
-CÓMO FUNCIONA:
-  Prophet modela: demanda = tendencia + estacionalidad + Σ(regressores) + error
+COMO FUNCIONA:
+  Prophet modela: demanda = tendencia + estacionalidad + regressores + error
 
   Cada regressor es una columna binaria (0/1) en el DataFrame de entrenamiento.
-  Prophet aprende durante el entrenamiento cuánto sube o baja la demanda cuando
-  esa columna vale 1. Ese coeficiente aprendido se aplica automáticamente al
-  forecastear períodos futuros donde el evento volverá a ocurrir.
+  Prophet aprende durante el entrenamiento cuanto sube o baja la demanda cuando
+  esa columna vale 1. Ese coeficiente se aplica automaticamente al forecastear
+  periodos futuros donde el evento volvera a ocurrir.
 
 AGREGAR NUEVOS REGRESSORES:
-  1. Define las fechas en get_category_regressors() para la categoría que corresponda
-  2. Usa _semanas_del_rango() o _semanas_previas_fecha() para calcular las semanas
-  3. El pipeline de entrenamiento los aplica automáticamente según Categ. Comercial
+  1. Define las fechas en get_category_regressors() para la categoria
+  2. Usa _temporada() o _semanas_previas_fecha() para calcular semanas
+  3. El pipeline los aplica automaticamente segun Categ. Comercial del SKU
 
-CATEGORÍAS ACTUALES:
-  - LIMON:   verano (dic–mar) + semanas previas a Semana Santa
-  - VINAGRE: verano (dic–mar)
-  - SALSAS:  semanas previas a Fiestas Patrias + temporada calor (oct–mar)
-  - SOPAS:   temporada fría (may–ago)
+CATEGORIAS Y VALORES EXACTOS EN dbo.ventas (Segmento=COMERCIAL):
+  SALSAS            375.007 registros  — peak Fiestas Patrias + temporada calor
+  VINAGRES          232.702 registros  — peak verano (ensaladas/pescados)
+  JUGO DE LIMON     130.316 registros  — peak verano + Semana Santa
+  JUGOS CONCENTRADOS 121.551 registros — peak verano
+  ENCURTIDOS         95.178 registros  — peak Fiestas Patrias
+  SOPAS              92.455 registros  — peak temporada fria
+  SOYA               54.895 registros  — sin estacionalidad definida aun
+  MAYONESA           30.334 registros  — peak verano + Fiestas Patrias
+  ESENCIAS           27.192 registros  — sin estacionalidad definida aun
+  KIKKOMAN           16.306 registros  — sin estacionalidad definida aun
+  MELITTA             5.316 registros  — sin estacionalidad definida aun
+  ACEITES             2.370 registros  — sin estacionalidad definida aun
 """
 
 from datetime import date, timedelta
 
-# ── Años cubiertos: historial + horizonte de forecast ─────────────────────────
 _YEARS = list(range(2021, 2029))
 
 
-# ── Utilidades de fechas ──────────────────────────────────────────────────────
+# ── Utilidades ────────────────────────────────────────────────────────────────
 
 def _semanas_del_rango(inicio: date, fin: date) -> list[str]:
-    """Todos los lunes dentro de un rango de fechas."""
     semanas = []
-    d = inicio - timedelta(days=inicio.weekday())  # retroceder al lunes
+    d = inicio - timedelta(days=inicio.weekday())
     while d <= fin:
         semanas.append(d.strftime("%Y-%m-%d"))
         d += timedelta(weeks=1)
@@ -41,10 +47,7 @@ def _semanas_del_rango(inicio: date, fin: date) -> list[str]:
 
 
 def _semana_santa(year: int) -> list[str]:
-    """
-    Calcula las 3 semanas previas a Viernes Santo para un año dado.
-    Usa el algoritmo de Gauss para calcular el Domingo de Pascua.
-    """
+    """3 semanas previas a Viernes Santo. Algoritmo de Gauss."""
     a = year % 19
     b = year // 100
     c = year % 100
@@ -60,23 +63,22 @@ def _semana_santa(year: int) -> list[str]:
     month = (h + l - 7 * m + 114) // 31
     day   = ((h + l - 7 * m + 114) % 31) + 1
     pascua = date(year, month, day)
-    viernes_santo = pascua - timedelta(days=2)
-    lunes_ref = viernes_santo - timedelta(days=viernes_santo.weekday())
-    return [(lunes_ref - timedelta(weeks=w)).strftime("%Y-%m-%d") for w in range(3)]
+    viernes = pascua - timedelta(days=2)
+    lunes   = viernes - timedelta(days=viernes.weekday())
+    return [(lunes - timedelta(weeks=w)).strftime("%Y-%m-%d") for w in range(3)]
 
 
 def _semanas_previas_fecha(year: int, mes: int, dia: int, n: int = 4) -> list[str]:
-    """N semanas previas (inclusive) a una fecha específica."""
-    fecha    = date(year, mes, dia)
-    lunes    = fecha - timedelta(days=fecha.weekday())
+    """N semanas previas (inclusive) a una fecha."""
+    fecha = date(year, mes, dia)
+    lunes = fecha - timedelta(days=fecha.weekday())
     return [(lunes - timedelta(weeks=w)).strftime("%Y-%m-%d") for w in range(n)]
 
 
 def _temporada(meses: list[int]) -> list[str]:
     """
-    Todas las semanas que caen en los meses indicados para todos los años en _YEARS.
-    Permite meses > 12 para indicar "mes del año siguiente"
-    (ej: [12, 13, 14, 15] = dic, ene, feb, mar del año siguiente).
+    Semanas en los meses indicados para todos los anos en _YEARS.
+    Meses > 12 indican el ano siguiente (ej: 13=enero, 14=febrero del año sig.)
     """
     semanas = []
     for y in _YEARS:
@@ -85,116 +87,180 @@ def _temporada(meses: list[int]) -> list[str]:
             year_real = y if m <= 12 else y + 1
             try:
                 inicio = date(year_real, mes_real, 1)
-                if mes_real == 12:
-                    fin = date(year_real + 1, 1, 1) - timedelta(days=1)
-                else:
-                    fin = date(year_real, mes_real + 1, 1) - timedelta(days=1)
+                fin    = date(year_real, mes_real + 1, 1) - timedelta(days=1) \
+                         if mes_real < 12 else date(year_real + 1, 1, 1) - timedelta(days=1)
                 semanas += _semanas_del_rango(inicio, fin)
             except ValueError:
                 pass
     return sorted(set(semanas))
 
 
-# ── Definición de regressores por categoría ───────────────────────────────────
+def _verano() -> list[str]:
+    """Temporada verano Chile: diciembre - marzo."""
+    return _temporada([12, 13, 14, 15])
+
+
+def _fiestas_patrias(n_semanas: int = 4) -> list[str]:
+    """N semanas previas al 18 de septiembre."""
+    return sorted(set(
+        s for y in _YEARS for s in _semanas_previas_fecha(y, 9, 18, n=n_semanas)
+    ))
+
+
+def _semana_santa_all() -> list[str]:
+    """3 semanas previas a Semana Santa para todos los anos."""
+    return sorted(set(s for y in _YEARS for s in _semana_santa(y)))
+
+
+# ── Regressores por categoria ─────────────────────────────────────────────────
 
 def get_category_regressors(categoria: str) -> list[dict]:
     """
-    Retorna la lista de regressores para una categoría comercial.
+    Retorna la lista de regressores para una categoria comercial.
 
-    Cada regressor es un dict con:
-        name:   nombre de la columna en el DataFrame Prophet (sin espacios)
-        label:  descripción legible para el dashboard
+    Cada regressor:
+        name:   nombre de columna en el DataFrame Prophet (sin espacios)
+        label:  descripcion legible para el dashboard
         dates:  lista de fechas ISO (lunes de cada semana afectada)
-        value:  siempre 1.0 — Prophet aprende el coeficiente real durante el entrenamiento
+        value:  1.0 — Prophet aprende el coeficiente real del historial
 
-    IMPORTANTE sobre 'value':
-        No representa el % de aumento — ese lo aprende Prophet del historial.
-        Es simplemente el indicador de que el evento está activo esa semana.
-        Si quieres explorar el efecto aprendido post-entrenamiento, usa
-        model.params['beta'] después de entrenar.
+    COMO AGREGAR UNA NUEVA CATEGORIA:
+        1. Agrega un bloque 'if cat in ("NOMBRE_EN_BD"):' al final
+        2. Define los regressores con _temporada(), _fiestas_patrias(), etc.
+        3. Haz commit y rebuild — se aplica automaticamente al reentrenar
     """
     cat = (categoria or "").strip().upper()
 
-    # ── LIMÓN ─────────────────────────────────────────────────────────────────
-    if cat == "LIMON":
+    # ── JUGO DE LIMON ─────────────────────────────────────────────────────────
+    if cat in ("JUGO DE LIMON", "LIMON", "LIMON ", "LIMÓN", "JUGO LIMON"):
         return [
             {
                 "name":  "verano_limon",
-                "label": "Temporada verano dic–mar (ensaladas, pescados, mariscos)",
-                "dates": _temporada([12, 13, 14, 15]),   # dic, ene, feb, mar
+                "label": "Temporada verano dic-mar (ensaladas, pescados, mariscos)",
+                "dates": _verano(),
                 "value": 1.0,
             },
             {
                 "name":  "semana_santa",
-                "label": "Semanas previas a Semana Santa (peak limón)",
-                "dates": sorted(set(
-                    s for y in _YEARS for s in _semana_santa(y)
-                )),
+                "label": "3 semanas previas a Semana Santa (peak limon)",
+                "dates": _semana_santa_all(),
                 "value": 1.0,
             },
         ]
 
-    # ── VINAGRE ───────────────────────────────────────────────────────────────
-    if cat == "VINAGRE":
+    # ── VINAGRES ──────────────────────────────────────────────────────────────
+    if cat in ("VINAGRES", "VINAGRE"):
         return [
             {
                 "name":  "verano_vinagre",
-                "label": "Temporada verano dic–mar (ensaladas, pescados, mariscos)",
-                "dates": _temporada([12, 13, 14, 15]),
+                "label": "Temporada verano dic-mar (ensaladas, pescados, mariscos)",
+                "dates": _verano(),
+                "value": 1.0,
+            },
+            {
+                "name":  "semana_santa",
+                "label": "3 semanas previas a Semana Santa",
+                "dates": _semana_santa_all(),
                 "value": 1.0,
             },
         ]
 
     # ── SALSAS ────────────────────────────────────────────────────────────────
-    if cat == "SALSAS":
+    if cat in ("SALSAS", "SALSA"):
         return [
             {
                 "name":  "fiestas_patrias",
                 "label": "4 semanas previas a Fiestas Patrias (asados)",
-                "dates": sorted(set(
-                    s for y in _YEARS for s in _semanas_previas_fecha(y, 9, 18, n=4)
-                )),
+                "dates": _fiestas_patrias(4),
                 "value": 1.0,
             },
             {
-                "name":  "temporada_calor_salsas",
-                "label": "Temporada calor oct–mar (asados y parrilla)",
-                "dates": _temporada([10, 11, 12, 13, 14, 15]),  # oct–mar
+                "name":  "temporada_calor",
+                "label": "Temporada calor oct-mar (asados y parrilla)",
+                "dates": _temporada([10, 11, 12, 13, 14, 15]),
                 "value": 1.0,
             },
         ]
 
     # ── SOPAS ─────────────────────────────────────────────────────────────────
-    if cat == "SOPAS":
+    if cat in ("SOPAS", "SOPA"):
         return [
             {
                 "name":  "temporada_fria",
-                "label": "Temporada fría may–ago (mayor consumo de sopas)",
+                "label": "Temporada fria may-ago (mayor consumo sopas)",
                 "dates": _temporada([5, 6, 7, 8]),
                 "value": 1.0,
             },
         ]
 
-    # ── Sin regressores específicos para esta categoría ───────────────────────
+    # ── JUGOS CONCENTRADOS ────────────────────────────────────────────────────
+    if cat in ("JUGOS CONCENTRADOS", "JUGO CONCENTRADO"):
+        return [
+            {
+                "name":  "verano_jugos",
+                "label": "Temporada verano dic-mar (mayor consumo jugos)",
+                "dates": _verano(),
+                "value": 1.0,
+            },
+        ]
+
+    # ── ENCURTIDOS ────────────────────────────────────────────────────────────
+    if cat in ("ENCURTIDOS", "ENCURTIDO"):
+        return [
+            {
+                "name":  "fiestas_patrias",
+                "label": "4 semanas previas a Fiestas Patrias (acompanamiento asados)",
+                "dates": _fiestas_patrias(4),
+                "value": 1.0,
+            },
+            {
+                "name":  "temporada_calor",
+                "label": "Temporada calor oct-mar (mayor consumo con asados)",
+                "dates": _temporada([10, 11, 12, 13, 14, 15]),
+                "value": 1.0,
+            },
+        ]
+
+    # ── MAYONESA ──────────────────────────────────────────────────────────────
+    if cat in ("MAYONESA", "MAYONESAS"):
+        return [
+            {
+                "name":  "verano_mayonesa",
+                "label": "Temporada verano dic-mar (ensaladas y asados)",
+                "dates": _verano(),
+                "value": 1.0,
+            },
+            {
+                "name":  "fiestas_patrias",
+                "label": "4 semanas previas a Fiestas Patrias",
+                "dates": _fiestas_patrias(4),
+                "value": 1.0,
+            },
+        ]
+
+    # ── Sin regressores especificos para esta categoria ───────────────────────
+    # Categorias sin estacionalidad definida aun:
+    # SOYA, ESENCIAS, KIKKOMAN, MELITTA, ACEITES, CUIDADO DEL HOGAR,
+    # CUIDADO PERSONAL, GRANELES, ABARROTES, OTROS
     return []
 
 
 def get_all_regressors_summary() -> dict:
-    """
-    Retorna un resumen de todos los regressores definidos.
-    Útil para documentación y para el endpoint /regressors de la API.
-    """
-    categorias = ["LIMON", "VINAGRE", "SALSAS", "SOPAS"]
+    """Resumen de todos los regressores definidos. Usado por /regressors API."""
+    categorias = [
+        "JUGO DE LIMON", "VINAGRES", "SALSAS", "SOPAS",
+        "JUGOS CONCENTRADOS", "ENCURTIDOS", "MAYONESA",
+    ]
     summary = {}
     for cat in categorias:
         regs = get_category_regressors(cat)
         summary[cat] = [
             {
-                "name":        r["name"],
-                "label":       r["label"],
-                "n_semanas":   len(r["dates"]),
-                "primera":     r["dates"][0]  if r["dates"] else None,
-                "ultima":      r["dates"][-1] if r["dates"] else None,
+                "name":      r["name"],
+                "label":     r["label"],
+                "n_semanas": len(r["dates"]),
+                "primera":   r["dates"][0]  if r["dates"] else None,
+                "ultima":    r["dates"][-1] if r["dates"] else None,
             }
             for r in regs
         ]
