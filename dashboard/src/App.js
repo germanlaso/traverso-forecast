@@ -200,7 +200,6 @@ export default function App() {
     setLoading(true); setError(''); setResult(null);
     const canalVal = canalRef.current || null;
     const zonaVal  = zonaRef.current  || null;
-    console.log('DEBUG canal:', canalVal, 'sku:', selSku);
     const activeEvents = events
       .filter(e => e.active && e.dates.trim())
       .map(e => ({
