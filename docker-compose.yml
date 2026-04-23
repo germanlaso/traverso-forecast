@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+
+  # ── Motor de forecast (Prophet + API FastAPI) ─────────────────────────────
+  forecast:
+    build: ./forecast
+    container_name: traverso_forecast
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./forecast:/app
+      - forecast_models:/app/models
+      - forecast_data:/app/data
+    environment:
+      - SQL_SERVER=${SQL_SERVER}
+      - SQL_DATABASE=${SQL_DATABASE}
+      - SQL_USERNAME=${SQL_USERNAME}
+      - SQL_PASSWORD=${SQL_PASSWORD}
+      - SQL_DRIVER=ODBC Driver 18 for SQL Server
+    restart: unless-stopped
+
+  # ── Dashboard React ───────────────────────────────────────────────────────
+  dashboard:
+    build: ./dashboard
+    container_name: traverso_dashboard
+    ports:
+      - "3000:3000"
+    depends_on:
+      - forecast
+    restart: unless-stopped
+
+volumes:
+  forecast_models:
+  forecast_data:

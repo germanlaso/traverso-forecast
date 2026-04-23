@@ -1,0 +1,49 @@
+# ══════════════════════════════════════════════════════════════════
+# CRÍTICO: Archivos que NUNCA deben subirse a GitHub
+# ══════════════════════════════════════════════════════════════════
+
+# Credenciales y variables de entorno
+.env
+.env.local
+.env.production
+*.env
+
+# Modelos entrenados (pesados, se regeneran)
+forecast/models/
+forecast/data/
+
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.pkl
+*.pickle
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Node / React ──────────────────────────────────────────────────
+node_modules/
+dashboard/node_modules/
+dashboard/build/
+npm-debug.log*
+yarn-error.log*
+
+# ── Docker ────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Sistema operativo ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── IDEs ──────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
