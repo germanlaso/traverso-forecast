@@ -11,7 +11,6 @@ services:
     volumes:
       - ./forecast:/app
       - forecast_models:/app/models
-      - forecast_data:/app/data
     environment:
       - SQL_SERVER=${SQL_SERVER}
       - SQL_DATABASE=${SQL_DATABASE}
@@ -35,4 +34,3 @@ services:
 
 volumes:
   forecast_models:
-  forecast_data:
