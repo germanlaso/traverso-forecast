@@ -171,10 +171,10 @@ def load_params_from_excel(path: str):
     col_map3 = {}
     for col in df_sl.columns:
         c = _normalize(col)
-        if c.startswith('sku') or 'codigosap' in c: col_map3[col] = 'sku'
-        elif 'codigolinea' in c or c == 'codigo': col_map3[col] = 'linea'
-        elif 'tcambio' in c or 'cambio' in c: col_map3[col] = 't_cambio_hrs'
-        elif 'preferida' in c: col_map3[col] = 'preferida'
+        if 'codigosap' in c or (c.startswith('sku') and 'linea' not in c):   col_map3[col] = 'sku'
+        elif 'codigolinea' in c or ('codigo' in c and 'linea' in c):              col_map3[col] = 'linea'
+        elif 'tcambio' in c or 'cambio' in c:          col_map3[col] = 't_cambio_hrs'
+        elif 'preferida' in c:                         col_map3[col] = 'preferida'
 
     df_sl = df_sl.rename(columns=col_map3)
     sku_lineas = []
