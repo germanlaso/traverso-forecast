@@ -171,8 +171,8 @@ def load_params_from_excel(path: str):
     col_map3 = {}
     for col in df_sl.columns:
         c = _normalize(col)
-        if 'codigosap' in c or (c.startswith('sku') and 'linea' not in c):   col_map3[col] = 'sku'
-        elif 'codigolinea' in c or ('codigo' in c and 'linea' in c):              col_map3[col] = 'linea'
+        if c.startswith('sku') or 'codigosap' in c:   col_map3[col] = 'sku'
+        elif 'codigolinea' in c:                       col_map3[col] = 'linea'
         elif 'tcambio' in c or 'cambio' in c:          col_map3[col] = 't_cambio_hrs'
         elif 'preferida' in c:                         col_map3[col] = 'preferida'
 
@@ -291,7 +291,7 @@ def generar_plan_completo(sku_params, forecasts, stocks_actuales=None,
                 'semana_necesidad': o.semana_necesidad, 'semana_emision': o.semana_emision,
                 'cantidad_cajas': o.cantidad_cajas, 'cantidad_unidades': o.cantidad_unidades,
                 'linea': o.linea, 'motivo': o.motivo, 'alerta': o.alerta,
-                'tiene_alerta': o.alerta is not None,
+                'tiene_alerta': bool(o.alerta is not None),
             })
     return sorted(todas, key=lambda x: (x['semana_emision'], x['sku']))
 
@@ -301,6 +301,7 @@ def resumen_semanal(ordenes):
     if df.empty: return []
     return (df.groupby('semana_emision')
               .agg(n_ordenes=('sku','count'), n_alertas=('tiene_alerta','sum'))
+              .assign(n_alertas=lambda x: x['n_alertas'].astype(int))
               .reset_index().sort_values('semana_emision')
               .to_dict(orient='records'))
 
