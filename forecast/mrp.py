@@ -97,26 +97,29 @@ def load_params_from_excel(path: str) -> tuple[dict, dict, list]:
 
     # ── SKU_PARAMS ────────────────────────────────────────────────────────────
     df_sku = pd.read_excel(xl, sheet_name='SKU_PARAMS', header=2)
-    # Renombrar columnas (pueden venir con saltos de línea)
-    col_map = {}
-    for col in df_sku.columns:
-        c = str(col).lower().replace('\n', ' ').strip()
-        if 'sku' in c or 'código sap' in c:          col_map[col] = 'sku'
-        elif 'descripci' in c:                        col_map[col] = 'descripcion'
-        elif 'unidades' in c and 'caja' in c:         col_map[col] = 'unidades_por_caja'
-        elif 'categ' in c:                            col_map[col] = 'categoria'
-        elif 'tipo' in c:                             col_map[col] = 'tipo'
-        elif 'lead' in c:                             col_map[col] = 'lead_time_semanas'
-        elif 'seguridad' in c or 'cobertura' in c:   col_map[col] = 'stock_seguridad_dias'
-        elif 'batch' in c and 'mín' in c.lower():    col_map[col] = 'batch_minimo'
-        elif 'múltiplo' in c or 'multiplo' in c:     col_map[col] = 'multiplo_batch'
-        elif 'bodega' in c:                           col_map[col] = 'cap_bodega'
-        elif 'compra' in c:                           col_map[col] = 'compra_minima'
-        elif 'activo' in c:                           col_map[col] = 'activo'
-
+    # Normalizar nombres de columnas (eliminar saltos de línea y espacios extra)
+    df_sku.columns = [str(c).replace('\n', ' ').strip() for c in df_sku.columns]
+    # Mapeo por nombre exacto — basado en estructura real del Excel
+    col_map = {
+        'SKU (Código SAP)':                  'sku',
+        'Descripción':                       'descripcion',
+        'Unidades por Caja':                 'unidades_por_caja',
+        'Categoría':                         'categoria',
+        'Tipo Abastecimiento':               'tipo',
+        'Lead Time (semanas)':               'lead_time_semanas',
+        'Stock Seguridad (días cobertura)':  'stock_seguridad_dias',
+        'Batch Mínimo (u.)':                 'batch_minimo',
+        'Múltiplo Batch (u.)':               'multiplo_batch',
+        'Cap. Bodega (u. máx.)':             'cap_bodega',
+        'Compra Mínima (u.)':                'compra_minima',
+        'Activo (S/N)':                      'activo',
+    }
     df_sku = df_sku.rename(columns=col_map)
-    df_sku = df_sku.dropna(subset=['sku', 'lead_time_semanas'])
+    if 'sku' not in df_sku.columns:
+        raise ValueError(f"Columna SKU no encontrada. Columnas: {df_sku.columns.tolist()}")
     df_sku['sku'] = df_sku['sku'].astype(str).str.strip()
+    df_sku = df_sku[df_sku['sku'].str.match(r'^\d+$')]
+    df_sku = df_sku.dropna(subset=['lead_time_semanas'])
 
     sku_params = {}
     for _, row in df_sku.iterrows():
@@ -140,9 +143,10 @@ def load_params_from_excel(path: str) -> tuple[dict, dict, list]:
 
     # ── LINEAS_PRODUCCION ─────────────────────────────────────────────────────
     df_lin = pd.read_excel(xl, sheet_name='LINEAS_PRODUCCION', header=2)
+    df_lin.columns = [str(c).replace('\n', ' ').strip() for c in df_lin.columns]
     col_map2 = {}
     for col in df_lin.columns:
-        c = str(col).lower().replace('\n', ' ').strip()
+        c = col.lower()
         if 'código' in c and 'línea' in c:           col_map2[col] = 'codigo'
         elif 'nombre' in c:                           col_map2[col] = 'nombre'
         elif 'turnos' in c:                           col_map2[col] = 'turnos_dia'
@@ -173,9 +177,10 @@ def load_params_from_excel(path: str) -> tuple[dict, dict, list]:
 
     # ── SKU_LINEA ─────────────────────────────────────────────────────────────
     df_sl = pd.read_excel(xl, sheet_name='SKU_LINEA', header=2)
+    df_sl.columns = [str(c).replace('\n', ' ').strip() for c in df_sl.columns]
     col_map3 = {}
     for col in df_sl.columns:
-        c = str(col).lower().replace('\n', ' ').strip()
+        c = col.lower()
         if 'sku' in c or 'código sap' in c:          col_map3[col] = 'sku'
         elif 'código' in c and 'línea' in c:          col_map3[col] = 'linea'
         elif 'cambio' in c:                           col_map3[col] = 't_cambio_hrs'
