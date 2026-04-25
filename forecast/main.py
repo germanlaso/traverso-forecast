@@ -19,6 +19,7 @@ from mrp import (load_params_from_excel, generar_plan_completo,
                  resumen_semanal, resumen_por_linea)
 from stock import (fetch_and_save_stock, load_stock_parquet,
                    calcular_stock_disponible, stock_summary)
+from ordenes import router as ordenes_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ app = FastAPI(
     version="1.1.0",
     lifespan=lifespan,
 )
+
+app.include_router(ordenes_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -71,6 +74,19 @@ class TrainBatchRequest(BaseModel):
     zona: Optional[str] = None
     periods: int = 26
     events: list[EventoComercial] = []
+
+
+class AprobacionRequest(BaseModel):
+    sku: str
+    descripcion: str
+    tipo: str
+    semana_emision: str
+    semana_necesidad: str
+    cantidad_sugerida_cj: int
+    cantidad_real_cj: int
+    u_por_caja: int = 1
+    responsable: str
+    comentario: str = ""
 
 
 class PlanRequest(BaseModel):
@@ -157,20 +173,38 @@ def list_skus(use_csv: Optional[str] = Query(None)):
 
 # ── Endpoints: Stock ──────────────────────────────────────────────────────────
 
-@app.post("/stock/refresh", tags=["Stock"])
-def stock_refresh():
-    """
-    Descarga Stock_Lote_Fecha desde SQL Server y guarda en parquet local.
+# Estado del refresh en memoria
+_refresh_state = {"status": "idle", "mensaje": "", "timestamp": None}
 
-    - Filtra bodegas según env BODEGAS_MRP (vacío = todas)
-    - Persiste en forecast/data/stock_actual.parquet
-    - Invocar antes de /plan para tener stock real actualizado
-    """
+def _run_refresh():
+    """Ejecuta el refresh en background y actualiza el estado."""
+    global _refresh_state
+    _refresh_state = {"status": "running", "mensaje": "Descargando stock desde SQL Server...", "timestamp": None}
     try:
-        return fetch_and_save_stock()
+        result = fetch_and_save_stock()
+        _refresh_state = {"status": "ok", "mensaje": f"Stock actualizado: {result['n_skus']} SKUs, {result['n_registros']} registros", "timestamp": result["timestamp_refresh"], **result}
+        logger.info(f"[STOCK] Refresh completado: {result}")
     except Exception as e:
-        logger.exception("Error en /stock/refresh")
-        raise HTTPException(status_code=500, detail=str(e))
+        _refresh_state = {"status": "error", "mensaje": str(e), "timestamp": None}
+        logger.exception("Error en refresh de stock")
+
+
+@app.post("/stock/refresh", tags=["Stock"])
+def stock_refresh(background_tasks: BackgroundTasks):
+    """
+    Inicia la descarga de stock en background y retorna inmediatamente.
+    Consultar GET /stock/refresh/status para saber cuando terminó.
+    """
+    if _refresh_state.get("status") == "running":
+        return {"status": "running", "mensaje": "Ya hay un refresh en curso"}
+    background_tasks.add_task(_run_refresh)
+    return {"status": "started", "mensaje": "Descarga iniciada en background"}
+
+
+@app.get("/stock/refresh/status", tags=["Stock"])
+def stock_refresh_status():
+    """Retorna el estado del último refresh de stock."""
+    return _refresh_state
 
 
 @app.get("/stock/summary", tags=["Stock"])
@@ -450,6 +484,72 @@ def get_mrp_params():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+# ── Endpoints: Órdenes aprobadas ──────────────────────────────────────────────
+
+@app.post("/ordenes/aprobar", tags=["Ordenes"])
+def aprobar(req: AprobacionRequest):
+    """
+    Aprueba una orden sugerida por el MRP.
+    El jefe de producción puede modificar la cantidad (cantidad_real_cj).
+    Si la orden ya existe (mismo SKU + semanas), la actualiza.
+    """
+    try:
+        return aprobar_orden(
+            sku=req.sku,
+            descripcion=req.descripcion,
+            tipo=req.tipo,
+            semana_emision=req.semana_emision,
+            semana_necesidad=req.semana_necesidad,
+            cantidad_sugerida_cj=req.cantidad_sugerida_cj,
+            cantidad_real_cj=req.cantidad_real_cj,
+            u_por_caja=req.u_por_caja,
+            responsable=req.responsable,
+            comentario=req.comentario,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ordenes/{orden_id}/cancelar", tags=["Ordenes"])
+def cancelar(orden_id: str):
+    """Cancela una orden aprobada. Puede reaprobarse después."""
+    try:
+        return cancelar_orden(orden_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ordenes", tags=["Ordenes"])
+def listar(
+    sku:    Optional[str] = None,
+    estado: Optional[str] = None,
+):
+    """
+    Lista órdenes aprobadas/canceladas.
+    Filtros opcionales: sku, estado (APROBADA | CANCELADA)
+    """
+    return listar_ordenes(sku=sku, estado=estado)
+
+
+@app.get("/ordenes/resumen", tags=["Ordenes"])
+def resumen_ordenes():
+    """Resumen de aprobaciones: totales, aprobadas, canceladas."""
+    return resumen_aprobaciones()
+
+
+@app.get("/ordenes/por-semana", tags=["Ordenes"])
+def ordenes_semana():
+    """
+    Órdenes aprobadas indexadas por semana_necesidad.
+    Usado por el dashboard de proyección de stock.
+    """
+    return ordenes_aprobadas_por_semana()
 
 
 @app.get("/regressors", tags=["Estacionalidad"])

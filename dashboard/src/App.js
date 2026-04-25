@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ComposedChart, Line, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import axios from 'axios';
+import StockProyeccion from './components/StockProyeccion';
 
 const API = '';
 
@@ -26,7 +27,7 @@ const s = {
   mLabel: {fontSize:10,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.05em'},
   mValue: {fontSize:22,fontWeight:700,color:C.text,marginTop:2},
   mSub: {fontSize:11,color:C.textMuted,marginTop:2},
-  grid4: {display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:16},
+  grid4: {display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:10,marginBottom:16},
   grid2: {display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:16},
   btn: {fontSize:12,padding:'7px 14px',borderRadius:7,border:`0.5px solid ${C.border}`,background:'#fff',color:C.text,cursor:'pointer',fontWeight:600},
   btnPrimary:{fontSize:12,padding:'7px 14px',borderRadius:7,border:'none',background:C.teal,color:'#fff',cursor:'pointer',fontWeight:600},
@@ -140,6 +141,10 @@ export default function App() {
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(13);
   const [stockRefreshing, setStockRefreshing] = useState(false);
+  const [ordenesAprobadas, setOrdenesAprobadas] = useState([]);  // {key, cantidad_real_cj, responsable, comentario, ts}
+  const [modalOrden, setModalOrden] = useState(null);   // orden a aprobar
+  const [aprobForm, setAprobForm]   = useState({});     // campos del form
+  const [aprobando, setAprobando]   = useState(false);
   const [stockInfo, setStockInfo] = useState(null);
   const [events, setEvents] = useState([
     {name:'promo_verano', label:'Promo verano', dates:'', value:1.25, active:false},
@@ -157,6 +162,12 @@ export default function App() {
 
   useEffect(() => {
     axios.get(`${API}/stock/summary`).then(r => setStockInfo(r.data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    axios.get(`${API}/ordenes/aprobadas`)
+      .then(r => setOrdenesAprobadas(r.data || []))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -208,16 +219,86 @@ export default function App() {
   const refreshStock = async () => {
     setStockRefreshing(true); setError('');
     try {
-      const {data} = await axios.post(`${API}/stock/refresh`);
-      setStockInfo({disponible: true, ...data});
-      // Muestra confirmación breve
-      setError('');
+      // Iniciar refresh en background
+      await axios.post(`${API}/stock/refresh`);
+      // Polling cada 3 segundos hasta que termine
+      let intentos = 0;
+      const poll = setInterval(async () => {
+        intentos++;
+        try {
+          const {data: st} = await axios.get(`${API}/stock/refresh/status`);
+          if (st.status === 'ok') {
+            clearInterval(poll);
+            setStockRefreshing(false);
+            axios.get(`${API}/stock/summary`).then(r => setStockInfo(r.data)).catch(() => {});
+          } else if (st.status === 'error') {
+            clearInterval(poll);
+            setStockRefreshing(false);
+            setError(`Error actualizando stock: ${st.mensaje}`);
+          } else if (intentos > 40) {
+            // timeout 2 minutos
+            clearInterval(poll);
+            setStockRefreshing(false);
+            setError('Timeout actualizando stock — intenta de nuevo');
+          }
+        } catch(e) {
+          clearInterval(poll);
+          setStockRefreshing(false);
+          setError(`Error actualizando stock: ${extractErrorMsg(e)}`);
+        }
+      }, 3000);
     } catch(e) {
-      setError(`Error actualizando stock: ${extractErrorMsg(e)}`);
-    } finally {
       setStockRefreshing(false);
-      // Refrescar resumen
-      axios.get(`${API}/stock/summary`).then(r => setStockInfo(r.data)).catch(() => {});
+      setError(`Error actualizando stock: ${extractErrorMsg(e)}`);
+    }
+  };
+
+  const abrirModal = (orden) => {
+    setModalOrden(orden);
+    // Si ya estaba aprobada, precargar con los valores aprobados
+    const aprobada = aprobadaMap[ordenKey(orden)];
+    setAprobForm({
+      cantidad_real_cj:       aprobada?.cantidad_real_cj    ?? orden.cantidad_cajas,
+      fecha_lanzamiento_real: aprobada?.fecha_lanzamiento_real ?? orden.semana_emision,
+      fecha_entrada_real:     aprobada?.fecha_entrada_real    ?? orden.semana_necesidad,
+      responsable:            aprobada?.responsable ?? '',
+      comentario:             aprobada?.comentario  ?? '',
+    });
+  };
+
+  const cerrarModal = () => { setModalOrden(null); setAprobForm({}); };
+
+  const submitAprobacion = async () => {
+    if (!aprobForm.responsable?.trim()) {
+      alert('El campo Responsable es obligatorio');
+      return;
+    }
+    setAprobando(true);
+    try {
+      const {data: aprobData} = await axios.post(`${API}/ordenes/aprobar`, {
+        sku:                    modalOrden.sku,
+        descripcion:            modalOrden.descripcion,
+        tipo:                   modalOrden.tipo,
+        semana_emision:         modalOrden.semana_emision,
+        semana_necesidad:       modalOrden.semana_necesidad,
+        cantidad_sugerida_cj:   modalOrden.cantidad_cajas,
+        cantidad_real_cj:       Number(aprobForm.cantidad_real_cj),
+        u_por_caja:             modalOrden.u_por_caja || 1,
+        responsable:            aprobForm.responsable,
+        comentario:             aprobForm.comentario || '',
+        linea:                  modalOrden.linea || '',
+        fecha_lanzamiento_real: aprobForm.fecha_lanzamiento_real || '',
+        fecha_entrada_real:     aprobForm.fecha_entrada_real     || '',
+      });
+      setOrdenesAprobadas(prev => {
+        const key = aprobData.key;
+        return [...prev.filter(a => a.key !== key), aprobData];
+      });
+      cerrarModal();
+    } catch(e) {
+      alert(`Error: ${e?.response?.data?.detail || e.message}`);
+    } finally {
+      setAprobando(false);
     }
   };
 
@@ -239,6 +320,8 @@ export default function App() {
   const mapeType = !mapeOk ? 'warn' : metrics.mape < 10 ? 'ok' : metrics.mape < 20 ? 'warn' : 'error';
   const todayStr = new Date().toISOString().slice(0, 10);
   const selectedSku = skus.find(s => s.sku === selSku);
+  const ordenKey = (o) => `${o.sku}__${o.semana_necesidad}__${o.semana_emision}`;
+  const aprobadaMap = Object.fromEntries(ordenesAprobadas.map(a => [a.key, a]));
   const tipoColor = (tipo) => tipo==='PRODUCCION' ? {bg:C.tealLt,color:C.teal} : tipo==='IMPORTACION' ? {bg:C.purpleLt,color:C.purple} : {bg:C.amberLt,color:C.amber};
 
   return (
@@ -256,7 +339,7 @@ export default function App() {
 
       {/* Tabs */}
       <div style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
-        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción']].map(([tab,label]) => (
+        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU']].map(([tab,label]) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:500,background:'transparent',color:activeTab===tab?C.teal:C.textMuted,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
             {label}
@@ -463,6 +546,7 @@ export default function App() {
               <div style={s.grid4}>
                 <div style={s.metric}><div style={s.mLabel}>SKUs planificados</div><div style={s.mValue}>{plan.n_skus}</div></div>
                 <div style={s.metric}><div style={s.mLabel}>Órdenes sugeridas</div><div style={s.mValue}>{plan.n_ordenes}</div></div>
+                <div style={s.metric}><div style={s.mLabel}>Órdenes aprobadas</div><div style={{...s.mValue,color:C.teal}}>{ordenesAprobadas.length}</div></div>
                 <div style={s.metric}><div style={s.mLabel}>Con alertas</div><div style={{...s.mValue,color:plan.n_alertas>0?C.danger:C.teal}}>{plan.n_alertas}</div></div>
                 <div style={s.metric}><div style={s.mLabel}>Horizonte</div><div style={s.mValue}>{planHorizonte} sem.</div></div>
               </div>
@@ -476,7 +560,7 @@ export default function App() {
                   <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                     <thead>
                       <tr style={{background:C.grayLt}}>
-                        {['SKU','Descripción','Tipo','Sem. Necesidad','Fecha Emisión','Cajas','Unidades','Línea','Alerta'].map(h => (
+                        {['SKU','Descripción','Tipo','Fecha entrada stock','Fecha lanzamiento','Cajas','Unidades','Línea','Alerta',''].map(h => (
                           <th key={h} style={{padding:'6px 10px',textAlign:'left',color:C.textMuted,borderBottom:`0.5px solid ${C.border}`,fontWeight:600,fontSize:11}}>{h}</th>
                         ))}
                       </tr>
@@ -484,17 +568,40 @@ export default function App() {
                     <tbody>
                       {(plan.ordenes||[]).map((o,i) => {
                         const tc = tipoColor(o.tipo);
+                        const key = ordenKey(o);
+                        const aprobada = aprobadaMap[key];
+                        const cantMostrar = aprobada ? aprobada.cantidad_real_cj : o.cantidad_cajas;
+                        const modificada = aprobada && aprobada.cantidad_real_cj !== o.cantidad_cajas;
                         return (
-                          <tr key={i} style={{background:o.tiene_alerta?'#FFF5F5':i%2===0?'#fff':C.grayLt}}>
+                          <tr key={i} style={{background:aprobada?'#F0FAF5':o.tiene_alerta?'#FFF5F5':i%2===0?'#fff':C.grayLt}}>
                             <td style={{padding:'5px 10px',fontWeight:700,color:C.teal}}>{o.sku}</td>
                             <td style={{padding:'5px 10px',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.descripcion}</td>
                             <td style={{padding:'5px 10px'}}><span style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:4,background:tc.bg,color:tc.color}}>{o.tipo}</span></td>
                             <td style={{padding:'5px 10px',color:C.textMuted}}>{o.semana_necesidad}</td>
                             <td style={{padding:'5px 10px',fontWeight:o.tiene_alerta?700:400,color:o.tiene_alerta?C.danger:C.text}}>{o.tiene_alerta?'🔴 ':''}{o.semana_emision}</td>
-                            <td style={{padding:'5px 10px',fontWeight:700,color:C.teal}}>{o.cantidad_cajas.toLocaleString('es-CL')}</td>
-                            <td style={{padding:'5px 10px',color:C.textMuted}}>{o.cantidad_unidades.toLocaleString('es-CL')}</td>
+                            <td style={{padding:'5px 10px',fontWeight:700,color:aprobada?C.tealMid:C.teal}}>
+                              {cantMostrar.toLocaleString('es-CL')}
+                              {modificada && <span style={{fontSize:10,color:C.amber,marginLeft:5}}>({o.cantidad_cajas.toLocaleString('es-CL')} MRP)</span>}
+                            </td>
+                            <td style={{padding:'5px 10px',color:C.textMuted}}>{(aprobada ? aprobada.cantidad_real_cj*(o.cantidad_unidades/o.cantidad_cajas) : o.cantidad_unidades).toLocaleString('es-CL',{maximumFractionDigits:0})}</td>
                             <td style={{padding:'5px 10px',color:C.textMuted}}>{o.linea||'—'}</td>
                             <td style={{padding:'5px 10px',fontSize:11,color:C.danger,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.alerta||''}</td>
+                            <td style={{padding:'5px 10px'}}>
+                              {aprobada ? (
+                                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                                  <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:10,background:C.tealLt,color:C.tealMid}}>✓ Aprobada</span>
+                                  <button onClick={() => abrirModal(o)}
+                                    style={{fontSize:10,padding:'2px 8px',borderRadius:6,border:`0.5px solid ${C.border}`,background:'#fff',color:C.textMuted,cursor:'pointer'}}>
+                                    Editar
+                                  </button>
+                                </div>
+                              ) : (
+                                <button onClick={() => abrirModal(o)}
+                                  style={{fontSize:11,padding:'3px 10px',borderRadius:6,border:`0.5px solid ${C.teal}`,background:C.tealLt,color:C.teal,cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}}>
+                                  ✓ Aprobar
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
@@ -532,6 +639,97 @@ export default function App() {
             )}
           </div>
         )}
+        {/* ══ MODAL APROBACIÓN ══ */}
+        {modalOrden && (
+          <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+            <div style={{background:'#fff',borderRadius:12,padding:'24px 28px',width:480,maxWidth:'95vw',boxShadow:'0 8px 32px rgba(0,0,0,.18)'}}>
+              <div style={{fontWeight:700,fontSize:15,color:C.text,marginBottom:4}}>Aprobar orden de producción</div>
+              <div style={{fontSize:12,color:C.textMuted,marginBottom:16}}>
+                {modalOrden.sku} — {modalOrden.descripcion}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12,padding:'10px 14px',background:C.grayLt,borderRadius:8,fontSize:12}}>
+                <span style={{color:C.textMuted}}>Tipo: <strong style={{color:C.text}}>{modalOrden.tipo}</strong></span>
+                <span style={{color:C.textMuted}}>Línea: <strong style={{color:C.text}}>{modalOrden.linea||'—'}</strong></span>
+                <span style={{color:C.textMuted}}>Fecha lanzamiento: <strong style={{color:C.text}}>{modalOrden.semana_emision}</strong></span>
+                <span style={{color:C.textMuted}}>Fecha entrada stock: <strong style={{color:C.text}}>{modalOrden.semana_necesidad}</strong></span>
+                <span style={{color:C.textMuted}}>Sugerido MRP: <strong style={{color:C.teal}}>{modalOrden.cantidad_cajas?.toLocaleString('es-CL')} cj</strong></span>
+                <span style={{color:C.textMuted}}>({modalOrden.cantidad_unidades?.toLocaleString('es-CL')} u.)</span>
+              </div>
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.text,display:'block',marginBottom:4}}>
+                  Cantidad real a producir (cajas) *
+                </label>
+                <input type="number" min="1"
+                  value={aprobForm.cantidad_real_cj}
+                  onChange={e => setAprobForm({...aprobForm, cantidad_real_cj: e.target.value})}
+                  style={{width:'100%',fontSize:14,padding:'7px 10px',borderRadius:7,border:`1.5px solid ${C.teal}`,fontWeight:700,color:C.teal,outline:'none'}}
+                />
+                {aprobForm.cantidad_real_cj != modalOrden.cantidad_cajas && (
+                  <div style={{fontSize:11,color:C.amber,marginTop:3}}>
+                    ⚡ Modificado — MRP sugería {modalOrden.cantidad_cajas?.toLocaleString('es-CL')} cj
+                  </div>
+                )}
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+                <div>
+                  <label style={{fontSize:12,fontWeight:600,color:C.text,display:'block',marginBottom:4}}>
+                    Fecha lanzamiento real *
+                  </label>
+                  <input type="date"
+                    value={aprobForm.fecha_lanzamiento_real}
+                    onChange={e => setAprobForm({...aprobForm, fecha_lanzamiento_real: e.target.value})}
+                    style={{width:'100%',fontSize:13,padding:'6px 10px',borderRadius:7,border:`0.5px solid ${C.border}`,outline:'none'}}
+                  />
+                  {aprobForm.fecha_lanzamiento_real !== modalOrden.semana_emision && (
+                    <div style={{fontSize:10,color:C.amber,marginTop:2}}>MRP: {modalOrden.semana_emision}</div>
+                  )}
+                </div>
+                <div>
+                  <label style={{fontSize:12,fontWeight:600,color:C.text,display:'block',marginBottom:4}}>
+                    Fecha entrada stock real *
+                  </label>
+                  <input type="date"
+                    value={aprobForm.fecha_entrada_real}
+                    onChange={e => setAprobForm({...aprobForm, fecha_entrada_real: e.target.value})}
+                    style={{width:'100%',fontSize:13,padding:'6px 10px',borderRadius:7,border:`1.5px solid ${C.teal}`,fontWeight:700,outline:'none'}}
+                  />
+                  {aprobForm.fecha_entrada_real !== modalOrden.semana_necesidad && (
+                    <div style={{fontSize:10,color:C.amber,marginTop:2}}>MRP: {modalOrden.semana_necesidad}</div>
+                  )}
+                </div>
+              </div>
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.text,display:'block',marginBottom:4}}>Responsable *</label>
+                <input type="text" placeholder="Nombre del jefe de producción"
+                  value={aprobForm.responsable}
+                  onChange={e => setAprobForm({...aprobForm, responsable: e.target.value})}
+                  style={{width:'100%',fontSize:13,padding:'6px 10px',borderRadius:7,border:`0.5px solid ${C.border}`,outline:'none'}}
+                />
+              </div>
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:12,fontWeight:600,color:C.text,display:'block',marginBottom:4}}>Comentario</label>
+                <textarea placeholder="Observaciones opcionales..."
+                  value={aprobForm.comentario}
+                  onChange={e => setAprobForm({...aprobForm, comentario: e.target.value})}
+                  style={{width:'100%',fontSize:12,padding:'6px 10px',borderRadius:7,border:`0.5px solid ${C.border}`,resize:'vertical',minHeight:60,outline:'none'}}
+                />
+              </div>
+              <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+                <button onClick={cerrarModal}
+                  style={{fontSize:13,padding:'8px 18px',borderRadius:7,border:`0.5px solid ${C.border}`,background:'#fff',color:C.text,cursor:'pointer'}}>
+                  Cancelar
+                </button>
+                <button onClick={submitAprobacion} disabled={aprobando}
+                  style={{fontSize:13,padding:'8px 18px',borderRadius:7,border:'none',background:C.teal,color:'#fff',cursor:'pointer',fontWeight:700}}>
+                  {aprobando ? 'Guardando...' : '✓ Confirmar aprobación'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══ STOCK PROYECCIÓN TAB ══ */}
+        {activeTab === 'stock' && <StockProyeccion />}
       </div>
     </div>
   );
