@@ -40,29 +40,6 @@ BODEGAS_INCLUIDAS: list[str] = [b.strip() for b in _bodegas_env.split(",") if b.
 _BODEGAS_DEFAULT = ("'BSUR01'", "'VESP01'", "'VARA01'")
 
 _STOCK_QUERY = """
-WITH stock_reciente AS (
-    SELECT
-        [CODIGO],
-        [BODEGA],
-        [LOTE],
-        [FECHA VCTO],
-        [STOCK],
-        [UMED],
-        [DESCRIPCION],
-        [FECHA DESCARGA INFO],
-        ROW_NUMBER() OVER (
-            PARTITION BY [CODIGO], [BODEGA], [LOTE]
-            ORDER BY [FECHA DESCARGA INFO] DESC
-        ) AS rn
-    FROM dbo.Stock_Lote_Fecha
-    WHERE
-        [BODEGA] IN ('BSUR01', 'VESP01', 'VARA01')
-        AND [CODIGO] IS NOT NULL
-        AND [CODIGO] <> ''
-        AND [STOCK] IS NOT NULL
-        AND [STOCK] <> ''
-        AND [STOCK] <> '0'
-)
 SELECT
     [CODIGO]              AS sku,
     [BODEGA]              AS bodega,
@@ -72,10 +49,19 @@ SELECT
     [UMED]                AS umed,
     [DESCRIPCION]         AS descripcion,
     [FECHA DESCARGA INFO] AS fecha_descarga
-FROM stock_reciente
-WHERE rn = 1
+FROM dbo.Stock_Lote_Fecha
+WHERE
+    [BODEGA] IN ('BSUR01', 'VESP01', 'VARA01')
+    AND [CODIGO] IS NOT NULL
+    AND [CODIGO] <> ''
+    AND [STOCK] IS NOT NULL
+    AND [STOCK] <> ''
+    AND [FECHA DESCARGA INFO] = (
+        SELECT MAX([FECHA DESCARGA INFO])
+        FROM dbo.Stock_Lote_Fecha
+        WHERE [BODEGA] IN ('BSUR01', 'VESP01', 'VARA01')
+    )
 """
-
 
 # ── Funciones públicas ────────────────────────────────────────────────────────
 
