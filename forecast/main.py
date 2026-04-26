@@ -20,6 +20,7 @@ from mrp import (load_params_from_excel, generar_plan_completo,
 from stock import (fetch_and_save_stock, load_stock_parquet,
                    calcular_stock_disponible, stock_summary)
 from ordenes import router as ordenes_router
+from db_mrp import numero_of_tentativo, get_orden_by_key
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -412,6 +413,16 @@ def generar_plan(req: PlanRequest = None):
             horizonte_semanas=req.horizonte_semanas,
             alertas_stock=alertas_vcto,
         )
+
+        # Asignar número OF a cada orden (tentativo para sugeridas, definitivo para aprobadas)
+        for o in ordenes:
+            existente = get_orden_by_key(o["sku"], o["semana_necesidad"], o["semana_emision"])
+            if existente and existente.get("numero_of"):
+                o["numero_of"] = existente["numero_of"]
+                o["aprobada"] = bool(existente.get("estado") == "APROBADA")
+            else:
+                o["numero_of"] = numero_of_tentativo(o["sku"], o["semana_necesidad"], o["semana_emision"])
+                o["aprobada"] = False
 
         # Alertas de vencimiento agrupadas por tipo
         vencidos = [a for a in alertas_vcto if a["tipo"] == "VENCIDO"]

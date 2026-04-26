@@ -2,7 +2,26 @@ version: "3.9"
 
 services:
 
-  # ── Motor de forecast (Prophet + API FastAPI) ─────────────────────────────
+  # ── PostgreSQL MRP ────────────────────────────────────────────────────────────
+  mrp_db:
+    image: postgres:16-alpine
+    container_name: traverso_mrp_db
+    environment:
+      POSTGRES_DB: mrp
+      POSTGRES_USER: mrp_user
+      POSTGRES_PASSWORD: ${MRP_DB_PASSWORD:-mrp_traverso_2026}
+    volumes:
+      - mrp_db_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"           # 5433 para no colisionar con precios_postgres (5432)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mrp_user -d mrp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Motor de forecast (Prophet + API FastAPI) ─────────────────────────────────
   forecast:
     build: ./forecast
     container_name: traverso_forecast
@@ -17,9 +36,13 @@ services:
       - SQL_USERNAME=${SQL_USERNAME}
       - SQL_PASSWORD=${SQL_PASSWORD}
       - SQL_DRIVER=ODBC Driver 18 for SQL Server
+      - MRP_DB_URL=postgresql://mrp_user:${MRP_DB_PASSWORD:-mrp_traverso_2026}@mrp_db:5432/mrp
+    depends_on:
+      mrp_db:
+        condition: service_healthy
     restart: unless-stopped
 
-  # ── Dashboard React ───────────────────────────────────────────────────────
+  # ── Dashboard React ───────────────────────────────────────────────────────────
   dashboard:
     build: ./dashboard
     container_name: traverso_dashboard
@@ -34,3 +57,4 @@ services:
 
 volumes:
   forecast_models:
+  mrp_db_data:

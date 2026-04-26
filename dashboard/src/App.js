@@ -560,7 +560,7 @@ export default function App() {
                   <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                     <thead>
                       <tr style={{background:C.grayLt}}>
-                        {['SKU','Descripción','Tipo','Fecha entrada stock','Fecha lanzamiento','Cajas','Unidades','Línea','Alerta',''].map(h => (
+                        {['N° Orden','SKU','Descripción','Tipo','F. Entrada','F. Lanzamiento','Cajas (cj)','Línea','Alerta',''].map(h => (
                           <th key={h} style={{padding:'6px 10px',textAlign:'left',color:C.textMuted,borderBottom:`0.5px solid ${C.border}`,fontWeight:600,fontSize:11}}>{h}</th>
                         ))}
                       </tr>
@@ -574,16 +574,33 @@ export default function App() {
                         const modificada = aprobada && aprobada.cantidad_real_cj !== o.cantidad_cajas;
                         return (
                           <tr key={i} style={{background:aprobada?'#F0FAF5':o.tiene_alerta?'#FFF5F5':i%2===0?'#fff':C.grayLt}}>
+                            <td style={{padding:'5px 10px',whiteSpace:'nowrap'}}>
+                              {aprobada ? (
+                                <a href={`http://localhost:8000/ordenes/${aprobada.numero_of || o.numero_of}/pdf`}
+                                   target="_blank" rel="noreferrer"
+                                   title="Ver PDF de orden de fabricación"
+                                   style={{fontSize:10,fontWeight:700,color:C.tealMid,textDecoration:'none',
+                                           padding:'2px 6px',background:C.tealLt,borderRadius:4,
+                                           border:`0.5px solid ${C.teal}`,whiteSpace:'nowrap'}}>
+                                  📄 {aprobada.numero_of || o.numero_of}
+                                </a>
+                              ) : (
+                                <span style={{fontSize:10,color:C.textMuted,fontStyle:'italic'}}
+                                  title="Número tentativo — aprueba la orden para asignar número definitivo">
+                                  {o.numero_of}
+                                </span>
+                              )}
+                            </td>
                             <td style={{padding:'5px 10px',fontWeight:700,color:C.teal}}>{o.sku}</td>
                             <td style={{padding:'5px 10px',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.descripcion}</td>
-                            <td style={{padding:'5px 10px'}}><span style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:4,background:tc.bg,color:tc.color}}>{o.tipo}</span></td>
+                            <td style={{padding:'5px 10px'}}><span style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:4,background:tc.bg,color:tc.color}}>{o.tipo==='PRODUCCION'?'PROD':o.tipo==='IMPORTACION'?'IMP':'MAQ'}</span></td>
                             <td style={{padding:'5px 10px',color:C.textMuted}}>{o.semana_necesidad}</td>
                             <td style={{padding:'5px 10px',fontWeight:o.tiene_alerta?700:400,color:o.tiene_alerta?C.danger:C.text}}>{o.tiene_alerta?'🔴 ':''}{o.semana_emision}</td>
-                            <td style={{padding:'5px 10px',fontWeight:700,color:aprobada?C.tealMid:C.teal}}>
+                            <td style={{padding:'5px 10px',fontWeight:700,color:aprobada?C.tealMid:C.teal}}
+                              title={modificada ? `MRP sugería ${o.cantidad_cajas.toLocaleString('es-CL')} cj` : ''}>
                               {cantMostrar.toLocaleString('es-CL')}
-                              {modificada && <span style={{fontSize:10,color:C.amber,marginLeft:5}}>({o.cantidad_cajas.toLocaleString('es-CL')} MRP)</span>}
+                              {modificada && <span style={{fontSize:9,color:C.amber,marginLeft:4}}>⚡</span>}
                             </td>
-                            <td style={{padding:'5px 10px',color:C.textMuted}}>{(aprobada ? aprobada.cantidad_real_cj*(o.cantidad_unidades/o.cantidad_cajas) : o.cantidad_unidades).toLocaleString('es-CL',{maximumFractionDigits:0})}</td>
                             <td style={{padding:'5px 10px',color:C.textMuted}}>{o.linea||'—'}</td>
                             <td style={{padding:'5px 10px',fontSize:11,color:C.danger,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.alerta||''}</td>
                             <td style={{padding:'5px 10px'}}>
@@ -591,14 +608,16 @@ export default function App() {
                                 <div style={{display:'flex',alignItems:'center',gap:6}}>
                                   <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:10,background:C.tealLt,color:C.tealMid}}>✓ Aprobada</span>
                                   <button onClick={() => abrirModal(o)}
-                                    style={{fontSize:10,padding:'2px 8px',borderRadius:6,border:`0.5px solid ${C.border}`,background:'#fff',color:C.textMuted,cursor:'pointer'}}>
-                                    Editar
+                                    title="Editar aprobación"
+                                  style={{fontSize:11,padding:'2px 5px',borderRadius:6,border:`0.5px solid ${C.border}`,background:'#fff',color:C.textMuted,cursor:'pointer'}}>
+                                    ✏️
                                   </button>
                                 </div>
                               ) : (
                                 <button onClick={() => abrirModal(o)}
-                                  style={{fontSize:11,padding:'3px 10px',borderRadius:6,border:`0.5px solid ${C.teal}`,background:C.tealLt,color:C.teal,cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}}>
-                                  ✓ Aprobar
+                                  title="Aprobar orden"
+                                  style={{fontSize:10,padding:'3px 8px',borderRadius:6,border:`0.5px solid ${C.teal}`,background:C.tealLt,color:C.teal,cursor:'pointer',fontWeight:600,whiteSpace:'nowrap'}}>
+                                  ✓
                                 </button>
                               )}
                             </td>
