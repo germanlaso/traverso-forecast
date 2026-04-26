@@ -105,6 +105,7 @@ function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenes
     return {
       ds, stockIni, entradas: Math.round(entradas), tipo, fuente,
       ventas: Math.round(f.yhat), stockFin, ss,
+      tienePendiente: false,  // se calcula fuera con el SKU correcto
       yhat_lower: Math.round(f.yhat_lower ?? f.yhat * 0.8),
       yhat_upper: Math.round(f.yhat_upper ?? f.yhat * 1.2),
     };
@@ -237,10 +238,21 @@ export default function StockProyeccion() {
     [ordenesAprobadas, selSku]
   );
 
-  const proyeccion = useMemo(
-    () => calcularProyeccion(forecast, ordenes, stockReal, ssDias, aprobSku),
-    [forecast, ordenes, stockReal, ssDias, aprobSku]
-  );
+  const proyeccion = useMemo(() => {
+    const semActualLocal = getSemanaActual();
+    const rows = calcularProyeccion(forecast, ordenes, stockReal, ssDias, aprobSku);
+    // Post-proceso: calcular tienePendiente filtrando por SKU correcto
+    return rows.map(r => {
+      const tienePendiente = ordenes.some(o => {
+        if (o.sku !== selSku) return false;
+        const dsN = fmtD(o.semana_necesidad);
+        const dsE = fmtD(o.semana_emision);
+        const aprobada = aprobSku.find(a => fmtD(a.semana_necesidad) === dsN);
+        return dsN === r.ds && dsE <= semActualLocal && !aprobada;
+      });
+      return { ...r, tienePendiente };
+    });
+  }, [forecast, ordenes, stockReal, ssDias, aprobSku, selSku]);
 
   // n órdenes incluidas en proyección (aprobadas + futuras asumidas)
   const semActual = getSemanaActual();
@@ -467,7 +479,15 @@ export default function StockProyeccion() {
                         {negativo
                           ? <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:C.redLt,   color:"#791F1F" }}>Rotura</span>
                           : bajo
-                          ? <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:C.amberLt, color:"#854F0B" }}>Bajo SS</span>
+                          ? <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+                              <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:C.amberLt, color:"#854F0B" }}>Bajo SS</span>
+                              {r.tienePendiente && (
+                                <span style={{ fontSize:9, color:C.amber, whiteSpace:"nowrap" }}
+                                  title="Hay una orden pendiente de aprobación que cubriría este período">
+                                  ⚡ Aprobar orden
+                                </span>
+                              )}
+                            </div>
                           : <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:C.tealLt,  color:C.tealMid }}>OK</span>}
                       </td>
                     </tr>

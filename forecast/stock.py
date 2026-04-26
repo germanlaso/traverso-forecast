@@ -56,8 +56,8 @@ WHERE
     AND [CODIGO] <> ''
     AND [STOCK] IS NOT NULL
     AND [STOCK] <> ''
-    AND [FECHA DESCARGA INFO] = (
-        SELECT MAX([FECHA DESCARGA INFO])
+    AND TRY_CONVERT(date, [FECHA DESCARGA INFO], 105) = (
+        SELECT MAX(TRY_CONVERT(date, [FECHA DESCARGA INFO], 105))
         FROM dbo.Stock_Lote_Fecha
         WHERE [BODEGA] IN ('BSUR01', 'VESP01', 'VARA01')
     )
@@ -130,15 +130,18 @@ def load_stock_parquet() -> pd.DataFrame:
         logger.warning("[STOCK] Parquet no encontrado — stock_actual vacío. Ejecuta POST /stock/refresh")
         return pd.DataFrame(columns=["sku", "bodega", "lote", "fecha_vcto",
                                       "stock_unidades", "umed", "descripcion"])
-    return pd.read_csv(STOCK_PARQUET_PATH, parse_dates=["fecha_vcto", "fecha_descarga"])
+    return pd.read_csv(STOCK_PARQUET_PATH, dtype={"sku": str}, parse_dates=["fecha_vcto", "fecha_descarga"])
 
 
 def calcular_stock_disponible(
     df_raw: pd.DataFrame | None = None,
-    unidades_por_caja: dict[str, int] | None = None,
+    unidades_por_caja: dict[str, int] | None = None,  # ignorado — stock ya viene en cajas
 ) -> tuple[dict[str, float], list[dict]]:
     """
     Aplica lógica FEFO y reglas de vencimiento.
+
+    IMPORTANTE: Stock_Lote_Fecha reporta en CAJAS (UMED=CJ).
+    No se divide por unidades_por_caja.
 
     Reglas:
       - Lotes ya vencidos (fecha_vcto < hoy) → excluidos del disponible
@@ -157,48 +160,45 @@ def calcular_stock_disponible(
 
     hoy = date.today()
     limite_alerta = hoy + timedelta(days=DIAS_ALERTA_VENCIMIENTO)
-    upj = unidades_por_caja or {}
 
     alertas: list[dict] = []
     stock_disponible: dict[str, float] = {}
 
     for sku, grupo in df_raw.groupby("sku"):
-        u_caja = upj.get(sku, 1)
-        excluido_u = 0.0
-        disponible_u = 0.0
+        excluido_cj = 0.0
+        disponible_cj = 0.0
 
         for _, row in grupo.iterrows():
             vcto = row["fecha_vcto"]
-            unidades = float(row["stock_unidades"])
+            cajas = float(row["stock_unidades"])  # ya viene en cajas
             bodega = row["bodega"]
             lote = row["lote"]
 
             if pd.isna(vcto):
                 # Sin fecha de vencimiento → incluir normalmente
-                disponible_u += unidades
+                disponible_cj += cajas
                 continue
 
             vcto_date = vcto.date() if hasattr(vcto, "date") else vcto
 
             if vcto_date < hoy:
                 # VENCIDO → excluir
-                excluido_u += unidades
+                excluido_cj += cajas
                 alertas.append({
                     "sku": sku,
                     "tipo": "VENCIDO",
                     "lote": lote,
                     "bodega": bodega,
                     "fecha_vcto": str(vcto_date),
-                    "stock_unidades": unidades,
-                    "stock_cajas": round(unidades / u_caja, 2),
+                    "stock_cajas": round(cajas, 2),
                     "mensaje": (
                         f"Lote {lote} ({bodega}) vencido el {vcto_date} — "
-                        f"{unidades:.0f} u. ({unidades/u_caja:.1f} cj) excluidas del MRP"
+                        f"{cajas:.1f} cj excluidas del MRP"
                     ),
                 })
             elif vcto_date <= limite_alerta:
                 # PRÓXIMO A VENCER → incluir + alerta
-                disponible_u += unidades
+                disponible_cj += cajas
                 dias_restantes = (vcto_date - hoy).days
                 alertas.append({
                     "sku": sku,
@@ -207,18 +207,17 @@ def calcular_stock_disponible(
                     "bodega": bodega,
                     "fecha_vcto": str(vcto_date),
                     "dias_restantes": dias_restantes,
-                    "stock_unidades": unidades,
-                    "stock_cajas": round(unidades / u_caja, 2),
+                    "stock_cajas": round(cajas, 2),
                     "mensaje": (
                         f"Lote {lote} ({bodega}) vence en {dias_restantes} días "
-                        f"({vcto_date}) — {unidades:.0f} u. incluidas"
+                        f"({vcto_date}) — {cajas:.1f} cj incluidas"
                     ),
                 })
             else:
                 # Normal
-                disponible_u += unidades
+                disponible_cj += cajas
 
-        stock_disponible[sku] = disponible_u / u_caja  # convertir a cajas
+        stock_disponible[sku] = disponible_cj  # ya en cajas, sin conversión
 
     return stock_disponible, alertas
 

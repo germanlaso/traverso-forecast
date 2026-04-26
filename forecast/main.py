@@ -30,6 +30,13 @@ MRP_EXCEL_PATH = "/app/data/Traverso_Parametros_MRP.xlsx"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Traverso Forecast API iniciando...")
+    # Pre-cargar ventas desde SQL al iniciar — evita múltiples cargas simultáneas
+    try:
+        logger.info("Pre-cargando ventas desde SQL Server...")
+        _sales_cache["sql"] = load_sales()
+        logger.info(f"Ventas pre-cargadas: {len(_sales_cache['sql'])} registros")
+    except Exception as e:
+        logger.warning(f"No se pudo pre-cargar ventas: {e}")
     yield
 
 
@@ -98,18 +105,23 @@ class PlanRequest(BaseModel):
 # ── Cache en memoria ──────────────────────────────────────────────────────────
 
 _sales_cache: dict = {}
+_sales_lock = __import__('threading').Lock()
 
 
 def get_sales_df(use_csv: str | None = None):
     key = use_csv or "sql"
-    if key not in _sales_cache:
-        if use_csv:
-            logger.info(f"Cargando desde CSV: {use_csv}")
-            _sales_cache[key] = load_sales_from_csv(use_csv)
-        else:
-            logger.info("Cargando desde SQL Server (dbo.ventas)...")
-            _sales_cache[key] = load_sales()
-        logger.info(f"Cargados {len(_sales_cache[key])} registros")
+    if key in _sales_cache:
+        return _sales_cache[key]
+    with _sales_lock:
+        # Double-check dentro del lock
+        if key not in _sales_cache:
+            if use_csv:
+                logger.info(f"Cargando desde CSV: {use_csv}")
+                _sales_cache[key] = load_sales_from_csv(use_csv)
+            else:
+                logger.info("Cargando desde SQL Server (dbo.ventas)...")
+                _sales_cache[key] = load_sales()
+            logger.info(f"Cargados {len(_sales_cache[key])} registros")
     return _sales_cache[key]
 
 
