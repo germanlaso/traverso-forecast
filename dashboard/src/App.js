@@ -124,6 +124,44 @@ function SkuSearch({skus, value, onChange}) {
 
 // ── App principal ─────────────────────────────────────────────────────────────
 
+// ── Hook columnas redimensionables ───────────────────────────────────────────
+function useResizableColumns(initialWidths) {
+  const [widths, setWidths] = useState(initialWidths);
+  const dragRef = useRef({ active: false, index: 0, startX: 0, startW: 0 });
+
+  const onMouseDown = (index) => (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = { active: true, index, startX: e.clientX, startW: widths[index] };
+
+    const onMove = (ev) => {
+      if (!dragRef.current.active) return;
+      const { index: idx, startX, startW } = dragRef.current;
+      const newW = Math.max(40, startW + ev.clientX - startX);
+      setWidths(prev => {
+        const next = [...prev];
+        next[idx] = newW;
+        return next;
+      });
+    };
+
+    const onUp = () => {
+      dragRef.current.active = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  return { widths, onMouseDown };
+}
+
 export default function App() {
   const [skus, setSkus] = useState([]);
   const [selSku, setSelSku] = useState('');
@@ -140,6 +178,10 @@ export default function App() {
   const [plan, setPlan] = useState(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(13);
+  // Anchos iniciales columnas tabla plan (en px): N°Orden SKU Desc Tipo F.Entrada F.Lanzam Cajas Línea Alerta Acciones
+  const { widths: colWidths, onMouseDown: onColDrag } = useResizableColumns(
+    [120, 90, 180, 55, 90, 100, 70, 55, 160, 80]
+  );
   const [stockRefreshing, setStockRefreshing] = useState(false);
   const [ordenesAprobadas, setOrdenesAprobadas] = useState([]);  // {key, cantidad_real_cj, responsable, comentario, ts}
   const [modalOrden, setModalOrden] = useState(null);   // orden a aprobar
@@ -560,8 +602,19 @@ export default function App() {
                   <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
                     <thead>
                       <tr style={{background:C.grayLt}}>
-                        {['N° Orden','SKU','Descripción','Tipo','F. Entrada','F. Lanzamiento','Cajas (cj)','Línea','Alerta',''].map(h => (
-                          <th key={h} style={{padding:'6px 10px',textAlign:'left',color:C.textMuted,borderBottom:`0.5px solid ${C.border}`,fontWeight:600,fontSize:11}}>{h}</th>
+                        {['N° Orden','SKU','Descripción','Tipo','F. Entrada','F. Lanzamiento','Cajas (cj)','Línea','Alerta',''].map((h,hi) => (
+                          <th key={h} style={{padding:'6px 8px',textAlign:'left',color:C.textMuted,
+                    borderBottom:`0.5px solid ${C.border}`,fontWeight:600,fontSize:11,
+                    width:colWidths[hi],minWidth:40,position:'relative',
+                    userSelect:'none',whiteSpace:'nowrap',overflow:'hidden'}}>
+              {h}
+              <span onMouseDown={onColDrag(hi)}
+                style={{position:'absolute',right:-3,top:0,bottom:0,width:8,
+                        cursor:'col-resize',zIndex:10,
+                        background:'transparent',
+                        borderRight:`2.5px solid ${C.teal}`}}
+                onMouseEnter={e=>e.target.style.borderRightColor=C.teal}/>
+            </th>
                         ))}
                       </tr>
                     </thead>
@@ -592,7 +645,7 @@ export default function App() {
                               )}
                             </td>
                             <td style={{padding:'5px 10px',fontWeight:700,color:C.teal}}>{o.sku}</td>
-                            <td style={{padding:'5px 10px',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.descripcion}</td>
+                            <td style={{padding:'5px 10px',wordBreak:'break-word',whiteSpace:'normal',lineHeight:1.3}}>{o.descripcion}</td>
                             <td style={{padding:'5px 10px'}}><span style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:4,background:tc.bg,color:tc.color}}>{o.tipo==='PRODUCCION'?'PROD':o.tipo==='IMPORTACION'?'IMP':'MAQ'}</span></td>
                             <td style={{padding:'5px 10px',color:C.textMuted}}>{o.semana_necesidad}</td>
                             <td style={{padding:'5px 10px',fontWeight:o.tiene_alerta?700:400,color:o.tiene_alerta?C.danger:C.text}}>{o.tiene_alerta?'🔴 ':''}{o.semana_emision}</td>
@@ -602,7 +655,7 @@ export default function App() {
                               {modificada && <span style={{fontSize:9,color:C.amber,marginLeft:4}}>⚡</span>}
                             </td>
                             <td style={{padding:'5px 10px',color:C.textMuted}}>{o.linea||'—'}</td>
-                            <td style={{padding:'5px 10px',fontSize:11,color:C.danger,maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{o.alerta||''}</td>
+                            <td style={{padding:'5px 10px',fontSize:11,color:C.danger,wordBreak:'break-word',whiteSpace:'normal',lineHeight:1.3}}>{o.alerta||''}</td>
                             <td style={{padding:'5px 10px'}}>
                               {aprobada ? (
                                 <div style={{display:'flex',alignItems:'center',gap:6}}>
