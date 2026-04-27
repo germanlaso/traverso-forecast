@@ -147,10 +147,10 @@ function KPI({ label, value, sub, color }) {
 }
 
 // ── Componente principal ───────────────────────────────────────────────────────
-export default function StockProyeccion() {
+export default function StockProyeccion({ initialSku = '' }) {
   const [skuList,    setSkuList]    = useState([]);
   const [params,     setParams]     = useState(PARAMS_FALLBACK);
-  const [selSku,     setSelSku]     = useState("121010290");
+  const [selSku,     setSelSku]     = useState(initialSku || "121010290");
   const [horizonte,  setHorizonte]  = useState(13);
   const [forecast,   setForecast]   = useState([]);
   const [ordenes,    setOrdenes]    = useState([]);
@@ -159,6 +159,8 @@ export default function StockProyeccion() {
   const [loading,    setLoading]    = useState(false);
   const [ordenesAprobadas, setOrdenesAprobadas] = useState([]);
   const [error,      setError]      = useState("");
+
+
 
   // Cargar lista de SKUs y params al montar
   useEffect(() => {
@@ -182,7 +184,12 @@ export default function StockProyeccion() {
             };
           });
           setParams(map);
-          setSkuList(p.skus.map((sk) => ({ sku: sk.sku, desc: sk.descripcion, tipo: sk.tipo })));
+          const lista = p.skus.map((sk) => ({ sku: sk.sku, desc: sk.descripcion, tipo: sk.tipo }));
+          setSkuList(lista);
+          // Si hay un initialSku válido en la lista, asegurarlo como seleccionado
+          if (initialSku && lista.some(sk => sk.sku === initialSku)) {
+            setSelSku(initialSku);
+          }
         }
         if (s.disponible) setStockInfo(s);
       })

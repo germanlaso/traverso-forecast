@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ComposedChart, Line, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import axios from 'axios';
 import StockProyeccion from './components/StockProyeccion';
+import DetalleProduccion from './components/DetalleProduccion';
 
 const API = '';
 
@@ -175,6 +176,14 @@ export default function App() {
   const [canal, setCanal] = useState('');
   const [canales, setCanales] = useState([]);
   const [activeTab, setActiveTab] = useState('forecast');
+  const [stockSku, setStockSku] = useState('');  // SKU pre-seleccionado en tab stock
+  const [stockNav,  setStockNav]  = useState(0);   // contador para forzar navegación
+
+  const irAStock = (sku) => {
+    setStockSku(sku);
+    setStockNav(n => n + 1);   // fuerza re-render aunque el SKU sea el mismo
+    setActiveTab('stock');
+  };
   const [plan, setPlan] = useState(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(13);
@@ -381,7 +390,7 @@ export default function App() {
 
       {/* Tabs */}
       <div style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
-        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU']].map(([tab,label]) => (
+        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU'],['detalle','🔧 Detalle Producción']].map(([tab,label]) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:500,background:'transparent',color:activeTab===tab?C.teal:C.textMuted,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
             {label}
@@ -644,7 +653,15 @@ export default function App() {
                                 </span>
                               )}
                             </td>
-                            <td style={{padding:'5px 10px',fontWeight:700,color:C.teal}}>{o.sku}</td>
+                            <td style={{padding:'5px 10px'}}>
+                              <button onClick={() => irAStock(o.sku)}
+                                title={`Ver proyección de stock para ${o.sku}`}
+                                style={{fontSize:12,fontWeight:700,color:C.teal,background:'none',
+                                        border:'none',cursor:'pointer',padding:0,
+                                        textDecoration:'underline',textDecorationStyle:'dotted'}}>
+                                {o.sku}
+                              </button>
+                            </td>
                             <td style={{padding:'5px 10px',wordBreak:'break-word',whiteSpace:'normal',lineHeight:1.3}}>{o.descripcion}</td>
                             <td style={{padding:'5px 10px'}}><span style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:4,background:tc.bg,color:tc.color}}>{o.tipo==='PRODUCCION'?'PROD':o.tipo==='IMPORTACION'?'IMP':'MAQ'}</span></td>
                             <td style={{padding:'5px 10px',color:C.textMuted}}>{o.semana_necesidad}</td>
@@ -801,7 +818,8 @@ export default function App() {
         )}
 
         {/* ══ STOCK PROYECCIÓN TAB ══ */}
-        {activeTab === 'stock' && <StockProyeccion />}
+        {activeTab === 'stock' && <StockProyeccion key={`stock-${stockSku}-${stockNav}`} initialSku={stockSku} />}
+        {activeTab === 'detalle' && <DetalleProduccion onAprobar={(o) => { abrirModal(o); setActiveTab('plan'); }} />}
       </div>
     </div>
   );
