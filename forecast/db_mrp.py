@@ -276,3 +276,150 @@ def historial_aprobaciones_db(numero_of: str) -> list[dict]:
             ORDER BY version DESC
         """), {"nof": numero_of}).fetchall()
         return [dict(r._mapping) for r in result]
+
+
+# ── Parámetros MRP en PostgreSQL ──────────────────────────────────────────────
+
+def crear_tablas_params():
+    """Crea las tablas de parámetros MRP si no existen."""
+    with get_session() as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS mrp_lineas (
+                codigo          VARCHAR(20) PRIMARY KEY,
+                nombre          VARCHAR(100),
+                area            VARCHAR(100),
+                turnos_dia      INTEGER     DEFAULT 1,
+                horas_turno     FLOAT       DEFAULT 8,
+                dias_semana     INTEGER     DEFAULT 5,
+                velocidad_u_hr  FLOAT       DEFAULT 0,
+                activa          BOOLEAN     DEFAULT TRUE,
+                updated_at      TIMESTAMP   DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS mrp_sku_params (
+                sku             VARCHAR(30) PRIMARY KEY,
+                descripcion     VARCHAR(200),
+                categoria       VARCHAR(100),
+                tipo            VARCHAR(30),
+                u_por_caja      INTEGER     DEFAULT 1,
+                lead_time_sem   FLOAT       DEFAULT 1,
+                ss_dias         INTEGER     DEFAULT 15,
+                batch_min_u     INTEGER     DEFAULT 0,
+                batch_mult_u    INTEGER     DEFAULT 1,
+                cap_bodega_u    INTEGER     DEFAULT 999999,
+                t_cambio_hrs    FLOAT       DEFAULT 0,
+                linea_preferida VARCHAR(20) DEFAULT '',
+                activo          BOOLEAN     DEFAULT TRUE,
+                updated_at      TIMESTAMP   DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS mrp_sku_lineas (
+                id              SERIAL PRIMARY KEY,
+                sku             VARCHAR(30),
+                linea           VARCHAR(20),
+                preferida       BOOLEAN     DEFAULT FALSE,
+                UNIQUE(sku, linea)
+            );
+        """))
+        session.commit()
+
+
+def upsert_linea(linea: dict):
+    """Inserta o actualiza una línea de producción."""
+    with get_session() as session:
+        session.execute(text("""
+            INSERT INTO mrp_lineas
+                (codigo, nombre, area, turnos_dia, horas_turno, dias_semana, velocidad_u_hr, activa, updated_at)
+            VALUES
+                (:codigo, :nombre, :area, :turnos_dia, :horas_turno, :dias_semana, :velocidad_u_hr, :activa, NOW())
+            ON CONFLICT (codigo) DO UPDATE SET
+                nombre         = EXCLUDED.nombre,
+                area           = EXCLUDED.area,
+                turnos_dia     = EXCLUDED.turnos_dia,
+                horas_turno    = EXCLUDED.horas_turno,
+                dias_semana    = EXCLUDED.dias_semana,
+                velocidad_u_hr = EXCLUDED.velocidad_u_hr,
+                activa         = EXCLUDED.activa,
+                updated_at     = NOW()
+        """), linea)
+        session.commit()
+
+
+def upsert_sku_params(p: dict):
+    """Inserta o actualiza parámetros de un SKU."""
+    with get_session() as session:
+        session.execute(text("""
+            INSERT INTO mrp_sku_params
+                (sku, descripcion, categoria, tipo, u_por_caja, lead_time_sem, ss_dias,
+                 batch_min_u, batch_mult_u, cap_bodega_u, t_cambio_hrs, linea_preferida, activo, updated_at)
+            VALUES
+                (:sku, :descripcion, :categoria, :tipo, :u_por_caja, :lead_time_sem, :ss_dias,
+                 :batch_min_u, :batch_mult_u, :cap_bodega_u, :t_cambio_hrs, :linea_preferida, :activo, NOW())
+            ON CONFLICT (sku) DO UPDATE SET
+                descripcion     = EXCLUDED.descripcion,
+                categoria       = EXCLUDED.categoria,
+                tipo            = EXCLUDED.tipo,
+                u_por_caja      = EXCLUDED.u_por_caja,
+                lead_time_sem   = EXCLUDED.lead_time_sem,
+                ss_dias         = EXCLUDED.ss_dias,
+                batch_min_u     = EXCLUDED.batch_min_u,
+                batch_mult_u    = EXCLUDED.batch_mult_u,
+                cap_bodega_u    = EXCLUDED.cap_bodega_u,
+                t_cambio_hrs    = EXCLUDED.t_cambio_hrs,
+                linea_preferida = EXCLUDED.linea_preferida,
+                activo          = EXCLUDED.activo,
+                updated_at      = NOW()
+        """), p)
+        session.commit()
+
+
+def get_all_lineas() -> list[dict]:
+    """Retorna todas las líneas activas desde PostgreSQL."""
+    with get_session() as session:
+        rows = session.execute(text(
+            "SELECT * FROM mrp_lineas WHERE activa = TRUE ORDER BY codigo"
+        )).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
+def get_all_sku_params() -> list[dict]:
+    """Retorna todos los parámetros de SKU activos desde PostgreSQL."""
+    with get_session() as session:
+        rows = session.execute(text(
+            "SELECT * FROM mrp_sku_params WHERE activo = TRUE ORDER BY sku"
+        )).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
+def update_sku_param(sku: str, campos: dict) -> dict:
+    """Actualiza campos específicos de un SKU."""
+    allowed = {"lead_time_sem","ss_dias","batch_min_u","batch_mult_u",
+               "cap_bodega_u","t_cambio_hrs","linea_preferida","activo"}
+    updates = {k: v for k, v in campos.items() if k in allowed}
+    if not updates:
+        return {}
+    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+    updates["sku"] = sku
+    updates["updated_at"] = "NOW()"
+    with get_session() as session:
+        session.execute(text(
+            f"UPDATE mrp_sku_params SET {set_clause}, updated_at = NOW() WHERE sku = :sku"
+        ), updates)
+        session.commit()
+    return updates
+
+
+def update_linea(codigo: str, campos: dict) -> dict:
+    """Actualiza campos específicos de una línea."""
+    allowed = {"nombre","turnos_dia","horas_turno","dias_semana","velocidad_u_hr","activa"}
+    updates = {k: v for k, v in campos.items() if k in allowed}
+    if not updates:
+        return {}
+    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+    updates["codigo"] = codigo
+    with get_session() as session:
+        session.execute(text(
+            f"UPDATE mrp_lineas SET {set_clause}, updated_at = NOW() WHERE codigo = :codigo"
+        ), updates)
+        session.commit()
+    return updates

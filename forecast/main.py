@@ -15,12 +15,14 @@ from db import (test_connection, load_sales, load_sales_from_csv,
                 get_sku_list, get_dimension_summary)
 from forecaster import (run_sku_pipeline, list_trained_models,
                         prepare_prophet_df, evaluate_model, make_key)
-from mrp import (load_params_from_excel, generar_plan_completo,
+from mrp import (load_params_from_excel, load_params_from_db, generar_plan_completo,
                  resumen_semanal, resumen_por_linea)
 from stock import (fetch_and_save_stock, load_stock_parquet,
                    calcular_stock_disponible, stock_summary)
 from ordenes import router as ordenes_router
-from db_mrp import numero_of_tentativo, get_orden_by_key
+from db_mrp import (numero_of_tentativo, get_orden_by_key,
+                    crear_tablas_params, get_all_lineas, get_all_sku_params,
+                    update_sku_param, update_linea)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,6 +33,12 @@ MRP_EXCEL_PATH = "/app/data/Traverso_Parametros_MRP.xlsx"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Traverso Forecast API iniciando...")
+    # Crear tablas de parámetros MRP en PostgreSQL
+    try:
+        crear_tablas_params()
+        logger.info("Tablas de parámetros MRP verificadas/creadas")
+    except Exception as _e_tbls:
+        logger.warning(f"No se pudieron crear tablas de parámetros: {_e_tbls}")
     # Pre-cargar ventas desde SQL al iniciar — evita múltiples cargas simultáneas
     try:
         logger.info("Pre-cargando ventas desde SQL Server...")
@@ -357,7 +365,14 @@ def generar_plan(req: PlanRequest = None):
         importlib.reload(_mrp)
 
         # Parámetros MRP
-        sku_params, lineas, sku_lineas = _mrp.load_params_from_excel(MRP_EXCEL_PATH)
+        # Cargar parámetros desde PostgreSQL (fallback a Excel si BD vacía)
+        try:
+            sku_params, lineas, sku_lineas = _mrp.load_params_from_db()
+            if not sku_params:
+                raise ValueError("BD de parámetros vacía")
+        except Exception as _e_params:
+            logger.warning(f"Fallback a Excel para parámetros: {_e_params}")
+            sku_params, lineas, sku_lineas = _mrp.load_params_from_excel(MRP_EXCEL_PATH)
 
         if req.skus:
             sku_params = {k: v for k, v in sku_params.items() if k in req.skus}
@@ -404,7 +419,30 @@ def generar_plan(req: PlanRequest = None):
                 detail="No hay forecasts disponibles para los SKUs solicitados",
             )
 
-        # Plan
+        # Cargar órdenes aprobadas para recálculo con realidad
+        from db_mrp import listar_aprobadas_db
+        aprobadas_db = listar_aprobadas_db()
+        # Convertir a dict {sku → [{fecha_entrada_real, cantidad_real_cj}]}
+        from datetime import date as _hoy_date
+        hoy_str = _hoy_date.today().isoformat()
+        entradas_fijas = {}
+        for ap in aprobadas_db:
+            sku_ap = str(ap.get("sku",""))
+            fer = str(ap.get("fecha_entrada_real") or ap.get("semana_necesidad",""))[:10]
+            cj  = float(ap.get("cantidad_real_cj") or 0)
+            # Solo inyectar entradas futuras — las pasadas ya están en el stock real de SQL
+            if sku_ap and fer and cj > 0 and fer > hoy_str:
+                if sku_ap not in entradas_fijas:
+                    entradas_fijas[sku_ap] = []
+                entradas_fijas[sku_ap].append({
+                    "fecha_entrada": fer,
+                    "semana_necesidad": str(ap.get("semana_necesidad",""))[:10],
+                    "cantidad_cajas": cj,
+                    "numero_of": ap.get("numero_of",""),
+                    "aprobada": True,
+                })
+
+        # Plan — con entradas fijas de órdenes aprobadas
         ordenes = _mrp.generar_plan_completo(
             sku_params=sku_params,
             forecasts=forecasts,
@@ -412,6 +450,7 @@ def generar_plan(req: PlanRequest = None):
             lineas=lineas,
             horizonte_semanas=req.horizonte_semanas,
             alertas_stock=alertas_vcto,
+            entradas_fijas=entradas_fijas,
         )
 
         # Asignar número OF a cada orden (tentativo para sugeridas, definitivo para aprobadas)
@@ -471,9 +510,16 @@ def generar_plan(req: PlanRequest = None):
 
 @app.get("/plan/params", tags=["Plan de Produccion"])
 def get_mrp_params():
-    """Lista los SKUs con parámetros MRP cargados desde el Excel."""
+    """Lista los SKUs con parámetros MRP cargados desde PostgreSQL (fallback Excel)."""
+    import importlib, mrp as _mrp_params
     try:
-        sku_params, lineas, sku_lineas = load_params_from_excel(MRP_EXCEL_PATH)
+        try:
+            sku_params, lineas, _ = _mrp_params.load_params_from_db()
+            if not sku_params:
+                raise ValueError("BD vacía")
+        except Exception as _e2:
+            logger.warning(f"Fallback Excel /plan/params: {_e2}")
+            sku_params, lineas, _ = _mrp_params.load_params_from_excel(MRP_EXCEL_PATH)
         return {
             "n_skus": len(sku_params),
             "n_lineas": len(lineas),
@@ -485,6 +531,10 @@ def get_mrp_params():
                     "lead_time_sem": p.lead_time_semanas,
                     "ss_dias": p.stock_seguridad_dias,
                     "batch_min_u": p.batch_minimo,
+                    "batch_mult_u": p.multiplo_batch,
+                    "cap_bodega_u": p.cap_bodega,
+                    "t_cambio_hrs": getattr(p, 't_cambio_hrs', 0),
+                    "pct_dia_max": getattr(p, 'pct_dia_max', 1.0),
                     "u_por_caja": p.unidades_por_caja,
                     "linea_preferida": p.linea_preferida,
                 }
@@ -509,6 +559,60 @@ def get_mrp_params():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+# ── Endpoints: Parámetros MRP (CRUD desde BD) ────────────────────────────────
+
+@app.get("/params/lineas")
+def get_lineas():
+    """Lista todas las líneas de producción desde PostgreSQL."""
+    try:
+        return get_all_lineas()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/params/lineas/{codigo}")
+def put_linea(codigo: str, campos: dict):
+    """Actualiza parámetros de una línea de producción."""
+    try:
+        return update_linea(codigo, campos)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/params/skus")
+def get_sku_params_endpoint():
+    """Lista todos los parámetros de SKU desde PostgreSQL."""
+    try:
+        return get_all_sku_params()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/params/skus/{sku}")
+def put_sku_params(sku: str, campos: dict):
+    """Actualiza parámetros de un SKU específico."""
+    try:
+        return update_sku_param(sku, campos)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/params/importar-excel")
+def importar_excel_a_bd():
+    """Re-importa parámetros desde el Excel a PostgreSQL (sobrescribe la BD)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["python3", "/app/migrate_params.py", MRP_EXCEL_PATH],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=result.stderr)
+        return {"ok": True, "output": result.stdout[-500:]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Endpoints: Órdenes aprobadas ──────────────────────────────────────────────

@@ -42,6 +42,14 @@ const fmtN  = (n) => Math.round(n ?? 0).toLocaleString("es-CL");
 const fmtD  = (ds) => ds?.slice(0, 10) ?? "";
 const fmtDs = (ds) => ds?.slice(5, 10) ?? "";   // MM-DD para eje X
 
+// Normaliza una fecha al domingo de su semana (inicio de semana dom→sáb)
+function getSemana(fecha) {
+  if (!fecha) return fecha;
+  const d = new Date(fecha + "T12:00:00");
+  d.setDate(d.getDate() - d.getDay()); // retroceder al domingo
+  return d.toISOString().slice(0, 10);
+}
+
 function getSemanaActual() {
   const hoy = new Date();
   const lunes = new Date(hoy);
@@ -52,11 +60,14 @@ function getSemanaActual() {
 function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenesAprobadas = []) {
   const semanaActual = getSemanaActual();
 
-  // Mapa de aprobadas por sku+semana_necesidad para lookup rápido
+  // Mapa de aprobadas — dos índices para lookup flexible
   const aprobMap = {};
   ordenesAprobadas.forEach(a => {
-    const k = `${a.sku}__${fmtD(a.semana_necesidad)}`;
-    aprobMap[k] = a;
+    // Índice 1: sku+semana_necesidad (para buscar por orden del plan)
+    const k1 = `${a.sku}__${fmtD(a.semana_necesidad)}`;
+    aprobMap[k1] = a;
+    // Índice 2: key completa sku+semana_necesidad+semana_emision
+    if (a.key) aprobMap[a.key] = a;
   });
 
   // Construir entradas por semana aplicando la regla:
@@ -73,13 +84,14 @@ function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenes
     let dsEntrada = dsNecesidad; // por defecto entrada en semana_necesidad
 
     if (aprobada) {
-      // Siempre usar cantidad real aprobada
-      // Si tiene fecha_entrada_real ajustada, usarla
+      // Usar cantidad y fecha reales de la aprobación
       cantidad  = aprobada.cantidad_real_cj;
-      dsEntrada = fmtD(aprobada.fecha_entrada_real ?? aprobada.semana_necesidad);
+      // Normalizar fecha_entrada_real al domingo de su semana (para que coincida con f.ds)
+      const fer = fmtD(aprobada.fecha_entrada_real ?? aprobada.semana_necesidad);
+      dsEntrada = getSemana(fer) || dsNecesidad;
       fuente    = "aprobada";
     } else if (dsEmision > semanaActual) {
-      // Lanzamiento futuro → asumir como aprobada con cantidad MRP
+      // Lanzamiento futuro → asumir con cantidad MRP
       cantidad = o.cantidad_cajas ?? 0;
       fuente   = "asumida";
     }
@@ -87,7 +99,7 @@ function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenes
 
     if (cantidad > 0) {
       if (!entradasPorSemana[dsEntrada]) entradasPorSemana[dsEntrada] = [];
-      entradasPorSemana[dsEntrada].push({ cantidad, tipo: o.tipo, fuente });
+      entradasPorSemana[dsEntrada].push({ cantidad, tipo: o.tipo, fuente, orden: o, aprobada: aprobada || null, dsNecesidadMRP: dsNecesidad });
     }
   });
 
@@ -98,6 +110,18 @@ function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenes
     const entradas = ents.reduce((s, e) => s + e.cantidad, 0);
     const tipo    = ents[0]?.tipo ?? "";
     const fuente  = ents[0]?.fuente ?? "";
+    const ent0    = ents[0];
+    // numero_of: usar el de la orden del plan (ya viene correcto desde el backend)
+    const numero_of     = ent0?.orden?.numero_of ?? ent0?.aprobada?.numero_of ?? null;
+    // fecha_entrada_real: usar la real de PostgreSQL si existe, sino la semana_necesidad del plan
+    const _apFER = ent0?.aprobada?.fecha_entrada_real;
+    const _ordSN  = ent0?.dsNecesidadMRP ?? fmtD(ent0?.orden?.semana_necesidad);
+    const fechaEntReal  = fmtD(_apFER) || _ordSN;
+    const fechaEntMRP   = ent0?.dsNecesidadMRP ?? null;
+    // Solo mostrar indicador si la fecha real difiere del MRP Y la orden está aprobada
+    const fechaDifiere  = !!(ent0?.aprobada && fechaEntReal && fechaEntMRP && fechaEntReal !== fechaEntMRP);
+    // Fecha entrada real vs MRP para indicador en tabla
+
     const ss      = Math.round((f.yhat / 7) * ssDias);
     const stockIni = Math.round(stock);
     stock         = Math.max(0, stock + entradas - f.yhat);
@@ -105,7 +129,11 @@ function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenes
     return {
       ds, stockIni, entradas: Math.round(entradas), tipo, fuente,
       ventas: Math.round(f.yhat), stockFin, ss,
-      tienePendiente: false,  // se calcula fuera con el SKU correcto
+      tienePendiente: false,
+      numero_of,
+      fechaEntReal,
+      fechaEntMRP,
+      fechaDifiere,
       yhat_lower: Math.round(f.yhat_lower ?? f.yhat * 0.8),
       yhat_upper: Math.round(f.yhat_upper ?? f.yhat * 1.2),
     };
@@ -150,6 +178,7 @@ function KPI({ label, value, sub, color }) {
 export default function StockProyeccion({ initialSku = '' }) {
   const [skuList,    setSkuList]    = useState([]);
   const [params,     setParams]     = useState(PARAMS_FALLBACK);
+
   const [selSku,     setSelSku]     = useState(initialSku || "121010290");
   const [horizonte,  setHorizonte]  = useState(13);
   const [forecast,   setForecast]   = useState([]);
@@ -184,7 +213,8 @@ export default function StockProyeccion({ initialSku = '' }) {
             };
           });
           setParams(map);
-          const lista = p.skus.map((sk) => ({ sku: sk.sku, desc: sk.descripcion, tipo: sk.tipo }));
+    
+      const lista = p.skus.map((sk) => ({ sku: sk.sku, desc: sk.descripcion, tipo: sk.tipo }));
           setSkuList(lista);
           // Si hay un initialSku válido en la lista, asegurarlo como seleccionado
           if (initialSku && lista.some(sk => sk.sku === initialSku)) {
@@ -438,8 +468,8 @@ export default function StockProyeccion({ initialSku = '' }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr>
-                  {["Semana", "Stock ini. (cj)", "Entradas (cj)", "Tipo", "Ventas FC (cj)",
-                    "Stock fin. (cj)", "SS (cj)", "Cobertura", "Estado"].map((h, i) => (
+                  {["Semana", "Stock ini.", "N° OF", "F. Entrada", "Entradas (cj)", "Tipo",
+                    "Ventas FC (cj)", "Stock fin.", "SS (cj)", "Cobertura", "Estado"].map((h, i) => (
                     <th key={h} style={{ ...s.th, textAlign: i === 0 ? "left" : "right" }}>{h}</th>
                   ))}
                 </tr>
@@ -453,49 +483,74 @@ export default function StockProyeccion({ initialSku = '' }) {
                   return (
                     <tr key={i} style={{ background: negativo ? "#FFF0F0" : bajo ? "#FFFBF0" : i % 2 === 0 ? "#fff" : C.grayLt }}>
                       <td style={{ ...s.td, color: C.textMuted, textAlign: "left" }}>{r.ds}</td>
-                      <td style={{ ...s.td, textAlign: "right" }}>{fmtN(r.stockIni)}</td>
-                      <td style={{ ...s.td, textAlign: "right", color: r.entradas > 0 ? (r.aprobada ? C.tealMid : C.amber) : C.textMuted, fontWeight: r.entradas > 0 ? 700 : 400 }}>
+                      {/* Stock ini */}
+                      <td style={{ ...s.td, textAlign:'right', fontWeight:700 }}>
+                        {fmtN(r.stockIni)}
+                      </td>
+                      {/* N° OF */}
+                      <td style={{ ...s.td, fontSize:10,
+                        color: r.numero_of?.startsWith('OFT') ? C.amber : r.numero_of ? C.tealMid : C.textMuted,
+                        fontWeight:600, whiteSpace:'nowrap' }}>
+                        {r.numero_of ?? '—'}
+                      </td>
+                      {/* F. Entrada real */}
+                      <td style={{ ...s.td, whiteSpace:'nowrap' }}>
                         {r.entradas > 0 ? (
-                          <span title={r.aprobada ? `Aprobada por ${r.responsable}` : "Sugerida por MRP — pendiente de aprobación"}>
-                            {r.aprobada ? "✓ " : "~ "}{`+${fmtN(r.entradas)}`}
+                          <span
+                            style={{ color: r.fechaDifiere ? C.amber : C.text, fontWeight: r.fechaDifiere ? 700 : 400 }}
+                            title={r.fechaDifiere ? `MRP sugería: ${r.fechaEntMRP}` : (r.fechaEntReal ?? '')}>
+                            {r.fechaDifiere && '📅 '}
+                            {r.fechaEntReal ?? '—'}
                           </span>
-                        ) : "—"}
+                        ) : '—'}
                       </td>
-                      <td style={{ ...s.td, textAlign: "right" }}>
-                        {tc ? (
-                          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
-                            <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px",
-                              borderRadius: 4, background: tc.bg, color: tc.color }}>{r.tipo.slice(0,4)}</span>
-                            {r.fuente === "aprobada" && <span style={{fontSize:9,color:C.tealMid}}>✓ aprobada</span>}
-                            {r.fuente === "asumida"  && <span style={{fontSize:9,color:C.amber}}>asumida</span>}
-                          </div>
-                        ) : "—"}
+                      {/* Entradas cj */}
+                      <td style={{ ...s.td, textAlign:'right', color: r.entradas > 0 ? (r.fuente==='aprobada' ? C.tealMid : C.amber) : C.textMuted, fontWeight: r.entradas > 0 ? 700 : 400 }}>
+                        {r.entradas > 0 ? (
+                          <>
+                            <span>{r.fuente==='aprobada' ? '✓' : '~'} +{r.entradas.toLocaleString('es-CL')}</span>
+                            <div style={{fontSize:9,color:r.fuente==='aprobada'?C.teal:C.amber}}>
+                              {r.fuente==='aprobada' ? '✓ aprobada' : 'asumida'}
+                            </div>
+                          </>
+                        ) : '—'}
                       </td>
-                      <td style={{ ...s.td, textAlign: "right", color: C.red }}>
-                        -{fmtN(r.ventas)}
+                      {/* Tipo */}
+                      <td style={{ ...s.td, textAlign:'center' }}>
+                        {r.tipo ? (
+                          <span style={{fontSize:9,padding:'1px 5px',borderRadius:3,
+                            background:r.tipo==='PRODUCCION'?C.tealLt:r.tipo==='IMPORTACION'?'#EEF':C.amberLt,
+                            color:r.tipo==='PRODUCCION'?C.teal:r.tipo==='IMPORTACION'?'#534AB7':C.amber}}>
+                            {r.tipo==='PRODUCCION'?'PROD':r.tipo==='IMPORTACION'?'IMP':'MAQ'}
+                          </span>
+                        ) : '—'}
                       </td>
-                      <td style={{ ...s.td, textAlign: "right", fontWeight: 700,
-                        color: negativo ? C.red : bajo ? C.amber : C.text }}>
+                      {/* Ventas FC */}
+                      <td style={{ ...s.td, textAlign:'right', color:C.red }}>
+                        {(-r.ventas).toLocaleString('es-CL')}
+                      </td>
+                      {/* Stock fin */}
+                      <td style={{ ...s.td, textAlign:'right', fontWeight:700,
+                        color: r.stockFin < 0 ? C.red : r.stockFin < r.ss ? C.amber : C.text }}>
                         {fmtN(r.stockFin)}
                       </td>
-                      <td style={{ ...s.td, textAlign: "right", color: C.amber }}>{fmtN(r.ss)}</td>
-                      <td style={{ ...s.td, textAlign: "right", color: cobDias < ssDias ? C.red : C.textMuted }}>
-                        {cobDias >= 999 ? "—" : `${cobDias}d`}
+                      {/* SS */}
+                      <td style={{ ...s.td, textAlign:'right', color:C.textMuted }}>
+                        {fmtN(r.ss)}
                       </td>
-                      <td style={{ ...s.td, textAlign: "right" }}>
-                        {negativo
-                          ? <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:C.redLt,   color:"#791F1F" }}>Rotura</span>
-                          : bajo
-                          ? <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
-                              <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:C.amberLt, color:"#854F0B" }}>Bajo SS</span>
-                              {r.tienePendiente && (
-                                <span style={{ fontSize:9, color:C.amber, whiteSpace:"nowrap" }}
-                                  title="Hay una orden pendiente de aprobación que cubriría este período">
-                                  ⚡ Aprobar orden
-                                </span>
-                              )}
-                            </div>
-                          : <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:10, background:C.tealLt,  color:C.tealMid }}>OK</span>}
+                      {/* Cobertura */}
+                      <td style={{ ...s.td, textAlign:'right',
+                        color: r.stockFin < r.ss ? C.amber : C.textMuted }}>
+                        {r.stockFin > 0 && r.ventas > 0
+                          ? `${Math.round((r.stockFin/r.ventas)*7)}d` : '0d'}
+                      </td>
+                      {/* Estado */}
+                      <td style={{ ...s.td, textAlign:'center' }}>
+                        {r.stockFin < 0
+                          ? <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:10,background:C.redLt,color:'#791F1F'}}>Rotura</span>
+                          : r.stockFin < r.ss
+                          ? <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:10,background:C.amberLt,color:'#854F0B'}}>Bajo SS</span>
+                          : <span style={{fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:10,background:C.tealLt,color:C.tealMid}}>OK</span>}
                       </td>
                     </tr>
                   );

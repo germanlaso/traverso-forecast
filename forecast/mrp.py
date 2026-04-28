@@ -13,18 +13,20 @@ from typing import Optional
 @dataclass
 class SKUParams:
     sku: str
-    descripcion: str
-    categoria: str
-    tipo: str
-    unidades_por_caja: int
-    lead_time_semanas: float
-    stock_seguridad_dias: float
-    batch_minimo: int
-    multiplo_batch: int
-    cap_bodega: int
+    descripcion: str = ""
+    categoria: str = ""
+    tipo: str = "PRODUCCION"
+    unidades_por_caja: int = 1
+    lead_time_semanas: float = 1.0
+    stock_seguridad_dias: float = 15.0
+    batch_minimo: int = 0
+    multiplo_batch: int = 1
+    cap_bodega: int = 999999
     compra_minima: int = 0
     linea_preferida: str = ""
     activo: bool = True
+    t_cambio_hrs: float = 0.0
+    pct_dia_max: float = 1.0  # fracción máxima del día que puede usar este SKU (ej: 0.5 = medio turno)
 
 
 @dataclass
@@ -98,8 +100,56 @@ def _float(val, default=0.0):
         return float(val) if val else default
     except: return default
 
+def load_params_from_db():
+    """
+    Carga parámetros MRP desde PostgreSQL.
+    Retorna (sku_params, lineas, sku_lineas) — mismo formato que load_params_from_excel.
+    """
+    from db_mrp import get_all_lineas, get_all_sku_params
+
+    # ── Líneas ────────────────────────────────────────────────────────────────
+    lineas = {}
+    for row in get_all_lineas():
+        codigo = row["codigo"]
+        lineas[codigo] = LineaProduccion(
+            codigo         = codigo,
+            nombre         = row.get("nombre", ""),
+            turnos_dia     = int(row.get("turnos_dia", 1) or 1),
+            horas_turno    = float(row.get("horas_turno", 8) or 8),
+            dias_semana    = int(row.get("dias_semana", 5) or 5),
+            velocidad_u_hr = float(row.get("velocidad_u_hr", 0) or 0),
+        )
+
+    # ── SKU params ────────────────────────────────────────────────────────────
+    sku_params = {}
+    for row in get_all_sku_params():
+        sku = str(row["sku"])
+        linea_pref = row.get("linea_preferida", "") or ""
+        sku_params[sku] = SKUParams(
+            sku                 = sku,
+            descripcion         = row.get("descripcion", ""),
+            tipo                = row.get("tipo", "PRODUCCION"),
+            lead_time_semanas   = float(row.get("lead_time_sem", 1) or 1),
+            stock_seguridad_dias= int(row.get("ss_dias", 15) or 15),
+            batch_minimo        = int(row.get("batch_min_u", 0) or 0),
+            multiplo_batch      = int(row.get("batch_mult_u", 1) or 1),
+            cap_bodega          = int(row.get("cap_bodega_u", 999999) or 999999),
+            unidades_por_caja   = int(row.get("u_por_caja", 1) or 1),
+            linea_preferida     = linea_pref,
+            activo              = bool(row.get("activo", True)),
+            t_cambio_hrs        = float(row.get("t_cambio_hrs", 0) or 0),
+            pct_dia_max         = float(row.get("pct_dia_max", 1.0) or 1.0),
+        )
+        if linea_pref and linea_pref in lineas:
+            sku_params[sku].linea_preferida = linea_pref
+
+    sku_lineas = []
+    return sku_params, lineas, sku_lineas
+
+
 def load_params_from_excel(path: str):
-    xl = pd.ExcelFile(path)
+    # data_only=True → lee valores calculados de fórmulas, no las fórmulas en sí
+    xl = pd.ExcelFile(path, engine="openpyxl")
 
     # ── SKU_PARAMS ─────────────────────────────────────────────────────────────
     df = pd.read_excel(xl, sheet_name="SKU_PARAMS", header=2)
@@ -270,6 +320,59 @@ def calcular_fecha_emision(fecha_necesidad, lead_time_semanas):
     return fecha_necesidad - timedelta(days=round(lead_time_semanas * 7))
 
 
+def optimizar_of(cantidad_cajas, params, stock_proyectado, linea_obj, yhat_cajas):
+    """
+    Optimiza el tamaño de una OF:
+    1. Cantidad base = nec_neta redondeada a batch_min/multiplo
+    2. Intentar aumentar para completar días enteros (mayor eficiencia)
+       SOLO si el stock resultante no supera cap_bodega
+       Y el stock no excede más de 4 semanas de demanda
+    3. pct_dia_max: fracción del día disponible para este SKU
+    4. Si supera cap_dia_sku → partir en múltiples OFs de 1 día cada una
+
+    t_cambio_hrs se usa en DetalleProduccion para capacidad efectiva
+    cuando hay múltiples SKUs en el mismo día, no aquí.
+    """
+    import math as _math
+    upj   = params.unidades_por_caja
+    mult  = params.multiplo_batch or 1
+    b_min = params.batch_minimo or mult
+    pct   = max(0.1, min(1.0, getattr(params, 'pct_dia_max', 1.0) or 1.0))
+    cap_bodega_u = params.cap_bodega
+    stock_u = stock_proyectado * upj
+
+    # Capacidad del día para este SKU
+    cap_dia_sku = ((linea_obj.capacidad_u_semana / 5) * pct) if linea_obj else float('inf')
+
+    # Paso 1: cantidad base redondeada
+    base_u = max(cantidad_cajas * upj, b_min)
+    base_u = _math.ceil(base_u / mult) * mult
+
+    # Paso 2: techo de bodega
+    stock_residual_u = stock_u - yhat_cajas * upj
+    max_of_u = max(b_min, cap_bodega_u - stock_residual_u)
+    base_u = min(base_u, max_of_u)
+
+    # Paso 3: intentar aumentar para completar días enteros sin superar cap_bodega
+    if linea_obj and cap_dia_sku < float('inf') and max_of_u > base_u:
+        n_dias_max = _math.floor(max_of_u / cap_dia_sku)
+        if n_dias_max >= 1:
+            target_u = _math.floor((n_dias_max * cap_dia_sku) / mult) * mult
+            target_u = min(max(target_u, base_u), max_of_u)
+            if target_u > base_u:
+                base_u = target_u
+
+    base_u = max(base_u, b_min)
+
+    # Paso 4: si supera cap_dia_sku → partir en múltiples OFs de 1 día
+    if linea_obj and cap_dia_sku < float('inf') and base_u > cap_dia_sku:
+        n_ofs  = _math.ceil(base_u / cap_dia_sku)
+        u_por_of = max(_math.floor(cap_dia_sku / mult) * mult, b_min)
+        return int(u_por_of), int(n_ofs)
+
+    return int(max(base_u, b_min)), 1
+
+
 def generar_plan_sku(
     params,
     forecast,
@@ -277,35 +380,82 @@ def generar_plan_sku(
     ordenes_transito_cajas=0,
     lineas=None,
     horizonte_semanas=13,
+    entradas_fijas=None,
 ):
+    """
+    MRP clásico con soporte de entradas_fijas (OFs aprobadas).
+    Las entradas fijas se suman al stock en su fecha_entrada_real.
+    El MRP genera OFTs para las semanas donde el stock proyectado cae bajo SS,
+    SIN duplicar órdenes para semanas que ya tienen una OF aprobada llegando.
+    """
     if lineas is None:
         lineas = {}
+    if entradas_fijas is None:
+        entradas_fijas = []
+
+    # Construir mapa {semana_domingo → cantidad_cj} de entradas aprobadas
+    # usando SOLO fecha_entrada_real (cuando realmente llega el stock)
+    from datetime import date as _date
+    def _get_domingo(fecha_str):
+        d = _date.fromisoformat(str(fecha_str)[:10])
+        # Domingo de la semana (Prophet usa domingos)
+        dow = d.weekday()  # 0=lun … 6=dom
+        return (d - timedelta(days=(dow + 1) % 7)).isoformat()
+
+    entradas_map = {}   # {sem_domingo → cj_aprobadas}
+    for ef in entradas_fijas:
+        if not ef.get("aprobada"):
+            continue
+        sem = _get_domingo(ef["fecha_entrada"])
+        entradas_map[sem] = entradas_map.get(sem, 0) + ef["cantidad_cajas"]
 
     ordenes = []
     stock_proyectado = stock_actual_cajas + ordenes_transito_cajas
     hoy = datetime.now().date()
-    forecast_futuro = [f for f in forecast if pd.to_datetime(f["ds"]).date() >= hoy][:horizonte_semanas]
+    forecast_futuro = [f for f in forecast
+                       if pd.to_datetime(f["ds"]).date() >= hoy][:horizonte_semanas]
 
     for f in forecast_futuro:
         fecha_semana = pd.to_datetime(f["ds"])
-        yhat_cajas = max(0, f["yhat"])
-        ss_cajas = calcular_stock_seguridad_cajas(params, yhat_cajas)
+        sem_str      = fecha_semana.strftime("%Y-%m-%d")
+        yhat_cajas   = max(0, f["yhat"])
+        ss_cajas     = calcular_stock_seguridad_cajas(params, yhat_cajas)
+
+        # Sumar entradas fijas aprobadas que llegan esta semana
+        if sem_str in entradas_map:
+            stock_proyectado += entradas_map[sem_str]
+
         nec_neta = yhat_cajas + ss_cajas - stock_proyectado
 
         if nec_neta <= 0:
             stock_proyectado = max(0, stock_proyectado - yhat_cajas)
             continue
 
-        orden_u = redondear_a_batch(nec_neta, params)
+        # ── Verificar si ya hay una OF aprobada en tránsito ──────────────────
+        # Si hay entradas aprobadas en semanas futuras cercanas (dentro del lead time + 1 sem)
+        # y cubren la necesidad → no generar nueva orden (la OF aprobada ya la cubre)
+        lt_dias      = round(params.lead_time_semanas * 7)
+        horizonte_ef = (fecha_semana + timedelta(days=lt_dias + 7)).strftime("%Y-%m-%d")
+        cj_en_transito = sum(
+            cj for sem_k, cj in entradas_map.items()
+            if sem_str < sem_k <= horizonte_ef
+        )
+        if cj_en_transito >= nec_neta:
+            # Hay suficiente producción aprobada llegando → no generar OFT
+            stock_proyectado = max(0, stock_proyectado - yhat_cajas)
+            continue
+
+        # ── Calcular OF sugerida (MRP clásico) ───────────────────────────────
+        orden_u     = redondear_a_batch(nec_neta - cj_en_transito, params)
         orden_cajas = math.ceil(orden_u / params.unidades_por_caja)
-        alerta = None
+        alerta      = None
 
         if stock_proyectado * params.unidades_por_caja + orden_u > params.cap_bodega:
             alerta = f"Excede cap. bodega ({params.cap_bodega:,} u.)"
 
         fecha_emision = calcular_fecha_emision(fecha_semana, params.lead_time_semanas)
         if fecha_emision.date() < hoy:
-            dias = (hoy - fecha_emision.date()).days
+            dias  = (hoy - fecha_emision.date()).days
             alerta = f"URGENTE: debio emitirse hace {dias} dias"
 
         linea_asignada = None
@@ -319,24 +469,22 @@ def generar_plan_sku(
 
         if orden_cajas > 0:
             stock_final = max(0, stock_proyectado + orden_cajas - yhat_cajas)
-            ordenes.append(
-                OrdenSugerida(
-                    sku=params.sku,
-                    descripcion=params.descripcion,
-                    tipo=params.tipo,
-                    semana_necesidad=fecha_semana.strftime("%Y-%m-%d"),
-                    semana_emision=fecha_emision.strftime("%Y-%m-%d"),
-                    cantidad_cajas=int(orden_cajas),
-                    cantidad_unidades=int(orden_u),
-                    linea=linea_asignada,
-                    motivo=f"FC:{yhat_cajas:.0f} SS:{ss_cajas:.0f} Stock:{stock_proyectado:.0f} Neta:{nec_neta:.0f}",
-                    alerta=alerta,
-                    stock_inicial_cajas=round(stock_proyectado, 1),
-                    stock_final_cajas=round(stock_final, 1),
-                    forecast_cajas=round(yhat_cajas, 1),
-                    ss_cajas=round(ss_cajas, 1),
-                )
-            )
+            ordenes.append(OrdenSugerida(
+                sku=params.sku,
+                descripcion=params.descripcion,
+                tipo=params.tipo,
+                semana_necesidad=fecha_semana.strftime("%Y-%m-%d"),
+                semana_emision=fecha_emision.strftime("%Y-%m-%d"),
+                cantidad_cajas=int(orden_cajas),
+                cantidad_unidades=int(orden_u),
+                linea=linea_asignada,
+                motivo=f"FC:{yhat_cajas:.0f} SS:{ss_cajas:.0f} Stock:{stock_proyectado:.0f} Neta:{nec_neta:.0f}",
+                alerta=alerta,
+                stock_inicial_cajas=round(stock_proyectado, 1),
+                stock_final_cajas=round(stock_final, 1),
+                forecast_cajas=round(yhat_cajas, 1),
+                ss_cajas=round(ss_cajas, 1),
+            ))
             stock_proyectado = stock_final
 
     return ordenes
@@ -348,20 +496,12 @@ def generar_plan_completo(
     stocks_actuales=None,
     lineas=None,
     horizonte_semanas=13,
-    alertas_stock=None,          # ← stock real: alertas FEFO desde stock.py
+    alertas_stock=None,
+    entradas_fijas=None,   # dict {sku → [{fecha_entrada, cantidad_cajas, numero_of}]}
 ):
     """
     Genera el plan completo de producción/abastecimiento.
-
-    Args:
-        sku_params        : dict {sku → SKUParams}
-        forecasts         : dict {sku → list[{ds, yhat, ...}]}
-        stocks_actuales   : dict {sku → stock_disponible_en_cajas}  (real desde SQL)
-        lineas            : dict {codigo → LineaProduccion}
-        horizonte_semanas : int
-        alertas_stock     : list de alertas FEFO (vencidos / próximos a vencer)
-                            — generadas por stock.calcular_stock_disponible()
-                            — se propagan a la respuesta del endpoint /plan
+    Las entradas_fijas (OFs aprobadas) se inyectan como stock real en sus fechas reales.
     """
     if stocks_actuales is None:
         stocks_actuales = {}
@@ -369,6 +509,8 @@ def generar_plan_completo(
         lineas = {}
     if alertas_stock is None:
         alertas_stock = []
+    if entradas_fijas is None:
+        entradas_fijas = {}
 
     todas = []
     for sku, params in sku_params.items():
@@ -377,9 +519,10 @@ def generar_plan_completo(
         for o in generar_plan_sku(
             params,
             forecasts[sku],
-            stocks_actuales.get(sku, 0),   # 0 solo si SKU no tiene stock en parquet
+            stocks_actuales.get(sku, 0),
             lineas=lineas,
             horizonte_semanas=horizonte_semanas,
+            entradas_fijas=entradas_fijas.get(sku, []),   # OFs aprobadas de este SKU
         ):
             todas.append({
                 "sku": o.sku,
