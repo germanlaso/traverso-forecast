@@ -9,6 +9,22 @@ logger = logging.getLogger(__name__)
 W_DEFICIT=100_000; W_EXCESO=50_000; W_URGENTE=10_000; W_SLACK=100; W_ALT=50
 MAX_TIME=30; N_WORKERS=4
 
+# Feriados Chile 2026
+_FERIADOS = {date(2026,m,d) for m,d in [
+    (1,1),(3,29),(3,30),(4,6),(5,1),(5,21),(6,29),(7,16),
+    (8,15),(9,18),(9,19),(10,12),(10,31),(11,1),(11,2),(12,8),(12,25)
+]}
+
+def _dia_habil(d, retroceder=True):
+    """Ajusta d al día hábil más cercano (lun-vie, no feriado).
+    retroceder=True: busca hacia atrás (para fecha de lanzamiento).
+    retroceder=False: busca hacia adelante (para fecha de entrada).
+    """
+    delta = timedelta(days=-1 if retroceder else 1)
+    while d.weekday() >= 5 or d in _FERIADOS:
+        d += delta
+    return d
+
 
 def optimizar_plan(ordenes_mrp, sku_params, lineas, forecasts,
                    stocks_actuales, entradas_fijas, horizonte_semanas=13):
@@ -296,9 +312,13 @@ def _extraer(solver, ordenes_mrp, prod, asig, stk,
             apu   = ap.get(k,{}).get(s,0)
             sinicj= round((sfin - ptot - int(apu) + int(yhat))/upj,1)
             lt    = round(getattr(p,'lead_time_semanas',1)*7)
-            fem   = date.fromisoformat(s) - timedelta(days=lt)
-            alerta= (f"URGENTE: debio emitirse hace {(hoy-fem).days} dias"
-                     if fem <= hoy else None)
+            fem_calc = date.fromisoformat(s) - timedelta(days=lt)
+            # Si la fecha calculada está en el pasado, mover a HOY
+            # (no podemos proponer lanzamientos en el pasado)
+            fem   = max(fem_calc, hoy)
+            fem   = _dia_habil(fem, retroceder=False)  # siguiente día hábil
+            alerta= ("URGENTE: lanzar HOY (lead time agotado)"
+                     if fem_calc < hoy else None)
             # Línea preferida?
             pref_rows = [r for r in lok.get(k,[]) if r['preferida']]
             pref_l    = pref_rows[0]['linea'] if pref_rows else None

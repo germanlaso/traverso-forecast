@@ -187,6 +187,7 @@ export default function App() {
   const [plan, setPlan] = useState(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(13);
+  const [planOptimizar, setPlanOptimizar] = useState(false);
   // Anchos iniciales columnas tabla plan (en px): N°Orden SKU Desc Tipo F.Entrada F.Lanzam Cajas Línea Alerta Acciones
   const { widths: colWidths, onMouseDown: onColDrag } = useResizableColumns(
     [120, 90, 180, 55, 90, 100, 70, 55, 160, 80]
@@ -256,6 +257,7 @@ export default function App() {
       const {data} = await axios.post(`${API}/plan`, {
         horizonte_semanas: Number(planHorizonte),
         canal: canalRef.current || null,
+        optimizar: planOptimizar,
       });
       setPlan(data);
       // Actualizar resumen de stock si viene en la respuesta
@@ -583,7 +585,18 @@ export default function App() {
                   <option value="">Todos los canales</option>
                   {canales.filter(c => c !== 'OFICINA').map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <button style={s.btnPrimary} onClick={runPlan} disabled={planLoading}>{planLoading ? 'Calculando...' : '▶ Generar plan'}</button>
+                <button style={s.btnPrimary} onClick={runPlan} disabled={planLoading}>
+                  {planLoading ? (planOptimizar ? '⚙ Optimizando...' : 'Calculando...') : '▶ Generar plan'}
+                </button>
+                <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',
+                  fontSize:12,color:planOptimizar?'#1D9E75':'#6B6A66',fontWeight:planOptimizar?'bold':'normal',
+                  background:planOptimizar?'#E1F5EE':'#F1EFE8',borderRadius:7,padding:'6px 12px',
+                  border:`1px solid ${planOptimizar?'#1D9E75':'#D3D1C7'}`,userSelect:'none'}}>
+                  <input type='checkbox' checked={planOptimizar}
+                    onChange={e=>setPlanOptimizar(e.target.checked)}
+                    style={{accentColor:'#1D9E75',width:14,height:14}}/>
+                  ⚙ OR-Tools
+                </label>
               </div>
             </div>
 
@@ -664,7 +677,15 @@ export default function App() {
                             </td>
                             <td style={{padding:'5px 10px',wordBreak:'break-word',whiteSpace:'normal',lineHeight:1.3}}>{o.descripcion}</td>
                             <td style={{padding:'5px 10px'}}><span style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:4,background:tc.bg,color:tc.color}}>{o.tipo==='PRODUCCION'?'PROD':o.tipo==='IMPORTACION'?'IMP':'MAQ'}</span></td>
-                            <td style={{padding:'5px 10px',color:C.textMuted}}>{o.semana_necesidad}</td>
+                            <td style={{padding:'5px 10px',color:C.textMuted}}>
+                              {(()=>{
+                                if(aprobada?.fecha_entrada_real) return <>{aprobada.fecha_entrada_real}{aprobada.fecha_entrada_real!==o.semana_necesidad&&<span style={{fontSize:9,color:C.amber,marginLeft:3}} title={'MRP: '+o.semana_necesidad}>📅</span>}</>;
+                                const ltD=Math.round((o.lead_time_sem??1)*7);
+                                const d=new Date((o.semana_emision||o.semana_necesidad)+'T12:00:00');
+                                d.setDate(d.getDate()+ltD);
+                                return d.toISOString().slice(0,10);
+                              })()}
+                            </td>
                             <td style={{padding:'5px 10px',fontWeight:o.tiene_alerta?700:400,color:o.tiene_alerta?C.danger:C.text}}>{o.tiene_alerta?'🔴 ':''}{o.semana_emision}</td>
                             <td style={{padding:'5px 10px',fontWeight:700,color:aprobada?C.tealMid:C.teal}}
                               title={modificada ? `MRP sugería ${o.cantidad_cajas.toLocaleString('es-CL')} cj` : ''}>
@@ -818,8 +839,12 @@ export default function App() {
         )}
 
         {/* ══ STOCK PROYECCIÓN TAB ══ */}
-        {activeTab === 'stock' && <StockProyeccion key={`stock-${stockSku}-${stockNav}`} initialSku={stockSku} />}
-        {activeTab === 'detalle' && <DetalleProduccion onAprobar={(o) => { abrirModal(o); setActiveTab('plan'); }} />}
+        {activeTab === 'stock' && <StockProyeccion key={`stock-${stockSku}-${stockNav}`} initialSku={stockSku} planExterno={plan} />}
+        {activeTab === 'detalle' && <DetalleProduccion
+          ordenesPlan={plan?.ordenes ?? []}
+          onAprobar={(o) => { abrirModal(o); setActiveTab('plan'); }}
+          onPlanChanged={() => runPlan()}
+        />}
       </div>
     </div>
   );

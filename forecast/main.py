@@ -432,6 +432,7 @@ def generar_plan(req: PlanRequest = None):
             fer = str(ap.get("fecha_entrada_real") or ap.get("semana_necesidad",""))[:10]
             cj  = float(ap.get("cantidad_real_cj") or 0)
             # Solo inyectar entradas futuras — las pasadas ya están en el stock real de SQL
+            # Auto-rechazo: si fer <= hoy, asumimos que la OF se perdió o ya llegó al stock real
             if sku_ap and fer and cj > 0 and fer > hoy_str:
                 if sku_ap not in entradas_fijas:
                     entradas_fijas[sku_ap] = []
@@ -453,16 +454,6 @@ def generar_plan(req: PlanRequest = None):
             alertas_stock=alertas_vcto,
             entradas_fijas=entradas_fijas,
         )
-
-        # Asignar número OF a cada orden (tentativo para sugeridas, definitivo para aprobadas)
-        for o in ordenes:
-            existente = get_orden_by_key(o["sku"], o["semana_necesidad"], o["semana_emision"])
-            if existente and existente.get("numero_of"):
-                o["numero_of"] = existente["numero_of"]
-                o["aprobada"] = bool(existente.get("estado") == "APROBADA")
-            else:
-                o["numero_of"] = numero_of_tentativo(o["sku"], o["semana_necesidad"], o["semana_emision"])
-                o["aprobada"] = False
 
         # Alertas de vencimiento agrupadas por tipo
         vencidos = [a for a in alertas_vcto if a["tipo"] == "VENCIDO"]
@@ -488,6 +479,34 @@ def generar_plan(req: PlanRequest = None):
             except Exception as e_opt:
                 logger.error(f"[Plan] Error OR-Tools: {e_opt} — devuelto plan MRP")
                 diag_opt = {"optimizado": False, "error": str(e_opt)}
+
+        # Asignar número OF y lead_time_sem a cada orden (después del optimizador)
+        import re as _re
+        for o in ordenes:
+            # lead_time_sem para que el frontend calcule fecha_entrada exacta
+            sku_p = sku_params.get(o.get("sku", ""))
+            if sku_p and "lead_time_sem" not in o:
+                o["lead_time_sem"] = getattr(sku_p, "lead_time_semanas", 1)
+
+            # Si ya tiene numero_of asignado (aprobada fija), saltar
+            if o.get("numero_of") and o.get("aprobada"):
+                continue
+
+            motivo = o.get("motivo", "")
+            # Caso 1: fila de entrada aprobada del MRP (prefijo OF_APROBADA:)
+            m_ap = _re.search(r"OF_APROBADA:([\w-]+)", motivo)
+            if m_ap:
+                o["numero_of"] = m_ap.group(1)
+                o["aprobada"] = True
+                continue
+            # Caso 2: buscar en BD
+            existente = get_orden_by_key(o["sku"], o["semana_necesidad"], o["semana_emision"])
+            if existente and existente.get("numero_of"):
+                o["numero_of"] = existente["numero_of"]
+                o["aprobada"] = bool(existente.get("estado") == "APROBADA")
+            else:
+                o["numero_of"] = numero_of_tentativo(o["sku"], o["semana_necesidad"], o["semana_emision"])
+                o["aprobada"] = False
 
         return {
             "n_skus": len(sku_params),

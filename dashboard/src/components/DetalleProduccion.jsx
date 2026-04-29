@@ -44,9 +44,10 @@ function CapBar({uso}){
 
 function OrdenBadge({orden,esPreferida,onClick}){
   const esDesborde=orden.esDesborde;
-  const bg=esDesborde?"#FFF0F0":C.tealLt;
-  const color=esDesborde?C.red:C.tealMid;
-  const bord=esDesborde?C.red:C.teal;
+  const esOFT=orden.esOFT;
+  const bg=esDesborde?"#FFF0F0":esOFT?C.amberLt:C.tealLt;
+  const color=esDesborde?C.red:esOFT?C.amber:C.tealMid;
+  const bord=esDesborde?C.red:esOFT?C.amber:C.teal;
   return(
     <div onClick={onClick}
       title={`Click para desplazar · ${orden.numero_of} · ${fmtN(orden.uProduccion)} u.`}
@@ -80,7 +81,7 @@ function ModalDesplazar({orden,aprobacion,onGuardar,onCerrar}){
         u_por_caja:aprobacion.u_por_caja??1,responsable:aprobacion.responsable,
         comentario:aprobacion.comentario||"",linea:orden.linea||"",
         fecha_lanzamiento_real:nuevaFecha,
-        fecha_entrada_real:"",  // backend recalcula: fecha_lanzamiento_real + lead_time
+        fecha_entrada_real:aprobacion.fecha_entrada_real||orden.semana_necesidad,
       });
       onGuardar();
     }catch(e){alert("Error: "+(e.response?.data?.detail||e.message));}
@@ -138,12 +139,9 @@ function ModalDesplazar({orden,aprobacion,onGuardar,onCerrar}){
   );
 }
 
-function ModalEditar({orden,aprobacion,leadTimeSem,onGuardar,onCancelarAprobacion,onCerrar}){
+function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar}){
   const [cantReal,setCantReal]=useState(aprobacion?.cantidad_real_cj??orden?.cantidad_cajas??0);
   const [fechaLanz,setFechaLanz]=useState(String(aprobacion?.fecha_lanzamiento_real||orden?.semana_emision||"").slice(0,10));
-  const [fechaEntManual,setFechaEntManual]=useState(false); // true si el usuario la editó manualmente
-  const _ltDias=Math.round((leadTimeSem??1)*7);
-  const _calcFechaEnt=(lanz)=>{const d=new Date(lanz+"T12:00:00");d.setDate(d.getDate()+_ltDias);return d.toISOString().slice(0,10);};
   const [fechaEnt,setFechaEnt]=useState(String(aprobacion?.fecha_entrada_real||orden?.semana_necesidad||"").slice(0,10));
   const [comentario,setComentario]=useState(aprobacion?.comentario||"");
   const [guardando,setGuardando]=useState(false);
@@ -186,11 +184,10 @@ function ModalEditar({orden,aprobacion,leadTimeSem,onGuardar,onCancelarAprobacio
         {[
           ["Cantidad real (cj)",<input type="number" value={cantReal} onChange={e=>setCantReal(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`1.5px solid ${C.teal}`,outline:"none"}}/>],
-          ["Fecha lanzamiento real",<input type="date" value={fechaLanz} onChange={e=>{setFechaLanz(e.target.value);if(!fechaEntManual)setFechaEnt(_calcFechaEnt(e.target.value));}}
+          ["Fecha lanzamiento real",<input type="date" value={fechaLanz} onChange={e=>setFechaLanz(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],
-          ["Fecha entrada stock real",<input type="date" value={fechaEnt} onChange={e=>{setFechaEnt(e.target.value);setFechaEntManual(true);}}
-            style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>,
-            <span style={{fontSize:10,color:fechaEntManual?"#854F0B":C.textMuted,marginTop:2,display:"block"}}>{fechaEntManual?"📅 Editada manualmente":"🔄 Calculada automáticamente (lanzamiento + lead time)"}</span>],
+          ["Fecha entrada stock real",<input type="date" value={fechaEnt} onChange={e=>setFechaEnt(e.target.value)}
+            style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],
           ["Comentario",<input type="text" value={comentario} onChange={e=>setComentario(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],
         ].map(([lbl,inp])=>(
@@ -225,10 +222,12 @@ function ModalEditar({orden,aprobacion,leadTimeSem,onGuardar,onCancelarAprobacio
 function diasGlobalesDesde(fechaIni,nSemanas){
   const dias=[];
   const d=new Date(fechaIni+"T12:00:00");
-  for(let i=0;i<nSemanas*7;i++){
+  let i=0; let habiles=0; const maxHabiles=nSemanas*5;
+  while(habiles<maxHabiles && i<nSemanas*14){
     const dd=new Date(d);dd.setDate(d.getDate()+i);
     const fecha=dd.toISOString().slice(0,10);
-    dias.push({fecha,habil:esDiaHabil(fecha)});
+    if(esDiaHabil(fecha)){dias.push({fecha,habil:true});habiles++;}
+    i++;
   }
   return dias;
 }
@@ -237,12 +236,17 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
   const capDia=linea.cap_u_semana/5;
   const mapa={};const capUsada={};
   diasExt.forEach(d=>{mapa[d.fecha]=[];capUsada[d.fecha]=0;});
-  const aprobadas=ordenesLinea.filter(o=>o.aprobada);
+  // Incluir aprobadas Y OFTs (pendientes) en el grid
+  const todasOrdenes=ordenesLinea;
 
-  aprobadas.forEach(o=>{
+  todasOrdenes.forEach(o=>{
     const key=`${o.sku}__${o.semana_necesidad}__${o.semana_emision}`;
     const aprobacion=aprobMap[key];
-    const fechaIni=String(aprobacion?.fecha_lanzamiento_real||o.semana_emision).slice(0,10);
+    // Ajustar fechaIni al primer día hábil si cae en fin de semana o feriado
+    let _fechaIniRaw=String(aprobacion?.fecha_lanzamiento_real||o.semana_emision).slice(0,10);
+    let _dIni=new Date(_fechaIniRaw+"T12:00:00");
+    while(!esDiaHabil(_dIni.toISOString().slice(0,10))){_dIni.setDate(_dIni.getDate()+1);}
+    const fechaIni=_dIni.toISOString().slice(0,10);
 
     const upj=params[o.sku]?.upj??1;
     const capReal=Number(aprobacion?.cantidad_real_cj??o.cantidad_cajas);
@@ -264,13 +268,16 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
       primerDia=false;
     }
 
-    // Fecha entrada = fecha_lanzamiento_real + lead_time (sin desborde: OF <= cap diaria)
+    // Calcular último día de producción (para fecha de entrada ajustada)
+    const fechasOcupadas = Object.keys(diasOcupados).sort();
+    const ultimoDiaProd  = fechasOcupadas[fechasOcupadas.length - 1] || fechaIni;
+
+    // Fecha entrada = último día de producción + lead_time_sem semanas
     const ltSem  = params[o.sku]?.lead_time_sem ?? 1;
-    const ltDias = Math.round(ltSem * 7);
-    const dLanz = new Date(fechaIni + "T12:00:00");
-    dLanz.setDate(dLanz.getDate() + ltDias);
-    const fechaEntradaCalc = dLanz.toISOString().slice(0,10);
-    const ultimoDiaProd = fechaIni; // sin desborde, produce en 1 día
+    const ltDias = ltSem * 7;
+    const dUltimo = new Date(ultimoDiaProd + "T12:00:00");
+    dUltimo.setDate(dUltimo.getDate() + ltDias);
+    const fechaEntradaCalc = dUltimo.toISOString().slice(0,10);
 
     // Agregar solo los días visibles (en diasExt)
     for(const [fecha,uProd] of Object.entries(diasOcupados)){
@@ -282,7 +289,8 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
         esDesborde: fecha!==fechaIni,
         uProduccion:uProd,
         ultimoDiaProd,
-        fechaEntradaCalc,  // fecha entrada real según nueva definición de lead time
+        fechaEntradaCalc,
+        esOFT: !o.aprobada,
       });
       capUsada[fecha]=(capUsada[fecha]||0)+usoPctReal;
     }
@@ -290,7 +298,7 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
   return{mapa,capUsada};
 }
 
-export default function DetalleProduccion({onAprobar}){
+export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChanged}){
   const [semanaBase,setSemanaBase]=useState(getDomingoActual());
   const [lineas,setLineas]=useState([]);
   const [params,setParams]=useState({});
@@ -310,18 +318,25 @@ export default function DetalleProduccion({onAprobar}){
       }).catch(e=>setError("Error cargando parámetros: "+(e.response?.data?.detail||e.message)));
   },[]);
 
+  // Usar plan externo si viene, sino fetch propio
   useEffect(()=>{
-    setLoading(true);setError("");
-    axios.post(`${API}/plan`,{horizonte_semanas:8})
-      .then(r=>setOrdenes(r.data.ordenes??[]))
-      .catch(e=>setError("Error plan: "+e.message))
-      .finally(()=>setLoading(false));
-  },[semanaBase]);
+    if(ordenesPlan && ordenesPlan.length > 0){
+      setOrdenes(ordenesPlan);
+      setLoading(false);
+    } else {
+      setLoading(true);setError("");
+      axios.post(`${API}/plan`,{horizonte_semanas:8})
+        .then(r=>setOrdenes(r.data.ordenes??[]))
+        .catch(e=>setError("Error plan: "+e.message))
+        .finally(()=>setLoading(false));
+    }
+  },[ordenesPlan]);
 
   const recargar=useCallback(()=>{
     axios.get(`${API}/ordenes/aprobadas`).then(r=>setAprobadas(r.data??[]));
-    axios.post(`${API}/plan`,{horizonte_semanas:8}).then(r=>setOrdenes(r.data.ordenes??[]));
-  },[]);
+    if(onPlanChanged) onPlanChanged();
+    else axios.post(`${API}/plan`,{horizonte_semanas:8}).then(r=>setOrdenes(r.data.ordenes??[]));
+  },[onPlanChanged]);
 
   const diasExt=useMemo(()=>diasDesde(semanaBase,2),[semanaBase]);
   const dias=useMemo(()=>diasExt.slice(0,7),[diasExt]);
@@ -353,7 +368,6 @@ export default function DetalleProduccion({onAprobar}){
       {modalDesplazar&&<ModalDesplazar orden={modalDesplazar.orden} aprobacion={modalDesplazar.aprobacion}
         onGuardar={()=>{setModalDesplazar(null);recargar();}} onCerrar={()=>setModalDesplazar(null)}/>}
       {modalEditar&&<ModalEditar orden={modalEditar.orden} aprobacion={modalEditar.aprobacion}
-        leadTimeSem={params[modalEditar.orden?.sku]?.lead_time_sem??1}
         onGuardar={()=>{setModalEditar(null);recargar();}}
         onCancelarAprobacion={()=>{setModalEditar(null);recargar();}}
         onCerrar={()=>setModalEditar(null)}/>}
@@ -484,14 +498,32 @@ export default function DetalleProduccion({onAprobar}){
                             {(() => {
                               const fechaEntMRP = String(o.semana_necesidad).slice(0,10);
                               const ltSem = params[o.sku]?.lead_time_sem ?? 1;
+                              const ltDias = ltSem * 7;
+
+                              // Calcular fecha entrada con nueva definición:
+                              // último día de producción + lead_time_sem semanas
                               const fechaLanz = String(aprobada?.fecha_lanzamiento_real || o.semana_emision).slice(0,10);
-                              // Sin desborde: fecha entrada = lanzamiento + lead_time
-                              const ltDiasCalc = Math.round(ltSem * 7);
-                              const dLanzCalc = new Date(fechaLanz + "T12:00:00");
-                              dLanzCalc.setDate(dLanzCalc.getDate() + ltDiasCalc);
-                              const fechaEntCalc = dLanzCalc.toISOString().slice(0,10);
+                              const upj = params[o.sku]?.upj ?? 1;
+                              const capReal = Number(aprobada?.cantidad_real_cj ?? o.cantidad_cajas);
+                              const uTotales = capReal * upj;
+                              const capDia = linea.cap_u_semana / 5;
+
+                              // Simular días de producción desde fechaLanz
+                              let uRest = uTotales;
+                              let ultimoDia = fechaLanz;
+                              const diasSim = diasGlobalesDesde(fechaLanz, 4);
+                              for (const d of diasSim) {
+                                if (uRest <= 0) break;
+                                const uHoy = Math.min(uRest, capDia);
+                                ultimoDia = d.fecha;
+                                uRest -= uHoy;
+                              }
+
+                              const dUlt = new Date(ultimoDia + "T12:00:00");
+                              dUlt.setDate(dUlt.getDate() + ltDias);
+                              const fechaEntCalc = dUlt.toISOString().slice(0,10);
                               const difiere = fechaEntCalc !== fechaEntMRP;
-                              const tooltip = `Lead time: ${ltSem} sem (${fechaLanz} + ${ltDiasCalc}d)${difiere ? " · MRP sugería: " + fechaEntMRP : ""}`;
+                              const tooltip = `Lead time: ${ltSem} sem desde fin producción (${ultimoDia})${difiere ? ` · MRP sugería: ${fechaEntMRP}` : ""}`;
                               return (
                                 <span style={{color: difiere ? C.amber : C.text, fontWeight: difiere ? 700 : 400}}
                                   title={tooltip}>

@@ -9,6 +9,7 @@ Persist: forecast/data/stock_actual.csv  (refresh explícito vía /stock/refresh
 """
 
 from __future__ import annotations
+from sqlalchemy import text as _text
 
 import os
 import logging
@@ -72,7 +73,8 @@ def fetch_and_save_stock() -> dict:
     """
     logger.info("[STOCK] Iniciando descarga desde SQL Server...")
 
-    df = pd.read_sql(_STOCK_QUERY, get_engine())
+    result = conn.execute(_text(_STOCK_QUERY))
+    df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
     # Normalizar tipos
     df["sku"] = df["sku"].astype(str).str.strip()

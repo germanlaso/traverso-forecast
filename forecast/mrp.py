@@ -5,7 +5,7 @@ mrp.py — Motor MRP Traverso S.A.
 import math
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from dataclasses import dataclass
 from typing import Optional
 
@@ -308,8 +308,35 @@ def redondear_a_batch(cantidad_cajas, params):
     return int(cantidad_u)
 
 
+# Feriados Chile 2026
+_FERIADOS_MRP = {date(2026,m,d) for m,d in [
+    (1,1),(3,29),(3,30),(4,6),(5,1),(5,21),(6,29),(7,16),
+    (8,15),(9,18),(9,19),(10,12),(10,31),(11,1),(11,2),(12,8),(12,25)
+]}
+
+def _dia_habil_emision(d):
+    """Ajusta la fecha de emisión al último día hábil anterior (lun-vie, no feriado)."""
+    while d.weekday() >= 5 or d in _FERIADOS_MRP:
+        d -= timedelta(days=1)
+    return d
+
 def calcular_fecha_emision(fecha_necesidad, lead_time_semanas):
-    return fecha_necesidad - timedelta(days=round(lead_time_semanas * 7))
+    """
+    Calcula fecha de emisión = necesidad - lead_time_semanas*7 días.
+    Si la fecha resulta en el pasado (lead time agotado), se fuerza a HOY.
+    Esto garantiza que el plan nunca propone lanzamientos retroactivos.
+    """
+    from datetime import datetime as _dt, date as _dt_date
+    d = fecha_necesidad - timedelta(days=round(lead_time_semanas * 7))
+    # Convertir hoy a datetime/date según el tipo de fecha_necesidad
+    hoy_d = _dt_date.today()
+    if isinstance(d, _dt):
+        hoy_eq = _dt.combine(hoy_d, _dt.min.time())
+    else:
+        hoy_eq = hoy_d
+    if d < hoy_eq:
+        d = hoy_eq
+    return _dia_habil_emision(d)
 
 
 def _fecha_a_domingo(fecha_str):
