@@ -37,10 +37,10 @@ print("\n[ Version mrp.py ]")
 mrp_content = Path("/app/mrp.py").read_text(encoding="utf-8")
 results.append(check("Sin bloque Fallback", "Fallback" not in mrp_content,
                      "OK" if "Fallback" not in mrp_content else "VERSION VIEJA"))
-results.append(check("Mapeo 'Tipo Abastecimiento'", "'Tipo Abastecimiento'" in mrp_content,
-                     "OK" if "'Tipo Abastecimiento'" in mrp_content else "MAPEO INCORRECTO"))
-results.append(check("Mapeo 'Unidades por Caja'", "'Unidades por Caja'" in mrp_content,
-                     "OK" if "'Unidades por Caja'" in mrp_content else "MAPEO INCORRECTO"))
+results.append(check("Funcion _normalize()", "_normalize" in mrp_content,
+                     "OK" if "_normalize" in mrp_content else "VERSION SIN NORMALIZE"))
+results.append(check("Fix numpy.bool_", "bool(o.alerta" in mrp_content,
+                     "OK" if "bool(o.alerta" in mrp_content else "SIN FIX SERIALIZACION"))
 
 # 3. Excel MRP
 print("\n[ Excel MRP ]")

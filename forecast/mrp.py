@@ -26,7 +26,7 @@ class SKUParams:
     linea_preferida: str = ""
     activo: bool = True
     t_cambio_hrs: float = 0.0
-    pct_dia_max: float = 1.0  # fracción máxima del día que puede usar este SKU (ej: 0.5 = medio turno)
+    pct_dia_max: float = 1.0
 
 
 @dataclass
@@ -75,7 +75,7 @@ class OrdenSugerida:
 
 def _normalize(s):
     """Normaliza string: minusculas, sin \n, sin espacios ni tildes ni parentesis."""
-    s = str(s).lower().strip().replace("\n", " ")  # \n ANTES que espacios
+    s = str(s).lower().strip().replace("\n", " ")
     for a, b in [
         (" ", ""), ("(", ""), (")", ""), (".", ""),
         ("\xe3", "a"), ("\xe9", "e"), ("\xed", "i"), ("\xf3", "o"), ("\xfa", "u"), ("\xf1", "n"),
@@ -87,14 +87,12 @@ def _normalize(s):
 
 
 def _int(val, default=0):
-    """Convierte a int manejando NaN de pandas."""
     try:
         if val is None or (isinstance(val, float) and __import__("math").isnan(val)): return default
         return int(val) if val else default
     except: return default
 
 def _float(val, default=0.0):
-    """Convierte a float manejando NaN de pandas."""
     try:
         if val is None or (isinstance(val, float) and __import__("math").isnan(val)): return default
         return float(val) if val else default
@@ -103,11 +101,10 @@ def _float(val, default=0.0):
 def load_params_from_db():
     """
     Carga parámetros MRP desde PostgreSQL.
-    Retorna (sku_params, lineas, sku_lineas) — mismo formato que load_params_from_excel.
+    Retorna (sku_params, lineas, sku_lineas).
     """
     from db_mrp import get_all_lineas, get_all_sku_params
 
-    # ── Líneas ────────────────────────────────────────────────────────────────
     lineas = {}
     for row in get_all_lineas():
         codigo = row["codigo"]
@@ -120,7 +117,6 @@ def load_params_from_db():
             velocidad_u_hr = float(row.get("velocidad_u_hr", 0) or 0),
         )
 
-    # ── SKU params ────────────────────────────────────────────────────────────
     sku_params = {}
     for row in get_all_sku_params():
         sku = str(row["sku"])
@@ -148,10 +144,8 @@ def load_params_from_db():
 
 
 def load_params_from_excel(path: str):
-    # data_only=True → lee valores calculados de fórmulas, no las fórmulas en sí
     xl = pd.ExcelFile(path, engine="openpyxl")
 
-    # ── SKU_PARAMS ─────────────────────────────────────────────────────────────
     df = pd.read_excel(xl, sheet_name="SKU_PARAMS", header=2)
 
     col_map = {}
@@ -217,7 +211,6 @@ def load_params_from_excel(path: str):
         except Exception as e:
             print(f"[MRP] SKU {row.get('sku', '?')} ignorado: {e}")
 
-    # ── LINEAS_PRODUCCION ──────────────────────────────────────────────────────
     df_lin = pd.read_excel(xl, sheet_name="LINEAS_PRODUCCION", header=2)
 
     col_map2 = {}
@@ -259,7 +252,6 @@ def load_params_from_excel(path: str):
             except Exception as e:
                 print(f"[MRP] Linea ignorada: {e}")
 
-    # ── SKU_LINEA ──────────────────────────────────────────────────────────────
     df_sl = pd.read_excel(xl, sheet_name="SKU_LINEA", header=2)
 
     col_map3 = {}
@@ -320,57 +312,16 @@ def calcular_fecha_emision(fecha_necesidad, lead_time_semanas):
     return fecha_necesidad - timedelta(days=round(lead_time_semanas * 7))
 
 
-def optimizar_of(cantidad_cajas, params, stock_proyectado, linea_obj, yhat_cajas):
+def _fecha_a_domingo(fecha_str):
     """
-    Optimiza el tamaño de una OF:
-    1. Cantidad base = nec_neta redondeada a batch_min/multiplo
-    2. Intentar aumentar para completar días enteros (mayor eficiencia)
-       SOLO si el stock resultante no supera cap_bodega
-       Y el stock no excede más de 4 semanas de demanda
-    3. pct_dia_max: fracción del día disponible para este SKU
-    4. Si supera cap_dia_sku → partir en múltiples OFs de 1 día cada una
-
-    t_cambio_hrs se usa en DetalleProduccion para capacidad efectiva
-    cuando hay múltiples SKUs en el mismo día, no aquí.
+    Retorna el domingo (inicio de semana Prophet) que contiene la fecha.
+    Prophet usa semanas dom→sáb: el domingo es el día 6 en weekday() (0=lun…6=dom).
     """
-    import math as _math
-    upj   = params.unidades_por_caja
-    mult  = params.multiplo_batch or 1
-    b_min = params.batch_minimo or mult
-    pct   = max(0.1, min(1.0, getattr(params, 'pct_dia_max', 1.0) or 1.0))
-    cap_bodega_u = params.cap_bodega
-    stock_u = stock_proyectado * upj
-
-    # Capacidad del día para este SKU
-    cap_dia_sku = ((linea_obj.capacidad_u_semana / 5) * pct) if linea_obj else float('inf')
-
-    # Paso 1: cantidad base redondeada
-    base_u = max(cantidad_cajas * upj, b_min)
-    base_u = _math.ceil(base_u / mult) * mult
-
-    # Paso 2: techo de bodega
-    stock_residual_u = stock_u - yhat_cajas * upj
-    max_of_u = max(b_min, cap_bodega_u - stock_residual_u)
-    base_u = min(base_u, max_of_u)
-
-    # Paso 3: intentar aumentar para completar días enteros sin superar cap_bodega
-    if linea_obj and cap_dia_sku < float('inf') and max_of_u > base_u:
-        n_dias_max = _math.floor(max_of_u / cap_dia_sku)
-        if n_dias_max >= 1:
-            target_u = _math.floor((n_dias_max * cap_dia_sku) / mult) * mult
-            target_u = min(max(target_u, base_u), max_of_u)
-            if target_u > base_u:
-                base_u = target_u
-
-    base_u = max(base_u, b_min)
-
-    # Paso 4: si supera cap_dia_sku → partir en múltiples OFs de 1 día
-    if linea_obj and cap_dia_sku < float('inf') and base_u > cap_dia_sku:
-        n_ofs  = _math.ceil(base_u / cap_dia_sku)
-        u_por_of = max(_math.floor(cap_dia_sku / mult) * mult, b_min)
-        return int(u_por_of), int(n_ofs)
-
-    return int(max(base_u, b_min)), 1
+    from datetime import date as _date
+    d = _date.fromisoformat(str(fecha_str)[:10])
+    dow = d.weekday()          # 0=lun … 6=dom
+    dias_desde_domingo = (dow + 1) % 7   # dom=0, lun=1, …, sab=6
+    return (d - timedelta(days=dias_desde_domingo)).isoformat()
 
 
 def generar_plan_sku(
@@ -384,29 +335,27 @@ def generar_plan_sku(
 ):
     """
     MRP clásico con soporte de entradas_fijas (OFs aprobadas).
-    Las entradas fijas se suman al stock en su fecha_entrada_real.
-    El MRP genera OFTs para las semanas donde el stock proyectado cae bajo SS,
-    SIN duplicar órdenes para semanas que ya tienen una OF aprobada llegando.
+
+    Lógica:
+    - Las OFs aprobadas se mapean a la semana (domingo) de su fecha_entrada_real.
+    - En cada semana se suman al stock_proyectado ANTES de calcular la necesidad neta.
+    - El MRP genera OFTs SOLO para la necesidad neta residual.
+    - NO se descuenta de la nec_neta producción futura que todavía no ha llegado.
+      (ese descuento causaba OFTs artificialmente pequeñas — BUG corregido)
     """
     if lineas is None:
         lineas = {}
     if entradas_fijas is None:
         entradas_fijas = []
 
-    # Construir mapa {semana_domingo → cantidad_cj} de entradas aprobadas
-    # usando SOLO fecha_entrada_real (cuando realmente llega el stock)
-    from datetime import date as _date
-    def _get_domingo(fecha_str):
-        d = _date.fromisoformat(str(fecha_str)[:10])
-        # Domingo de la semana (Prophet usa domingos)
-        dow = d.weekday()  # 0=lun … 6=dom
-        return (d - timedelta(days=(dow + 1) % 7)).isoformat()
-
+    # ── Mapa de entradas aprobadas: {sem_domingo → cajas} ────────────────────
+    # Usamos SOLO fecha_entrada_real (cuándo llega realmente el stock).
+    # Cada OF se mapea al domingo de la semana en que llega.
     entradas_map = {}   # {sem_domingo → cj_aprobadas}
     for ef in entradas_fijas:
         if not ef.get("aprobada"):
             continue
-        sem = _get_domingo(ef["fecha_entrada"])
+        sem = _fecha_a_domingo(ef["fecha_entrada"])
         entradas_map[sem] = entradas_map.get(sem, 0) + ef["cantidad_cajas"]
 
     ordenes = []
@@ -421,32 +370,48 @@ def generar_plan_sku(
         yhat_cajas   = max(0, f["yhat"])
         ss_cajas     = calcular_stock_seguridad_cajas(params, yhat_cajas)
 
-        # Sumar entradas fijas aprobadas que llegan esta semana
-        if sem_str in entradas_map:
-            stock_proyectado += entradas_map[sem_str]
+        # 1. Sumar entradas aprobadas que LLEGAN esta semana
+        entrada_aprobada_sem = entradas_map.get(sem_str, 0)
+        if entrada_aprobada_sem > 0:
+            stock_proyectado += entrada_aprobada_sem
 
+        # 2. Necesidad neta = lo que falta para cubrir demanda + SS
         nec_neta = yhat_cajas + ss_cajas - stock_proyectado
 
+        # 3. Si el stock ya cubre → avanzar sin generar OFT
+        #    PERO si hubo entrada aprobada esta semana, emitir fila para que el
+        #    frontend pueda mostrar la OF aprobada con sus datos correctos
         if nec_neta <= 0:
-            stock_proyectado = max(0, stock_proyectado - yhat_cajas)
+            stock_fin_sem = max(0, stock_proyectado - yhat_cajas)
+            if entrada_aprobada_sem > 0:
+                # Buscar numero_of de la entrada aprobada de esta semana
+                nof_ap = next((ef.get("numero_of", "") for ef in entradas_fijas
+                               if ef.get("aprobada") and _fecha_a_domingo(ef["fecha_entrada"]) == sem_str), "")
+                stock_antes_entrada = stock_proyectado - entrada_aprobada_sem
+                ordenes.append(OrdenSugerida(
+                    sku=params.sku,
+                    descripcion=params.descripcion,
+                    tipo=params.tipo,
+                    semana_necesidad=fecha_semana.strftime("%Y-%m-%d"),
+                    semana_emision=fecha_semana.strftime("%Y-%m-%d"),
+                    cantidad_cajas=int(round(entrada_aprobada_sem)),
+                    cantidad_unidades=int(round(entrada_aprobada_sem * params.unidades_por_caja)),
+                    linea=params.linea_preferida or None,
+                    motivo=f"OF_APROBADA:{nof_ap} FC:{yhat_cajas:.0f} SS:{ss_cajas:.0f} Stock:{stock_antes_entrada:.0f} Neta:{nec_neta:.0f}",
+                    alerta=None,
+                    stock_inicial_cajas=round(stock_antes_entrada, 1),
+                    stock_final_cajas=round(stock_fin_sem, 1),
+                    forecast_cajas=round(yhat_cajas, 1),
+                    ss_cajas=round(ss_cajas, 1),
+                ))
+            stock_proyectado = stock_fin_sem
             continue
 
-        # ── Verificar si ya hay una OF aprobada en tránsito ──────────────────
-        # Si hay entradas aprobadas en semanas futuras cercanas (dentro del lead time + 1 sem)
-        # y cubren la necesidad → no generar nueva orden (la OF aprobada ya la cubre)
-        lt_dias      = round(params.lead_time_semanas * 7)
-        horizonte_ef = (fecha_semana + timedelta(days=lt_dias + 7)).strftime("%Y-%m-%d")
-        cj_en_transito = sum(
-            cj for sem_k, cj in entradas_map.items()
-            if sem_str < sem_k <= horizonte_ef
-        )
-        if cj_en_transito >= nec_neta:
-            # Hay suficiente producción aprobada llegando → no generar OFT
-            stock_proyectado = max(0, stock_proyectado - yhat_cajas)
-            continue
-
-        # ── Calcular OF sugerida (MRP clásico) ───────────────────────────────
-        orden_u     = redondear_a_batch(nec_neta - cj_en_transito, params)
+        # 4. Calcular OF sugerida por MRP clásico
+        #    NOTA: NO restamos "cj_en_transito" futuras de la nec_neta.
+        #    Las entradas futuras ya reducirán la nec_neta en sus propias semanas.
+        #    Restarlas aquí generaba OFTs artificialmente pequeñas (BUG anterior).
+        orden_u     = redondear_a_batch(nec_neta, params)
         orden_cajas = math.ceil(orden_u / params.unidades_por_caja)
         alerta      = None
 
@@ -497,7 +462,7 @@ def generar_plan_completo(
     lineas=None,
     horizonte_semanas=13,
     alertas_stock=None,
-    entradas_fijas=None,   # dict {sku → [{fecha_entrada, cantidad_cajas, numero_of}]}
+    entradas_fijas=None,   # dict {sku → [{fecha_entrada, cantidad_cajas, aprobada, ...}]}
 ):
     """
     Genera el plan completo de producción/abastecimiento.
@@ -522,7 +487,7 @@ def generar_plan_completo(
             stocks_actuales.get(sku, 0),
             lineas=lineas,
             horizonte_semanas=horizonte_semanas,
-            entradas_fijas=entradas_fijas.get(sku, []),   # OFs aprobadas de este SKU
+            entradas_fijas=entradas_fijas.get(sku, []),
         ):
             todas.append({
                 "sku": o.sku,

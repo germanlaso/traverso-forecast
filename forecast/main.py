@@ -453,8 +453,17 @@ def generar_plan(req: PlanRequest = None):
             entradas_fijas=entradas_fijas,
         )
 
-        # Asignar número OF a cada orden (tentativo para sugeridas, definitivo para aprobadas)
+        # Asignar número OF a cada orden
+        import re as _re
         for o in ordenes:
+            motivo = o.get("motivo", "")
+            # Caso 1: fila de entrada aprobada emitida por el MRP (tiene OF_APROBADA: en motivo)
+            m_aprobada = _re.search(r"OF_APROBADA:([\w-]+)", motivo)
+            if m_aprobada:
+                o["numero_of"] = m_aprobada.group(1)
+                o["aprobada"] = True
+                continue
+            # Caso 2: buscar en BD por sku+semana_necesidad+semana_emision
             existente = get_orden_by_key(o["sku"], o["semana_necesidad"], o["semana_emision"])
             if existente and existente.get("numero_of"):
                 o["numero_of"] = existente["numero_of"]

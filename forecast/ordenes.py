@@ -81,6 +81,30 @@ def listar_aprobadas():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _calcular_fecha_entrada(fecha_manual, fecha_lanz, cantidad_cj, sku, fallback):
+    """
+    Calcula fecha_entrada_real.
+    Regla: fecha_lanzamiento_real + round(lead_time_semanas × 7) días.
+    Sin desborde — una OF no supera la capacidad diaria de la línea.
+    Si el usuario editó manualmente la fecha (fecha_manual), se respeta.
+    """
+    if fecha_manual:
+        return fecha_manual
+    try:
+        from mrp import load_params_from_db
+        from datetime import date, timedelta
+        sku_params, _, _ = load_params_from_db()
+        p = sku_params.get(sku)
+        if not p:
+            return fallback
+        lt_dias = round(p.lead_time_semanas * 7)
+        fecha_ini = date.fromisoformat(str(fecha_lanz)[:10])
+        return (fecha_ini + timedelta(days=lt_dias)).isoformat()
+    except Exception as e:
+        logger.warning(f"fecha_entrada_real fallback: {e}")
+        return fallback
+
+
 @router.post("/aprobar")
 def aprobar_orden(req: OrdenAprobar):
     try:
@@ -107,7 +131,10 @@ def aprobar_orden(req: OrdenAprobar):
             "cantidad_real_cj":       req.cantidad_real_cj,
             "cantidad_real_u":        round(req.cantidad_real_cj * req.u_por_caja),
             "fecha_lanzamiento_real": _parse_date(req.fecha_lanzamiento_real or se),
-            "fecha_entrada_real":     _parse_date(req.fecha_entrada_real or sn),
+            "fecha_entrada_real":     _parse_date(_calcular_fecha_entrada(
+                req.fecha_entrada_real or None, req.fecha_lanzamiento_real or se,
+                req.cantidad_real_cj, req.sku, sn
+            )),
             "responsable":            req.responsable,
             "comentario":             req.comentario,
             "semana_emision":         se,
