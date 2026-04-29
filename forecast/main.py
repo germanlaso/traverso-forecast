@@ -109,6 +109,7 @@ class PlanRequest(BaseModel):
     skus: Optional[list[str]] = None
     canal: Optional[str] = None
     horizonte_semanas: int = 13
+    optimizar: bool = False
 
 
 # ── Cache en memoria ──────────────────────────────────────────────────────────
@@ -453,17 +454,8 @@ def generar_plan(req: PlanRequest = None):
             entradas_fijas=entradas_fijas,
         )
 
-        # Asignar número OF a cada orden
-        import re as _re
+        # Asignar número OF a cada orden (tentativo para sugeridas, definitivo para aprobadas)
         for o in ordenes:
-            motivo = o.get("motivo", "")
-            # Caso 1: fila de entrada aprobada emitida por el MRP (tiene OF_APROBADA: en motivo)
-            m_aprobada = _re.search(r"OF_APROBADA:([\w-]+)", motivo)
-            if m_aprobada:
-                o["numero_of"] = m_aprobada.group(1)
-                o["aprobada"] = True
-                continue
-            # Caso 2: buscar en BD por sku+semana_necesidad+semana_emision
             existente = get_orden_by_key(o["sku"], o["semana_necesidad"], o["semana_emision"])
             if existente and existente.get("numero_of"):
                 o["numero_of"] = existente["numero_of"]
@@ -475,6 +467,27 @@ def generar_plan(req: PlanRequest = None):
         # Alertas de vencimiento agrupadas por tipo
         vencidos = [a for a in alertas_vcto if a["tipo"] == "VENCIDO"]
         proximos = [a for a in alertas_vcto if a["tipo"] == "PROXIMO_VENCIMIENTO"]
+
+        # ── OR-Tools: optimizar si se solicitó ──────────────────────────────
+        diag_opt = {"optimizado": False}
+        if req.optimizar:
+            try:
+                from optimizer import optimizar_plan
+                logger.info("[Plan] Iniciando optimizador OR-Tools...")
+                ordenes, diag_opt = optimizar_plan(
+                    ordenes_mrp=ordenes,
+                    sku_params=sku_params,
+                    lineas=lineas,
+                    forecasts=forecasts,
+                    stocks_actuales=stocks_actuales,
+                    entradas_fijas=entradas_fijas,
+                    horizonte_semanas=req.horizonte_semanas,
+                )
+                logger.info(f"[Plan] OR-Tools: {diag_opt.get('status')} "
+                            f"t={diag_opt.get('tiempo_ms')}ms")
+            except Exception as e_opt:
+                logger.error(f"[Plan] Error OR-Tools: {e_opt} — devuelto plan MRP")
+                diag_opt = {"optimizado": False, "error": str(e_opt)}
 
         return {
             "n_skus": len(sku_params),
@@ -502,6 +515,7 @@ def generar_plan(req: PlanRequest = None):
             "ordenes": ordenes,
             "resumen_semanal": _mrp.resumen_semanal(ordenes),
             "carga_lineas": _mrp.resumen_por_linea(ordenes, lineas, sku_params),
+            "optimizacion": diag_opt,
         }
 
     except HTTPException:

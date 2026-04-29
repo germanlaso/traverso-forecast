@@ -94,7 +94,10 @@ ORDER BY
 # ── Carga de datos ────────────────────────────────────────────────────────────
 
 def load_sales(skus: list[str] | None = None) -> pd.DataFrame:
-    df = pd.read_sql(SALES_QUERY, get_engine())
+    with get_engine().connect() as conn:
+        from sqlalchemy import text as _text
+        result = conn.execute(_text(SALES_QUERY))
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
     df["fecha_semana"]    = pd.to_datetime(df["fecha_semana"])
     df["cantidad"]        = pd.to_numeric(df["cantidad"],        errors="coerce").fillna(0)
     df["venta_total_clp"] = pd.to_numeric(df["venta_total_clp"], errors="coerce").fillna(0)
@@ -135,7 +138,10 @@ def get_sku_list() -> pd.DataFrame:
     GROUP BY [Codigo Articulo], [Nombre Articulo], [Marca], [Categ. Comercial], [Sub Familia]
     ORDER BY volumen_total DESC
     """
-    df = pd.read_sql(query, get_engine())
+    with get_engine().connect() as conn:
+        from sqlalchemy import text as _text
+        result = conn.execute(_text(query))
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
     df["primera_venta"] = pd.to_datetime(df["primera_venta"]).dt.strftime("%Y-%m-%d")
     df["ultima_venta"]  = pd.to_datetime(df["ultima_venta"]).dt.strftime("%Y-%m-%d")
     return df
@@ -156,7 +162,10 @@ def get_dimension_summary() -> dict:
         AND [Zona] IS NOT NULL AND [Zona] <> ''
     ORDER BY canal, zona
     """
-    df = pd.read_sql(query, get_engine())
+    with get_engine().connect() as conn:
+        from sqlalchemy import text as _text
+        result = conn.execute(_text(query))
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
     return {
         "canales": sorted(df["canal"].unique().tolist()),
         "zonas":   sorted(df["zona"].unique().tolist()),
