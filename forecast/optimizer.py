@@ -26,10 +26,17 @@ def optimizar_plan(ordenes_mrp, sku_params, lineas, forecasts,
     if not skus or not lins:
         return ordenes_mrp, {"status":"SIN_DATOS","optimizado":False}
 
-    fc   = _forecast_map(forecasts, skus, sems, sku_params)
-    ap   = _aprobadas_map(entradas_fijas, skus, sku_params)
-    lok  = _lineas_por_sku(sku_params, lins, skus)  # {sku → [{linea, t_cambio_hrs, preferida}]}
+    # Solo optimizar SKUs de tipo PRODUCCION — importación/maquila no usan líneas
+    skus_prod = [k for k in skus
+                 if getattr(sku_params[k], 'tipo', 'PRODUCCION').upper() == 'PRODUCCION']
+    skus_imp  = [k for k in skus if k not in skus_prod]
+    logger.info(f"[Optimizer] SKUs produccion: {len(skus_prod)} | importacion/maquila: {len(skus_imp)}")
+
+    fc   = _forecast_map(forecasts, skus_prod, sems, sku_params)
+    ap   = _aprobadas_map(entradas_fijas, skus_prod, sku_params)
+    lok  = _lineas_por_sku(sku_params, lins, skus_prod)
     urg  = _urgencia(ordenes_mrp, hoy)
+    skus = skus_prod  # el resto del modelo solo ve SKUs de produccion
 
     model = cp_model.CpModel()
     BIG   = 100_000_000
@@ -264,6 +271,13 @@ def _extraer(solver, ordenes_mrp, prod, asig, stk,
         {**o,'optimizado':False,'motivo_optimizacion':'OF aprobada — fija'}
         for o in ordenes_mrp if o.get('aprobada')
     ]
+    # Incluir órdenes de importación/maquila del MRP sin cambios
+    skus_no_prod = [k for k in sku_params
+                    if getattr(sku_params[k],'tipo','PRODUCCION').upper() != 'PRODUCCION']
+    for o in ordenes_mrp:
+        if not o.get('aprobada') and o.get('sku') in skus_no_prod:
+            resultado.append({**o,'optimizado':False,
+                              'motivo_optimizacion':'Importacion/Maquila — sin optimizar'})
     for s in sems:
         for k in skus:
             p    = sku_params[k]
