@@ -10,7 +10,13 @@ Uso:
 import sys
 import math
 import openpyxl
-from db_mrp import crear_tablas_params, upsert_linea, upsert_sku_params
+from db_mrp import (
+    crear_tablas_params,
+    upsert_linea,
+    upsert_sku_params,
+    upsert_sku_linea,
+    borrar_todas_sku_lineas,
+)
 
 EXCEL_PATH = sys.argv[1] if len(sys.argv) > 1 else "/app/data/Traverso_Parametros_MRP.xlsx"
 
@@ -89,16 +95,19 @@ def migrar():
         # Mapear nombre de línea a código
         linea_nombre = _str(row[10]).lower()
         linea_cod = ""
-        for nombre_key, cod_val in LINEA_NOMBRE_A_CODIGO.items():
-            if linea_nombre in nombre_key or nombre_key in linea_nombre:
-                linea_cod = cod_val
-                break
-        # Fallback por palabras clave
-        if not linea_cod:
-            if "liquid" in linea_nombre or "limon" in linea_nombre or "vinagre" in linea_nombre:
-                linea_cod = "L001"
-            elif "salsa" in linea_nombre:
-                linea_cod = "S001"
+        if linea_nombre:  # solo si el Excel especifica algo
+            for nombre_key, cod_val in LINEA_NOMBRE_A_CODIGO.items():
+                if linea_nombre in nombre_key or nombre_key in linea_nombre:
+                    linea_cod = cod_val
+                    break
+            # Fallback por palabras clave SOLO si hay nombre de línea pero no match exacto
+            if not linea_cod:
+                if "liquid" in linea_nombre or "limon" in linea_nombre or "vinagre" in linea_nombre:
+                    linea_cod = "L001"
+                elif "salsa" in linea_nombre:
+                    linea_cod = "S001"
+        # NOTA: si linea_nombre está vacío (típico en IMPORTACION), linea_cod queda en ""
+        # — antes este caso caía en el fallback "liquid/vinagre/limon" y asignaba L001 mal.
 
         params = {
             "sku":             sku,
@@ -120,6 +129,54 @@ def migrar():
         n_skus += 1
 
     print(f"→ {n_skus} SKUs migrados")
+
+    # ── Migrar SKU_LINEA (pares SKU ↔ Línea con t_cambio y factor_velocidad) ──
+    # Estrategia: borrar todos los pares y re-insertar desde el Excel (fuente
+    # de verdad). Así, si en el Excel se eliminó un par, también se elimina en BD.
+    if 'SKU_LINEA' in wb.sheetnames:
+        ws_sl = wb['SKU_LINEA']
+        rows_sl = list(ws_sl.iter_rows(min_row=4, values_only=True))
+
+        # Limpieza previa: borrar todos los registros antes de re-insertar
+        borrar_todas_sku_lineas()
+
+        n_sku_lineas = 0
+        for row in rows_sl:
+            sku    = _str(row[0])      # col A: SKU
+            linea  = _str(row[2])      # col C: Código Línea
+            t_camb = _float(row[4], 0) # col E: T. Cambio Batch (hrs)
+            pref_s = _str(row[5], "N").upper()  # col F: Línea Preferida (S/N)
+            factor = _float(row[6], 1.0)        # col G: Factor_Velocidad
+
+            # Filtrar filas vacías o de notas
+            if not sku or not sku[0].isdigit():
+                continue
+            if not linea:
+                print(f"  ⚠ SKU_LINEA fila ignorada (linea vacía): sku={sku}")
+                continue
+            if factor <= 0:
+                print(f"  ⚠ factor_velocidad inválido para {sku}/{linea}, usando 1.0")
+                factor = 1.0
+
+            preferida = (pref_s == "S")
+
+            rec = {
+                "sku":              sku,
+                "linea":            linea,
+                "t_cambio_hrs":     t_camb,
+                "preferida":        preferida,
+                "factor_velocidad": factor,
+            }
+            upsert_sku_linea(rec)
+            flag = " ★" if preferida else "  "
+            warn = "  ⚠" if factor != 1.0 else ""
+            print(f"  {flag} {sku} → {linea} | t_camb={t_camb}h | factor={factor}{warn}")
+            n_sku_lineas += 1
+
+        print(f"→ {n_sku_lineas} pares SKU-Línea migrados")
+    else:
+        print("⚠ Pestaña SKU_LINEA no encontrada en el Excel — paso saltado")
+
     print("\n✅ Migración completada exitosamente")
 
 if __name__ == "__main__":

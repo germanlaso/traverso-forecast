@@ -314,10 +314,12 @@ def crear_tablas_params():
             );
 
             CREATE TABLE IF NOT EXISTS mrp_sku_lineas (
-                id              SERIAL PRIMARY KEY,
-                sku             VARCHAR(30),
-                linea           VARCHAR(20),
-                preferida       BOOLEAN     DEFAULT FALSE,
+                id               SERIAL PRIMARY KEY,
+                sku              VARCHAR(30),
+                linea            VARCHAR(20),
+                preferida        BOOLEAN     DEFAULT FALSE,
+                t_cambio_hrs     FLOAT       NOT NULL DEFAULT 0.0,
+                factor_velocidad FLOAT       NOT NULL DEFAULT 1.0,
                 UNIQUE(sku, linea)
             );
         """))
@@ -342,6 +344,33 @@ def upsert_linea(linea: dict):
                 activa         = EXCLUDED.activa,
                 updated_at     = NOW()
         """), linea)
+        session.commit()
+
+
+def upsert_sku_linea(rec: dict):
+    """Inserta o actualiza un registro de mrp_sku_lineas (par SKU-Línea).
+
+    Espera dict con: sku, linea, t_cambio_hrs, preferida, factor_velocidad
+    """
+    with get_session() as session:
+        session.execute(text("""
+            INSERT INTO mrp_sku_lineas
+                (sku, linea, t_cambio_hrs, preferida, factor_velocidad)
+            VALUES
+                (:sku, :linea, :t_cambio_hrs, :preferida, :factor_velocidad)
+            ON CONFLICT (sku, linea) DO UPDATE SET
+                t_cambio_hrs     = EXCLUDED.t_cambio_hrs,
+                preferida        = EXCLUDED.preferida,
+                factor_velocidad = EXCLUDED.factor_velocidad
+        """), rec)
+        session.commit()
+
+
+def borrar_todas_sku_lineas():
+    """Borra todos los registros de mrp_sku_lineas. Usado por migrate_params.py
+    antes de re-importar para limpiar pares que ya no existan en el Excel."""
+    with get_session() as session:
+        session.execute(text("DELETE FROM mrp_sku_lineas"))
         session.commit()
 
 
@@ -426,15 +455,18 @@ def update_linea(codigo: str, campos: dict) -> dict:
 
 
 def get_all_sku_lineas() -> list:
-    """Retorna todos los registros de mrp_sku_lineas (SKU → Linea con t_cambio_hrs)."""
+    """Retorna todos los registros de mrp_sku_lineas (SKU → Linea con t_cambio_hrs
+    y factor_velocidad)."""
     from sqlalchemy import text as _text
     with get_session() as session:
         result = session.execute(_text(
-            "SELECT sku, linea, t_cambio_hrs, preferida FROM mrp_sku_lineas ORDER BY sku, linea"
+            "SELECT sku, linea, t_cambio_hrs, preferida, factor_velocidad "
+            "FROM mrp_sku_lineas ORDER BY sku, linea"
         ))
         rows = result.fetchall()
         return [
             {"sku": str(r[0]), "linea": str(r[1]),
-             "t_cambio_hrs": float(r[2] or 0), "preferida": bool(r[3])}
+             "t_cambio_hrs": float(r[2] or 0), "preferida": bool(r[3]),
+             "factor_velocidad": float(r[4] or 1.0)}
             for r in rows
         ]

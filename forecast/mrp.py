@@ -53,6 +53,7 @@ class SKULinea:
     linea: str
     t_cambio_hrs: float
     preferida: bool
+    factor_velocidad: float = 1.0
 
 
 @dataclass
@@ -103,7 +104,7 @@ def load_params_from_db():
     Carga parámetros MRP desde PostgreSQL.
     Retorna (sku_params, lineas, sku_lineas).
     """
-    from db_mrp import get_all_lineas, get_all_sku_params
+    from db_mrp import get_all_lineas, get_all_sku_params, get_all_sku_lineas
 
     lineas = {}
     for row in get_all_lineas():
@@ -139,7 +140,17 @@ def load_params_from_db():
         if linea_pref and linea_pref in lineas:
             sku_params[sku].linea_preferida = linea_pref
 
+    # FIX v1.2: leer mrp_sku_lineas desde la BD para soportar múltiples líneas
+    # por SKU con t_cambio diferenciado y factor_velocidad. Antes esto retornaba [].
     sku_lineas = []
+    for row in get_all_sku_lineas():
+        sku_lineas.append(SKULinea(
+            sku              = str(row["sku"]),
+            linea            = str(row["linea"]),
+            t_cambio_hrs     = float(row.get("t_cambio_hrs", 0) or 0),
+            preferida        = bool(row.get("preferida", False)),
+            factor_velocidad = float(row.get("factor_velocidad", 1.0) or 1.0),
+        ))
     return sku_params, lineas, sku_lineas
 
 
@@ -265,6 +276,8 @@ def load_params_from_excel(path: str):
             col_map3[col] = "t_cambio_hrs"
         elif "preferida" in c:
             col_map3[col] = "preferida"
+        elif "factor" in c:
+            col_map3[col] = "factor_velocidad"
 
     df_sl = df_sl.rename(columns=col_map3)
     sku_lineas = []
@@ -274,12 +287,17 @@ def load_params_from_excel(path: str):
         df_sl["sku"] = df_sl["sku"].astype(str).str.strip()
         for _, row in df_sl.iterrows():
             try:
+                fv_raw = row.get("factor_velocidad", 1.0)
+                fv = float(fv_raw) if fv_raw is not None and not (isinstance(fv_raw, float) and pd.isna(fv_raw)) else 1.0
+                if fv <= 0:
+                    fv = 1.0  # protección: factor inválido → 1.0
                 sku_lineas.append(
                     SKULinea(
                         sku=row["sku"],
                         linea=str(row["linea"]).strip(),
                         t_cambio_hrs=float(row.get("t_cambio_hrs", 0) or 0),
                         preferida=str(row.get("preferida", "N")).upper().strip() == "S",
+                        factor_velocidad=fv,
                     )
                 )
             except Exception as e:

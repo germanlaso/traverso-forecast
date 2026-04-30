@@ -361,9 +361,9 @@ def generar_plan(req: PlanRequest = None):
         if req is None:
             req = PlanRequest()
 
-        import importlib
+        # v1.2: Quitado importlib.reload(_mrp). Causaba que se cargara el .pyc viejo
+        # incluso después de cambios en mrp.py. Documentado en ESTADO_TECNICO_PROYECTO.md.
         import mrp as _mrp
-        importlib.reload(_mrp)
 
         # Parámetros MRP
         # Cargar parámetros desde PostgreSQL (fallback a Excel si BD vacía)
@@ -476,6 +476,53 @@ def generar_plan(req: PlanRequest = None):
                 )
                 logger.info(f"[Plan] OR-Tools: {diag_opt.get('status')} "
                             f"t={diag_opt.get('tiempo_ms')}ms")
+
+                # v1.2: el optimizer consumió las OFs aprobadas como entradas internas
+                # del modelo, pero el frontend igual necesita verlas en la lista.
+                # Las inyectamos como filas adicionales con aprobada=True.
+                from datetime import date as _date_helper, timedelta as _td_helper
+                for sku_ap, lst in entradas_fijas.items():
+                    sp_ap = sku_params.get(sku_ap)
+                    upc_ap = getattr(sp_ap, "unidades_por_caja", 1) if sp_ap else 1
+                    lt_ap = getattr(sp_ap, "lead_time_semanas", 1) if sp_ap else 1
+                    desc_ap = getattr(sp_ap, "descripcion", "") if sp_ap else ""
+                    tipo_ap = getattr(sp_ap, "tipo", "PRODUCCION") if sp_ap else "PRODUCCION"
+                    for ent in lst:
+                        if not ent.get("aprobada"):
+                            continue
+                        fer_iso = str(ent.get("fecha_entrada", ""))[:10]
+                        if not fer_iso:
+                            continue
+                        try:
+                            f_ent = _date_helper.fromisoformat(fer_iso)
+                        except ValueError:
+                            continue
+                        # Calcular fecha_lanzamiento aproximada: entrada - lead_time
+                        f_lan = f_ent - _td_helper(days=int(round(lt_ap * 7)))
+                        cj_ap = int(round(float(ent.get("cantidad_cajas", 0) or 0)))
+                        ordenes.append({
+                            "sku": sku_ap,
+                            "descripcion": desc_ap,
+                            "tipo": tipo_ap,
+                            "semana_necesidad": ent.get("semana_necesidad", "") or fer_iso,
+                            "semana_emision": f_lan.isoformat(),
+                            "fecha_lanzamiento": f_lan.isoformat(),
+                            "fecha_entrada_real": fer_iso,
+                            "cantidad_cajas": cj_ap,
+                            "cantidad_unidades": cj_ap * upc_ap,
+                            "linea": getattr(sp_ap, "linea_preferida", None) if sp_ap else None,
+                            "motivo": "OF aprobada",
+                            "alerta": None,
+                            "tiene_alerta": False,
+                            "stock_inicial_cajas": 0,
+                            "stock_final_cajas": 0,
+                            "forecast_cajas": 0,
+                            "ss_cajas": 0,
+                            "lead_time_sem": lt_ap,
+                            "u_por_caja": upc_ap,
+                            "aprobada": True,
+                            "numero_of": ent.get("numero_of", ""),
+                        })
             except Exception as e_opt:
                 logger.error(f"[Plan] Error OR-Tools: {e_opt} — devuelto plan MRP")
                 diag_opt = {"optimizado": False, "error": str(e_opt)}
