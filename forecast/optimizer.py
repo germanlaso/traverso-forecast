@@ -543,6 +543,9 @@ def _post_procesar(
                     continue
                 cant_u = cajas_v * upc
                 paga_setup = bool(solver.Value(m.inicio[(d, s, l)]))
+                # setup_u[(s,l)] ya está cacheado como int(t_cambio_hrs * vel)
+                # (sin escalar por factor_velocidad — regla 5 v1.2)
+                setup_u_val = m.setup_u.get((s, l), 0) if paga_setup else 0
                 ofts.append({
                     "sku": s,
                     "linea": l,
@@ -552,6 +555,7 @@ def _post_procesar(
                     "cantidad_unidades": cant_u,
                     "u_por_caja": upc,
                     "paga_setup": paga_setup,
+                    "setup_unidades": setup_u_val,
                     "aprobada": False,
                     "numero_of": None,
                     "motivo": "OFT",
@@ -723,6 +727,7 @@ def optimizar_plan(
             if o_dict.get("semana_necesidad"):
                 o_dict["fecha_entrada_real"] = _a_lunes_iso(o_dict["semana_necesidad"])
             o_dict["paga_setup"] = False
+            o_dict["setup_unidades"] = 0
             ordenes_importacion.append(o_dict)
 
     # ─── 2. Traducir parámetros legacy → formato rich v1.2 ───────────────────
@@ -904,6 +909,7 @@ def optimizar_plan(
             "tiene_alerta": False,
             "lead_time_sem": float(_attr(sp, "lead_time_semanas", 1)) if sp else 1.0,
             "paga_setup": oft["paga_setup"],
+            "setup_unidades": oft.get("setup_unidades", 0),
             "aprobada": False,
             "numero_of": None,
             "u_por_caja": upc,
@@ -1053,7 +1059,7 @@ if __name__ == "__main__":
 
     print(f"\nOFTs generadas ({len(resultado['ofts'])}):")
     for o in resultado["ofts"][:10]:
-        setup_str = " [SETUP]" if o["paga_setup"] else ""
+        setup_str = f" [SETUP {o.get('setup_unidades', 0)} u]" if o["paga_setup"] else ""
         print(f"  {o['fecha_lanzamiento']}  {o['sku']:10s} → {o['linea']}: "
               f"{o['cantidad_cajas']:>5d} cj ({o['cantidad_unidades']:>7d} u){setup_str}")
 

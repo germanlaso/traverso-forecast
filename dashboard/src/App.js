@@ -187,7 +187,7 @@ export default function App() {
   const [plan, setPlan] = useState(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(13);
-  const [planOptimizar, setPlanOptimizar] = useState(false);
+  const [planOptimizar, setPlanOptimizar] = useState(true);
   // Anchos iniciales columnas tabla plan (en px): N°Orden SKU Desc Tipo F.Entrada F.Lanzam Cajas Línea Alerta Acciones
   const { widths: colWidths, onMouseDown: onColDrag } = useResizableColumns(
     [120, 90, 180, 55, 90, 100, 70, 55, 160, 80]
@@ -269,6 +269,27 @@ export default function App() {
     }
   };
 
+  // ── Auto-trigger del plan ──────────────────────────────────────────────────
+  // La primera vez que el usuario entra a una pestaña que necesita el plan
+  // (Plan, Stock, Detalle), se dispara runPlan() automáticamente. Esto evita
+  // que los componentes hijos hagan su propio fetch a /plan (que generaría
+  // correlativos OFT distintos) y que el usuario olvide generar el plan.
+  // Mantenemos runPlan en un ref para no incluirlo en deps del effect.
+  const runPlanRef = useRef(runPlan);
+  useEffect(() => { runPlanRef.current = runPlan; });
+
+  useEffect(() => {
+    const tabsNeedingPlan = ['plan', 'stock', 'detalle'];
+    if (
+      tabsNeedingPlan.includes(activeTab) &&
+      plan === null &&
+      !planLoading &&
+      !error.startsWith('Error plan:')   // evitar loop si la última corrida falló
+    ) {
+      runPlanRef.current();
+    }
+  }, [activeTab, plan, planLoading, error]);
+
   const refreshStock = async () => {
     setStockRefreshing(true); setError('');
     try {
@@ -312,8 +333,10 @@ export default function App() {
     const aprobada = aprobadaMap[ordenKey(orden)];
     setAprobForm({
       cantidad_real_cj:       aprobada?.cantidad_real_cj    ?? orden.cantidad_cajas,
-      fecha_lanzamiento_real: aprobada?.fecha_lanzamiento_real ?? orden.semana_emision,
-      fecha_entrada_real:     aprobada?.fecha_entrada_real    ?? orden.semana_necesidad,
+      // v1.2: prefill con la fecha exacta del optimizador (día), no el agrupador semanal.
+      // Si la orden viene de una respuesta vieja sin fecha_*, cae a semana_*.
+      fecha_lanzamiento_real: aprobada?.fecha_lanzamiento_real ?? orden.fecha_lanzamiento ?? orden.semana_emision,
+      fecha_entrada_real:     aprobada?.fecha_entrada_real    ?? orden.fecha_entrada_real ?? orden.semana_necesidad,
       responsable:            aprobada?.responsable ?? '',
       comentario:             aprobada?.comentario  ?? '',
     });
@@ -344,8 +367,10 @@ export default function App() {
         fecha_entrada_real:     aprobForm.fecha_entrada_real     || '',
       });
       setOrdenesAprobadas(prev => {
-        const key = aprobData.key;
-        return [...prev.filter(a => a.key !== key), aprobData];
+        // Dedup por numero_of (PK estable). Si la orden ya estaba aprobada,
+        // la reemplaza; si es nueva, la agrega.
+        const numero = aprobData.numero_of;
+        return [...prev.filter(a => a.numero_of !== numero), aprobData];
       });
       cerrarModal();
     } catch(e) {
@@ -373,8 +398,11 @@ export default function App() {
   const mapeType = !mapeOk ? 'warn' : metrics.mape < 10 ? 'ok' : metrics.mape < 20 ? 'warn' : 'error';
   const todayStr = new Date().toISOString().slice(0, 10);
   const selectedSku = skus.find(s => s.sku === selSku);
-  const ordenKey = (o) => `${o.sku}__${o.semana_necesidad}__${o.semana_emision}`;
-  const aprobadaMap = Object.fromEntries(ordenesAprobadas.map(a => [a.key, a]));
+  // v1.2: match por numero_of (PK estable en mrp_aprobaciones).
+  // Antes: triple `sku__sem_nec__sem_emi` que se rompía si el optimizer
+  // recalculaba semana_emision/semana_necesidad entre corridas.
+  const ordenKey = (o) => o.numero_of;
+  const aprobadaMap = Object.fromEntries(ordenesAprobadas.map(a => [a.numero_of, a]));
   const tipoColor = (tipo) => tipo==='PRODUCCION' ? {bg:C.tealLt,color:C.teal} : tipo==='IMPORTACION' ? {bg:C.purpleLt,color:C.purple} : {bg:C.amberLt,color:C.amber};
 
   return (
@@ -588,13 +616,18 @@ export default function App() {
                 <button style={s.btnPrimary} onClick={runPlan} disabled={planLoading}>
                   {planLoading ? (planOptimizar ? '⚙ Optimizando...' : 'Calculando...') : '▶ Generar plan'}
                 </button>
-                <label style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',
+                <label style={{display:'flex',alignItems:'center',gap:6,
+                  cursor:planLoading?'not-allowed':'pointer',
+                  opacity:planLoading?0.55:1,
                   fontSize:12,color:planOptimizar?'#1D9E75':'#6B6A66',fontWeight:planOptimizar?'bold':'normal',
                   background:planOptimizar?'#E1F5EE':'#F1EFE8',borderRadius:7,padding:'6px 12px',
-                  border:`1px solid ${planOptimizar?'#1D9E75':'#D3D1C7'}`,userSelect:'none'}}>
+                  border:`1px solid ${planOptimizar?'#1D9E75':'#D3D1C7'}`,userSelect:'none'}}
+                  title={planLoading?'Espera a que termine de generar para cambiar el modo':''}>
                   <input type='checkbox' checked={planOptimizar}
+                    disabled={planLoading}
                     onChange={e=>setPlanOptimizar(e.target.checked)}
-                    style={{accentColor:'#1D9E75',width:14,height:14}}/>
+                    style={{accentColor:'#1D9E75',width:14,height:14,
+                            cursor:planLoading?'not-allowed':'pointer'}}/>
                   ⚙ OR-Tools
                 </label>
               </div>
@@ -679,14 +712,22 @@ export default function App() {
                             <td style={{padding:'5px 10px'}}><span style={{fontSize:10,fontWeight:700,padding:'2px 6px',borderRadius:4,background:tc.bg,color:tc.color}}>{o.tipo==='PRODUCCION'?'PROD':o.tipo==='IMPORTACION'?'IMP':'MAQ'}</span></td>
                             <td style={{padding:'5px 10px',color:C.textMuted}}>
                               {(()=>{
-                                if(aprobada?.fecha_entrada_real) return <>{aprobada.fecha_entrada_real}{aprobada.fecha_entrada_real!==o.semana_necesidad&&<span style={{fontSize:9,color:C.amber,marginLeft:3}} title={'MRP: '+o.semana_necesidad}>📅</span>}</>;
+                                if(aprobada?.fecha_entrada_real) return <>{aprobada.fecha_entrada_real}{aprobada.fecha_entrada_real!==o.fecha_entrada_real&&<span style={{fontSize:9,color:C.amber,marginLeft:3}} title={'MRP: '+(o.fecha_entrada_real||o.semana_necesidad)}>📅</span>}</>;
+                                // Backend ya entrega fecha_entrada_real (día exacto) en v1.2
+                                if(o.fecha_entrada_real) return o.fecha_entrada_real;
+                                // Fallback: lead-time desde semana_emision (compat con respuestas viejas)
                                 const ltD=Math.round((o.lead_time_sem??1)*7);
                                 const d=new Date((o.semana_emision||o.semana_necesidad)+'T12:00:00');
                                 d.setDate(d.getDate()+ltD);
                                 return d.toISOString().slice(0,10);
                               })()}
                             </td>
-                            <td style={{padding:'5px 10px',fontWeight:o.tiene_alerta?700:400,color:o.tiene_alerta?C.danger:C.text}}>{o.tiene_alerta?'🔴 ':''}{o.semana_emision}</td>
+                            <td style={{padding:'5px 10px',fontWeight:o.tiene_alerta?700:400,color:o.tiene_alerta?C.danger:C.text}}>
+                              {o.tiene_alerta?'🔴 ':''}
+                              {/* v1.2: backend entrega fecha_lanzamiento al día exacto.
+                                  semana_emision es solo el agrupador semanal (domingo). */}
+                              {o.fecha_lanzamiento || o.semana_emision}
+                            </td>
                             <td style={{padding:'5px 10px',fontWeight:700,color:aprobada?C.tealMid:C.teal}}
                               title={modificada ? `MRP sugería ${o.cantidad_cajas.toLocaleString('es-CL')} cj` : ''}>
                               {cantMostrar.toLocaleString('es-CL')}
@@ -760,8 +801,8 @@ export default function App() {
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12,padding:'10px 14px',background:C.grayLt,borderRadius:8,fontSize:12}}>
                 <span style={{color:C.textMuted}}>Tipo: <strong style={{color:C.text}}>{modalOrden.tipo}</strong></span>
                 <span style={{color:C.textMuted}}>Línea: <strong style={{color:C.text}}>{modalOrden.linea||'—'}</strong></span>
-                <span style={{color:C.textMuted}}>Fecha lanzamiento: <strong style={{color:C.text}}>{modalOrden.semana_emision}</strong></span>
-                <span style={{color:C.textMuted}}>Fecha entrada stock: <strong style={{color:C.text}}>{modalOrden.semana_necesidad}</strong></span>
+                <span style={{color:C.textMuted}}>Fecha lanzamiento: <strong style={{color:C.text}}>{modalOrden.fecha_lanzamiento || modalOrden.semana_emision}</strong></span>
+                <span style={{color:C.textMuted}}>Fecha entrada stock: <strong style={{color:C.text}}>{modalOrden.fecha_entrada_real || modalOrden.semana_necesidad}</strong></span>
                 <span style={{color:C.textMuted}}>Sugerido MRP: <strong style={{color:C.teal}}>{modalOrden.cantidad_cajas?.toLocaleString('es-CL')} cj</strong></span>
                 <span style={{color:C.textMuted}}>({modalOrden.cantidad_unidades?.toLocaleString('es-CL')} u.)</span>
               </div>
@@ -790,8 +831,8 @@ export default function App() {
                     onChange={e => setAprobForm({...aprobForm, fecha_lanzamiento_real: e.target.value})}
                     style={{width:'100%',fontSize:13,padding:'6px 10px',borderRadius:7,border:`0.5px solid ${C.border}`,outline:'none'}}
                   />
-                  {aprobForm.fecha_lanzamiento_real !== modalOrden.semana_emision && (
-                    <div style={{fontSize:10,color:C.amber,marginTop:2}}>MRP: {modalOrden.semana_emision}</div>
+                  {aprobForm.fecha_lanzamiento_real !== (modalOrden.fecha_lanzamiento || modalOrden.semana_emision) && (
+                    <div style={{fontSize:10,color:C.amber,marginTop:2}}>Sugerido: {modalOrden.fecha_lanzamiento || modalOrden.semana_emision}</div>
                   )}
                 </div>
                 <div>
@@ -803,8 +844,8 @@ export default function App() {
                     onChange={e => setAprobForm({...aprobForm, fecha_entrada_real: e.target.value})}
                     style={{width:'100%',fontSize:13,padding:'6px 10px',borderRadius:7,border:`1.5px solid ${C.teal}`,fontWeight:700,outline:'none'}}
                   />
-                  {aprobForm.fecha_entrada_real !== modalOrden.semana_necesidad && (
-                    <div style={{fontSize:10,color:C.amber,marginTop:2}}>MRP: {modalOrden.semana_necesidad}</div>
+                  {aprobForm.fecha_entrada_real !== (modalOrden.fecha_entrada_real || modalOrden.semana_necesidad) && (
+                    <div style={{fontSize:10,color:C.amber,marginTop:2}}>Sugerido: {modalOrden.fecha_entrada_real || modalOrden.semana_necesidad}</div>
                   )}
                 </div>
               </div>
@@ -839,11 +880,19 @@ export default function App() {
         )}
 
         {/* ══ STOCK PROYECCIÓN TAB ══ */}
-        {activeTab === 'stock' && <StockProyeccion key={`stock-${stockSku}-${stockNav}`} initialSku={stockSku} planExterno={plan} />}
+        {activeTab === 'stock' && <StockProyeccion
+          key={`stock-${stockSku}-${stockNav}`}
+          initialSku={stockSku}
+          planExterno={plan}
+          planLoading={planLoading}
+          onSolicitarPlan={() => runPlan()}
+        />}
         {activeTab === 'detalle' && <DetalleProduccion
           ordenesPlan={plan?.ordenes ?? []}
           onAprobar={(o) => { abrirModal(o); setActiveTab('plan'); }}
           onPlanChanged={() => runPlan()}
+          planLoading={planLoading}
+          onSolicitarPlan={() => runPlan()}
         />}
       </div>
     </div>

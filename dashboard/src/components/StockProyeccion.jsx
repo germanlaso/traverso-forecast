@@ -60,28 +60,32 @@ function getSemanaActual() {
 function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenesAprobadas = []) {
   const semanaActual = getSemanaActual();
 
-  // Mapa de aprobadas — dos índices para lookup flexible
+  // Mapa de aprobadas — index primario por numero_of (PK estable en BD).
+  // Índices secundarios por compat: si una orden vieja no trae numero_of
+  // o el plan trae un numero_of que difiere, podemos caer al match por SKU.
   const aprobMap = {};
   ordenesAprobadas.forEach(a => {
-    // Índice 1: sku+semana_necesidad (para buscar por orden del plan)
+    if (a.numero_of) aprobMap[a.numero_of] = a;
+    // Fallback: índice compuesto por sku+semana_necesidad (legacy)
     const k1 = `${a.sku}__${fmtD(a.semana_necesidad)}`;
-    aprobMap[k1] = a;
-    // Índice 2: key completa sku+semana_necesidad+semana_emision
-    if (a.key) aprobMap[a.key] = a;
+    if (!aprobMap[k1]) aprobMap[k1] = a;
   });
 
-  // Construir entradas por semana aplicando la regla:
-  // semana_emision > hoy → asumir como aprobada (cantidad MRP) — aún hay tiempo de lanzar
-  // semana_emision <= hoy + sin aprobar → NO incluir — ya debió lanzarse y no se hizo
-  // Aprobada explícitamente → incluir en fecha_entrada_real (puede diferir de semana_necesidad)
+  // Construir entradas por semana del forecast.
+  // Reglas:
+  //   - aprobada → entrada real (fecha y cantidad de la BD)
+  //   - no aprobada con lanzamiento futuro → asumir cantidad MRP
+  //   - no aprobada con lanzamiento <= hoy → NO incluir (ya debió lanzarse)
+  // v1.2: usamos fecha_lanzamiento / fecha_entrada_real (day exacto) cuando
+  // existen, agrupándolas al domingo de su semana para casar con f.ds del forecast.
   const entradasPorSemana = {};
   ordenesPlan.forEach(o => {
     const dsNecesidad = fmtD(o.semana_necesidad);
-    const dsEmision   = fmtD(o.semana_emision);
-    const aprobada    = aprobMap[`${o.sku}__${dsNecesidad}`];
+    // v1.2: lookup primario por numero_of estable; fallback al índice compuesto
+    const aprobada    = aprobMap[o.numero_of] || aprobMap[`${o.sku}__${dsNecesidad}`];
     let cantidad = 0;
     let fuente   = "";
-    let dsEntrada = dsNecesidad; // por defecto entrada en semana_necesidad
+    let dsEntrada = dsNecesidad; // default: domingo del agrupador
 
     if (aprobada) {
       // Usar cantidad y fecha reales de la aprobación
@@ -90,12 +94,20 @@ function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenes
       const fer = fmtD(aprobada.fecha_entrada_real ?? aprobada.semana_necesidad);
       dsEntrada = getSemana(fer) || dsNecesidad;
       fuente    = "aprobada";
-    } else if (dsEmision > semanaActual) {
-      // Lanzamiento futuro → asumir con cantidad MRP
-      cantidad = o.cantidad_cajas ?? 0;
-      fuente   = "asumida";
+    } else {
+      // No aprobada: ¿el lanzamiento aún está en el futuro?
+      // v1.2: usar fecha_lanzamiento exacta (día) si existe, sino el agrupador semanal
+      const lanzamiento = fmtD(o.fecha_lanzamiento || o.semana_emision);
+      const semLanz = lanzamiento ? (getSemana(lanzamiento) || fmtD(o.semana_emision)) : fmtD(o.semana_emision);
+      if (semLanz > semanaActual) {
+        cantidad = o.cantidad_cajas ?? 0;
+        fuente   = "asumida";
+        // Para entradas: si hay fecha_entrada_real day-exact, agruparla a su domingo
+        const fer = fmtD(o.fecha_entrada_real);
+        if (fer) dsEntrada = getSemana(fer) || dsNecesidad;
+      }
+      // si semLanz <= semanaActual y no aprobada → cantidad = 0 (no se incluye)
     }
-    // si dsEmision <= semanaActual y no aprobada → cantidad = 0 (no se incluye)
 
     if (cantidad > 0) {
       if (!entradasPorSemana[dsEntrada]) entradasPorSemana[dsEntrada] = [];
@@ -175,7 +187,12 @@ function KPI({ label, value, sub, color }) {
 }
 
 // ── Componente principal ───────────────────────────────────────────────────────
-export default function StockProyeccion({ initialSku = '', planExterno = null }) {
+export default function StockProyeccion({
+  initialSku = '',
+  planExterno = null,
+  planLoading = false,
+  onSolicitarPlan = null,
+}) {
   const [skuList,    setSkuList]    = useState([]);
   const [params,     setParams]     = useState(PARAMS_FALLBACK);
 
@@ -226,7 +243,7 @@ export default function StockProyeccion({ initialSku = '', planExterno = null })
       .catch(() => {});
   }, []);
 
-  // Cargar datos cuando cambia SKU u horizonte
+  // Cargar forecast cuando cambia SKU u horizonte (independiente del plan)
   useEffect(() => {
     if (!selSku) return;
     setLoading(true);
@@ -239,33 +256,38 @@ export default function StockProyeccion({ initialSku = '', planExterno = null })
       .then((a) => setOrdenesAprobadas(Array.isArray(a) ? a : []))
       .catch(() => {});
 
-    Promise.all([
-      fetch(`${API}/forecast`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sku: selSku, periods: horizonte + 4 }),
-      }).then((r) => { if (!r.ok) throw new Error(`Forecast error ${r.status}`); return r.json(); }),
-      planExterno
-        ? Promise.resolve({ ordenes: (planExterno.ordenes ?? []).filter(o => o.sku === selSku) })
-        : fetch(`${API}/plan`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ horizonte_semanas: horizonte, skus: [selSku] }),
-          }).then((r) => { if (!r.ok) throw new Error(`Plan error ${r.status}`); return r.json(); }),
-    ])
-      .then(([fc, plan]) => {
+    fetch(`${API}/forecast`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sku: selSku, periods: horizonte + 4 }),
+    })
+      .then((r) => { if (!r.ok) throw new Error(`Forecast error ${r.status}`); return r.json(); })
+      .then((fc) => {
         if (fc.detail) throw new Error(String(fc.detail));
         const fcFuturo = (fc.forecast ?? []).filter((f) => f.ds >= hoy).slice(0, horizonte);
         setForecast(fcFuturo);
-        setOrdenes(plan.ordenes ?? []);
-        // Stock inicial desde motivo de primera orden del SKU
-        const motivo = plan.ordenes?.[0]?.motivo ?? "";
-        const m = motivo.match(/Stock:([\d.]+)/);
-        setStockReal(m ? parseFloat(m[1]) : 0);
       })
-      .catch((e) => setError(e.message ?? "Error cargando datos"))
+      .catch((e) => setError(e.message ?? "Error cargando forecast"))
       .finally(() => setLoading(false));
-  }, [selSku, horizonte, planExterno]);
+  }, [selSku, horizonte]);
+
+  // Sincronizar órdenes con el plan que viene del padre (App.js es la única
+  // fuente de verdad de /plan: garantiza correlativos OFT consistentes entre
+  // pestañas). Si planExterno es null, el padre aún no generó el plan y el
+  // componente muestra un mensaje al usuario para que lo genere.
+  useEffect(() => {
+    if (!planExterno || !selSku) {
+      setOrdenes([]);
+      setStockReal(0);
+      return;
+    }
+    const ordenesSku = (planExterno.ordenes ?? []).filter(o => o.sku === selSku);
+    setOrdenes(ordenesSku);
+    // Stock inicial desde motivo de primera orden del SKU
+    const motivo = ordenesSku[0]?.motivo ?? "";
+    const m = motivo.match(/Stock:([\d.]+)/);
+    setStockReal(m ? parseFloat(m[1]) : 0);
+  }, [planExterno, selSku]);
 
   const p       = params[selSku] ?? {};
   const ssDias  = p.ss_dias ?? 10;
@@ -285,9 +307,13 @@ export default function StockProyeccion({ initialSku = '', planExterno = null })
       const tienePendiente = ordenes.some(o => {
         if (o.sku !== selSku) return false;
         const dsN = fmtD(o.semana_necesidad);
-        const dsE = fmtD(o.semana_emision);
-        const aprobada = aprobSku.find(a => fmtD(a.semana_necesidad) === dsN);
-        return dsN === r.ds && dsE <= semActualLocal && !aprobada;
+        // v1.2: usar fecha_lanzamiento exacta cuando exista
+        const lanzamiento = fmtD(o.fecha_lanzamiento || o.semana_emision);
+        const semLanz = lanzamiento ? (getSemana(lanzamiento) || fmtD(o.semana_emision)) : fmtD(o.semana_emision);
+        // Match primario por numero_of (PK estable); fallback por (sku, sem_nec)
+        const aprobada = aprobSku.find(a => a.numero_of === o.numero_of)
+                      || aprobSku.find(a => fmtD(a.semana_necesidad) === dsN);
+        return dsN === r.ds && semLanz <= semActualLocal && !aprobada;
       });
       return { ...r, tienePendiente };
     });
@@ -298,7 +324,10 @@ export default function StockProyeccion({ initialSku = '', planExterno = null })
   const nOrdenesProyeccion = useMemo(() => {
     return ordenes.filter(o => {
       const ds = fmtD(o.semana_necesidad);
-      return aprobSku.find(a => fmtD(a.semana_necesidad) === ds) || ds > semActual;
+      // Match primario por numero_of (PK estable); fallback por sku+sem_nec
+      const aprobadaMatch = aprobSku.find(a => a.numero_of === o.numero_of)
+                         || aprobSku.find(a => fmtD(a.semana_necesidad) === ds);
+      return aprobadaMatch || ds > semActual;
     }).length;
   }, [ordenes, aprobSku, semActual]);
 
@@ -365,6 +394,29 @@ export default function StockProyeccion({ initialSku = '', planExterno = null })
         <div style={{ background: C.redLt, border: `0.5px solid ${C.red}`, color: "#A32D2D",
           borderRadius: 7, padding: "8px 12px", fontSize: 12, marginBottom: 12 }}>
           {error}
+        </div>
+      )}
+
+      {/* Banner: plan no generado — red de seguridad */}
+      {!planExterno && (
+        <div style={{
+          background: C.amberLt, border: `0.5px solid ${C.amber}`, color: "#854F0B",
+          borderRadius: 7, padding: "10px 14px", fontSize: 12, marginBottom: 12,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+        }}>
+          <span>
+            {planLoading
+              ? "⏳ Generando plan de producción... la proyección de stock se actualizará al terminar."
+              : "⚠ No hay plan de producción generado. La proyección de stock no incluye órdenes futuras."}
+          </span>
+          {!planLoading && onSolicitarPlan && (
+            <button onClick={onSolicitarPlan}
+              style={{ fontSize: 12, padding: "6px 14px", borderRadius: 7, border: "none",
+                       background: C.amber, color: "#fff", cursor: "pointer", fontWeight: 700,
+                       whiteSpace: "nowrap" }}>
+              Generar plan
+            </button>
+          )}
         </div>
       )}
 

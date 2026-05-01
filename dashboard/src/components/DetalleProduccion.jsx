@@ -42,20 +42,39 @@ function CapBar({uso}){
     <div style={{height:6,width:`${pct*100}%`,background:color,borderRadius:3}}/></div>);
 }
 
-function OrdenBadge({orden,esPreferida,onClick}){
+function OrdenBadge({orden,esPreferida,estaAprobada,onClick}){
   const esDesborde=orden.esDesborde;
-  const esOFT=orden.esOFT;
+  // estaAprobada viene del aprobMap del padre (fuente de verdad: /ordenes/aprobadas).
+  // Usar esto en vez de orden.aprobada evita un parpadeo ámbar→verde mientras
+  // el plan se regenera tras aprobar (el plan tarda ~60s, las aprobadas son instantáneas).
+  const esOFT = estaAprobada !== undefined ? !estaAprobada : !orden.aprobada;
   const bg=esDesborde?"#FFF0F0":esOFT?C.amberLt:C.tealLt;
   const color=esDesborde?C.red:esOFT?C.amber:C.tealMid;
   const bord=esDesborde?C.red:esOFT?C.amber:C.teal;
+  // Tooltip multi-línea: SKU, descripción, cantidad y (si aplica) setup
+  const tooltipLines = [
+    `${orden.numero_of}`,
+    `${orden.sku} — ${orden.descripcion || ""}`,
+    `${fmtN(orden.cantidad_cajas || 0)} cj · ${fmtN(orden.uProduccion)} u (${fmtPct(orden.usoPct)})`,
+  ];
+  if (orden.paga_setup) {
+    tooltipLines.push(orden.setup_unidades
+      ? `⚙ Setup: ${fmtN(orden.setup_unidades)} u`
+      : `⚙ Paga setup`);
+  }
+  tooltipLines.push("", "Click para desplazar");
   return(
     <div onClick={onClick}
-      title={`Click para desplazar · ${orden.numero_of} · ${fmtN(orden.uProduccion)} u.`}
+      title={tooltipLines.join("\n")}
       style={{background:bg,border:`0.5px solid ${bord}`,borderRadius:4,
               padding:"3px 5px",marginBottom:2,cursor:"pointer",fontSize:9.5,color}}>
       <div style={{fontWeight:700,display:"flex",justifyContent:"space-between"}}>
         <span>{orden.numero_of}</span>
-        <span style={{fontSize:8.5,opacity:.8}}>{esDesborde?"↪":""}{!esPreferida?" Alt":""}</span>
+        <span style={{fontSize:8.5,opacity:.8}}>
+          {esDesborde?"↪":""}
+          {!esPreferida?" Alt":""}
+          {orden.paga_setup?" ⚙":""}
+        </span>
       </div>
       <div style={{fontSize:8.5,color:esDesborde?C.red:C.tealMid,marginTop:1}}>
         {fmtN(orden.uProduccion)} u · {fmtPct(orden.usoPct)}
@@ -65,7 +84,13 @@ function OrdenBadge({orden,esPreferida,onClick}){
 }
 
 function ModalDesplazar({orden,aprobacion,onGuardar,onCerrar}){
-  const fechaActual=String(aprobacion?.fecha_lanzamiento_real||orden?.semana_emision||"").slice(0,10);
+  // v1.2: prefill con la fecha exacta del optimizador (día), no el agrupador.
+  const fechaActual=String(
+    aprobacion?.fecha_lanzamiento_real
+    || orden?.fecha_lanzamiento
+    || orden?.semana_emision
+    || ""
+  ).slice(0,10);
   const [nuevaFecha,setNuevaFecha]=useState(fechaActual);
   const [guardando,setGuardando]=useState(false);
   if(!orden) return null;
@@ -76,12 +101,14 @@ function ModalDesplazar({orden,aprobacion,onGuardar,onCerrar}){
     try{
       await axios.post(`${API}/ordenes/aprobar`,{
         sku:orden.sku,descripcion:orden.descripcion,tipo:orden.tipo,
+        // semana_emision/semana_necesidad: claves de aprobación en BD — no tocar
         semana_emision:orden.semana_emision,semana_necesidad:orden.semana_necesidad,
         cantidad_sugerida_cj:orden.cantidad_cajas,cantidad_real_cj:aprobacion.cantidad_real_cj,
         u_por_caja:aprobacion.u_por_caja??1,responsable:aprobacion.responsable,
         comentario:aprobacion.comentario||"",linea:orden.linea||"",
         fecha_lanzamiento_real:nuevaFecha,
-        fecha_entrada_real:aprobacion.fecha_entrada_real||orden.semana_necesidad,
+        // Fallback en cascada: aprobada → backend day-exact → semana
+        fecha_entrada_real:aprobacion.fecha_entrada_real||orden.fecha_entrada_real||orden.semana_necesidad,
       });
       onGuardar();
     }catch(e){alert("Error: "+(e.response?.data?.detail||e.message));}
@@ -141,8 +168,19 @@ function ModalDesplazar({orden,aprobacion,onGuardar,onCerrar}){
 
 function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar}){
   const [cantReal,setCantReal]=useState(aprobacion?.cantidad_real_cj??orden?.cantidad_cajas??0);
-  const [fechaLanz,setFechaLanz]=useState(String(aprobacion?.fecha_lanzamiento_real||orden?.semana_emision||"").slice(0,10));
-  const [fechaEnt,setFechaEnt]=useState(String(aprobacion?.fecha_entrada_real||orden?.semana_necesidad||"").slice(0,10));
+  // v1.2: prefill con fechas exactas del optimizador
+  const [fechaLanz,setFechaLanz]=useState(String(
+    aprobacion?.fecha_lanzamiento_real
+    || orden?.fecha_lanzamiento
+    || orden?.semana_emision
+    || ""
+  ).slice(0,10));
+  const [fechaEnt,setFechaEnt]=useState(String(
+    aprobacion?.fecha_entrada_real
+    || orden?.fecha_entrada_real
+    || orden?.semana_necesidad
+    || ""
+  ).slice(0,10));
   const [comentario,setComentario]=useState(aprobacion?.comentario||"");
   const [guardando,setGuardando]=useState(false);
   const [cancelando,setCancelando]=useState(false);
@@ -233,72 +271,55 @@ function diasGlobalesDesde(fechaIni,nSemanas){
 }
 
 function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
+  // v1.2: cada OFT representa UN día de producción. Las cajas vienen ya
+  // dimensionadas por el optimizador para caber en la capacidad de ese día
+  // (junto con otros SKUs si hay multi-SKU intra-día). El frontend NO
+  // redistribuye: dibuja la OFT en su fecha_lanzamiento exacta.
   const capDia=linea.cap_u_semana/5;
   const mapa={};const capUsada={};
   diasExt.forEach(d=>{mapa[d.fecha]=[];capUsada[d.fecha]=0;});
-  // Incluir aprobadas Y OFTs (pendientes) en el grid
-  const todasOrdenes=ordenesLinea;
 
-  todasOrdenes.forEach(o=>{
-    const key=`${o.sku}__${o.semana_necesidad}__${o.semana_emision}`;
-    const aprobacion=aprobMap[key];
-    // Ajustar fechaIni al primer día hábil si cae en fin de semana o feriado
-    let _fechaIniRaw=String(aprobacion?.fecha_lanzamiento_real||o.semana_emision).slice(0,10);
-    let _dIni=new Date(_fechaIniRaw+"T12:00:00");
-    while(!esDiaHabil(_dIni.toISOString().slice(0,10))){_dIni.setDate(_dIni.getDate()+1);}
-    const fechaIni=_dIni.toISOString().slice(0,10);
+  ordenesLinea.forEach(o=>{
+    // v1.2: lookup por numero_of (estable). Si la orden está aprobada,
+    // la sub-OFTs de la misma corrida (mismo numero_of) reciben los
+    // datos de la única fila en mrp_aprobaciones.
+    const aprobacion=aprobMap[o.numero_of];
+
+    // Día de la OFT: backend (fecha_lanzamiento) > aprobación manual > fallback semanal
+    const fechaIni=String(
+      aprobacion?.fecha_lanzamiento_real
+      || o.fecha_lanzamiento
+      || o.semana_emision
+    ).slice(0,10);
+
+    // Solo dibujar si cae en la ventana visible
+    if(mapa[fechaIni]===undefined) return;
 
     const upj=params[o.sku]?.upj??1;
-    const capReal=Number(aprobacion?.cantidad_real_cj??o.cantidad_cajas);
-    let uRestantes=capReal*upj;
+    const cajasReales=Number(aprobacion?.cantidad_real_cj??o.cantidad_cajas);
+    const uProd=Math.round(cajasReales*upj);
+    const usoPctReal=uProd/capDia;
 
-    // Calcular los días exactos que ocupa esta orden desde su fechaIni
-    // Usar hasta 4 semanas desde fechaIni para encontrar todos los días necesarios
-    const diasOrden=diasGlobalesDesde(fechaIni,4);
-    const diasOcupados={}; // fecha → uProduccion
-
-    let cap_usada_local={};
-    let primerDia=true;
-    for(const dia of diasOrden){
-      if(uRestantes<=0) break;
-      // Usar capacidad de 1 día (sin compartir con otras órdenes para este pre-cálculo)
-      const uEnEste=Math.min(uRestantes,capDia);
-      diasOcupados[dia.fecha]=Math.round(uEnEste);
-      uRestantes-=uEnEste;
-      primerDia=false;
-    }
-
-    // Calcular último día de producción (para fecha de entrada ajustada)
-    const fechasOcupadas = Object.keys(diasOcupados).sort();
-    const ultimoDiaProd  = fechasOcupadas[fechasOcupadas.length - 1] || fechaIni;
-
-    // Fecha entrada = último día de producción + lead_time_sem semanas
-    const ltSem  = params[o.sku]?.lead_time_sem ?? 1;
-    const ltDias = ltSem * 7;
-    const dUltimo = new Date(ultimoDiaProd + "T12:00:00");
-    dUltimo.setDate(dUltimo.getDate() + ltDias);
-    const fechaEntradaCalc = dUltimo.toISOString().slice(0,10);
-
-    // Agregar solo los días visibles (en diasExt)
-    for(const [fecha,uProd] of Object.entries(diasOcupados)){
-      if(mapa[fecha]===undefined) continue;
-      const usoPctReal=uProd/capDia;
-      mapa[fecha].push({
-        ...o,
-        usoPct:Math.round(usoPctReal*100)/100,
-        esDesborde: fecha!==fechaIni,
-        uProduccion:uProd,
-        ultimoDiaProd,
-        fechaEntradaCalc,
-        esOFT: !o.aprobada,
-      });
-      capUsada[fecha]=(capUsada[fecha]||0)+usoPctReal;
-    }
+    mapa[fechaIni].push({
+      ...o,
+      usoPct:Math.round(usoPctReal*100)/100,
+      esDesborde:false,        // v1.2: el backend nunca desborda — la cap es por construcción
+      uProduccion:uProd,
+      ultimoDiaProd:fechaIni,  // mismo día (legacy: lo consume ModalDesplazar)
+      fechaEntradaCalc:o.fecha_entrada_real||o.semana_necesidad,
+    });
+    capUsada[fechaIni]=(capUsada[fechaIni]||0)+usoPctReal;
   });
   return{mapa,capUsada};
 }
 
-export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChanged}){
+export default function DetalleProduccion({
+  onAprobar,
+  ordenesPlan=[],
+  onPlanChanged,
+  planLoading=false,
+  onSolicitarPlan=null,
+}){
   const [semanaBase,setSemanaBase]=useState(getDomingoActual());
   const [lineas,setLineas]=useState([]);
   const [params,setParams]=useState({});
@@ -318,33 +339,40 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
       }).catch(e=>setError("Error cargando parámetros: "+(e.response?.data?.detail||e.message)));
   },[]);
 
-  // Usar plan externo si viene, sino fetch propio
+  // Sincronizar órdenes con el plan que viene del padre (App.js es la única
+  // fuente de verdad de /plan: garantiza correlativos OFT consistentes entre
+  // pestañas). Sin fallback de fetch propio.
   useEffect(()=>{
-    if(ordenesPlan && ordenesPlan.length > 0){
-      setOrdenes(ordenesPlan);
-      setLoading(false);
-    } else {
-      setLoading(true);setError("");
-      axios.post(`${API}/plan`,{horizonte_semanas:8})
-        .then(r=>setOrdenes(r.data.ordenes??[]))
-        .catch(e=>setError("Error plan: "+e.message))
-        .finally(()=>setLoading(false));
-    }
+    setOrdenes(ordenesPlan ?? []);
+    setLoading(false);
   },[ordenesPlan]);
 
   const recargar=useCallback(()=>{
     axios.get(`${API}/ordenes/aprobadas`).then(r=>setAprobadas(r.data??[]));
     if(onPlanChanged) onPlanChanged();
-    else axios.post(`${API}/plan`,{horizonte_semanas:8}).then(r=>setOrdenes(r.data.ordenes??[]));
   },[onPlanChanged]);
 
   const diasExt=useMemo(()=>diasDesde(semanaBase,2),[semanaBase]);
   const dias=useMemo(()=>diasExt.slice(0,7),[diasExt]);
-  const aprobMap=useMemo(()=>{const m={};aprobadas.forEach(a=>{m[a.key]=a;});return m;},[aprobadas]);
+  const aprobMap=useMemo(()=>{
+    // v1.2: indexar por numero_of (PK estable en mrp_aprobaciones).
+    // Si una corrida del optimizer dura varios días, todas sus sub-OFTs
+    // comparten numero_of → todas se pintan verdes con una sola aprobación.
+    const m={};aprobadas.forEach(a=>{m[a.numero_of]=a;});return m;
+  },[aprobadas]);
   const hoy=new Date().toISOString().slice(0,10);
   const ordenesProd=useMemo(()=>ordenes.filter(o=>o.tipo==="PRODUCCION"),[ordenes]);
   function getOrdenesLinea(linea){
-    return ordenesProd.filter(o=>o.linea===linea.codigo||params[o.sku]?.linea===linea.codigo);
+    // v1.2: el optimizer asigna línea explícitamente a toda OFT de PRODUCCION.
+    // Si o.linea viene vacío (orden manual sin asignar), recién entonces
+    // caemos a la línea preferida del SKU. El OR previo generaba doble dibujo:
+    // una OFT con linea=L002 también aparecía en L001 si su SKU tenía L001
+    // como preferida, inflando la grilla a >100% por suma duplicada.
+    return ordenesProd.filter(o => {
+      if (o.linea) return o.linea === linea.codigo;
+      // Fallback solo cuando o.linea está vacío
+      return params[o.sku]?.linea === linea.codigo;
+    });
   }
 
   const s={
@@ -372,6 +400,29 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
         onCancelarAprobacion={()=>{setModalEditar(null);recargar();}}
         onCerrar={()=>setModalEditar(null)}/>}
 
+      {/* Banner: plan no generado — red de seguridad */}
+      {(!ordenesPlan || ordenesPlan.length===0) && (
+        <div style={{
+          background:C.amberLt,border:`0.5px solid ${C.amber}`,color:"#854F0B",
+          borderRadius:7,padding:"10px 14px",fontSize:12,marginBottom:14,
+          display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,
+        }}>
+          <span>
+            {planLoading
+              ? "⏳ Generando plan de producción... el detalle por línea se actualizará al terminar."
+              : "⚠ No hay plan de producción generado. Las líneas se ven sin órdenes pendientes."}
+          </span>
+          {!planLoading && onSolicitarPlan && (
+            <button onClick={onSolicitarPlan}
+              style={{fontSize:12,padding:"6px 14px",borderRadius:7,border:"none",
+                      background:C.amber,color:"#fff",cursor:"pointer",fontWeight:700,
+                      whiteSpace:"nowrap"}}>
+              Generar plan
+            </button>
+          )}
+        </div>
+      )}
+
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
         <button onClick={()=>setSemanaBase(addSemanas(semanaBase,-1))}
           style={{fontSize:13,padding:"5px 12px",borderRadius:6,border:`0.5px solid ${C.border}`,background:"#fff",cursor:"pointer"}}>← Sem ant.</button>
@@ -392,21 +443,26 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
       {lineas.map(linea=>{
         const ordenesLinea=getOrdenesLinea(linea);
         const{mapa:ordenesXDia,capUsada}=distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea);
-        const pendientes=ordenesLinea.filter(o=>!aprobMap[`${o.sku}__${o.semana_necesidad}__${o.semana_emision}`]);
-        const aprobadas_lin=ordenesLinea.filter(o=>!!aprobMap[`${o.sku}__${o.semana_necesidad}__${o.semana_emision}`]);
+        const pendientes=ordenesLinea.filter(o=>!aprobMap[o.numero_of]);
+        const aprobadas_lin=ordenesLinea.filter(o=>!!aprobMap[o.numero_of]);
         // Fechas de la semana visible: dom→sáb
         const iniSem = semanaBase;                    // domingo
         const finSem = addDias(semanaBase, 6);        // sábado
         const finSemSig = addDias(semanaBase, 13);    // sábado de la semana siguiente
 
         const ordenesTabla = ordenesLinea.filter(o => {
-          const aprobada = aprobMap[`${o.sku}__${o.semana_necesidad}__${o.semana_emision}`];
-          const fechaLanz = String(aprobada?.fecha_lanzamiento_real || o.semana_emision).slice(0,10);
+          const aprobada = aprobMap[o.numero_of];
+          // v1.2: pivote es la fecha exacta del optimizador (día), no el agrupador semanal.
+          const fechaLanz = String(
+            aprobada?.fecha_lanzamiento_real
+            || o.fecha_lanzamiento
+            || o.semana_emision
+          ).slice(0,10);
           if (aprobada) {
             // Aprobadas: solo si su fecha de lanzamiento real cae en esta semana
             return fechaLanz >= iniSem && fechaLanz <= finSem;
           } else {
-            // Pendientes: si fecha de lanzamiento MRP cae en esta semana o la siguiente
+            // Pendientes: si fecha de lanzamiento cae en esta semana o la siguiente
             return fechaLanz >= iniSem && fechaLanz <= finSemSig;
           }
         });
@@ -419,6 +475,21 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
                 <span style={{...s.linSub,marginLeft:10}}>Cap. semanal: {fmtN(linea.cap_u_semana)} u. · {linea.horas_disp_sem}h/sem</span>
               </div>
               <div style={{display:"flex",gap:8,fontSize:11}}>
+                {(() => {
+                  // Setup total de la semana visible (suma de setup_unidades de OFTs en días visibles)
+                  const setupSem = dias.reduce((s, d) => {
+                    const ords = ordenesXDia[d.fecha] ?? [];
+                    return s + ords.reduce((acc, o) => acc + (o.setup_unidades || 0), 0);
+                  }, 0);
+                  const setupPctSem = linea.cap_u_semana > 0 ? setupSem / linea.cap_u_semana : 0;
+                  if (setupSem === 0) return null;
+                  return (
+                    <span style={{padding:"2px 8px",borderRadius:10,background:"#F4EAD5",color:"#7B5C1A",fontWeight:600}}
+                      title={`Setup total esta semana: ${fmtN(setupSem)} u (${fmtPct(setupPctSem)} de cap. semanal)`}>
+                      ⚙ {fmtPct(setupPctSem)} setup
+                    </span>
+                  );
+                })()}
                 <span style={{padding:"2px 8px",borderRadius:10,background:C.tealLt,color:C.tealMid,fontWeight:600}}>{aprobadas_lin.length} aprobadas</span>
                 <span style={{padding:"2px 8px",borderRadius:10,background:C.amberLt,color:"#854F0B",fontWeight:600}}>{pendientes.length} pendientes</span>
               </div>
@@ -429,6 +500,9 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
                 const ords=ordenesXDia[dia.fecha]??[];
                 const uso=capUsada[dia.fecha]??0;
                 const desborde=uso>1;
+                const capDia=linea.cap_u_semana/5;
+                const setupUDia=ords.reduce((s,o)=>s+(o.setup_unidades||0),0);
+                const setupPctDia=capDia>0?setupUDia/capDia:0;
                 return(
                   <div key={dia.fecha} style={s.dayCol(dia.feriado,dia.finDeSemana)}>
                     <div style={s.dayLbl(dia.habil,dia.feriado)}>
@@ -437,9 +511,10 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
                     </div>
                     <div style={{minHeight:44}}>
                       {ords.map((o,i)=>{
-                        const aprobacion=aprobMap[`${o.sku}__${o.semana_necesidad}__${o.semana_emision}`];
+                        const aprobacion=aprobMap[o.numero_of];
                         const esPreferida=params[o.sku]?.linea===linea.codigo;
                         return(<OrdenBadge key={i} orden={o} esPreferida={esPreferida}
+                          estaAprobada={!!aprobacion}
                           onClick={()=>setModalDesplazar({orden:o,aprobacion})}/>);
                       })}
                       {ords.length===0&&<div style={{fontSize:9,color:C.textMuted,textAlign:"center",paddingTop:8}}>—</div>}
@@ -449,6 +524,12 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
                       <span style={{color:desborde?C.red:C.text}}>{desborde?`⚠ ${fmtPct(uso)}`:fmtPct(uso)}</span>
                       <span style={{color:uso>0.9?C.red:C.tealMid}}>{fmtPct(Math.max(0,1-uso))} libre</span>
                     </div>
+                    {setupUDia>0&&(
+                      <div style={{fontSize:8.5,color:"#7B5C1A",marginTop:2,textAlign:"center"}}
+                        title={`Setup en este día: ${fmtN(setupUDia)} u`}>
+                        ⚙ {fmtPct(setupPctDia)} setup
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -464,10 +545,13 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
                   </tr></thead>
                   <tbody>
                     {ordenesTabla.map((o,i)=>{
-                      const key=`${o.sku}__${o.semana_necesidad}__${o.semana_emision}`;
-                      const aprobada=aprobMap[key];
+                      const aprobada=aprobMap[o.numero_of];
                       const esPreferida=params[o.sku]?.linea===linea.codigo;
-                      const fechaLanzReal = String(aprobada?.fecha_lanzamiento_real || o.semana_emision).slice(0,10);
+                      const fechaLanzReal = String(
+                        aprobada?.fecha_lanzamiento_real
+                        || o.fecha_lanzamiento
+                        || o.semana_emision
+                      ).slice(0,10);
                       const pasada = fechaLanzReal <= hoy && !aprobada;
                       const stockIni=parseFloat(o.motivo?.match(/Stock:([\d.]+)/)?.[1]??0);
                       const cobDias=o.forecast_cajas>0?Math.round((stockIni/o.forecast_cajas)*7):"—";
@@ -479,14 +563,16 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
                           <td style={{...s.tblCell,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.descripcion}</td>
                           <td style={{...s.tblCell,whiteSpace:"nowrap"}}>
                             {(() => {
-                              const fechaReal = String(aprobada?.fecha_lanzamiento_real || o.semana_emision).slice(0,10);
-                              const fechaMRP  = String(o.semana_emision).slice(0,10);
-                              const difiere   = aprobada && fechaReal !== fechaMRP;
+                              // v1.2: el backend propone fecha_lanzamiento al día.
+                              // semana_emision es solo el agrupador semanal (domingo).
+                              const sugerida = String(o.fecha_lanzamiento || o.semana_emision).slice(0,10);
+                              const fechaReal = String(aprobada?.fecha_lanzamiento_real || sugerida).slice(0,10);
+                              const difiere   = aprobada && fechaReal !== sugerida;
                               const esPasada  = fechaReal <= hoy && !aprobada;
                               return (
                                 <span style={{color: esPasada ? C.red : difiere ? C.amber : C.text,
                                               fontWeight: esPasada||difiere ? 700 : 400}}
-                                  title={difiere ? `MRP sugería: ${fechaMRP}` : ""}>
+                                  title={difiere ? `Sugerido: ${sugerida}` : ""}>
                                   {esPasada && "🔴 "}
                                   {difiere && "📅 "}
                                   {fechaReal}
@@ -496,39 +582,16 @@ export default function DetalleProduccion({onAprobar, ordenesPlan=[], onPlanChan
                           </td>
                           <td style={{...s.tblCell,whiteSpace:"nowrap"}}>
                             {(() => {
-                              const fechaEntMRP = String(o.semana_necesidad).slice(0,10);
-                              const ltSem = params[o.sku]?.lead_time_sem ?? 1;
-                              const ltDias = ltSem * 7;
-
-                              // Calcular fecha entrada con nueva definición:
-                              // último día de producción + lead_time_sem semanas
-                              const fechaLanz = String(aprobada?.fecha_lanzamiento_real || o.semana_emision).slice(0,10);
-                              const upj = params[o.sku]?.upj ?? 1;
-                              const capReal = Number(aprobada?.cantidad_real_cj ?? o.cantidad_cajas);
-                              const uTotales = capReal * upj;
-                              const capDia = linea.cap_u_semana / 5;
-
-                              // Simular días de producción desde fechaLanz
-                              let uRest = uTotales;
-                              let ultimoDia = fechaLanz;
-                              const diasSim = diasGlobalesDesde(fechaLanz, 4);
-                              for (const d of diasSim) {
-                                if (uRest <= 0) break;
-                                const uHoy = Math.min(uRest, capDia);
-                                ultimoDia = d.fecha;
-                                uRest -= uHoy;
-                              }
-
-                              const dUlt = new Date(ultimoDia + "T12:00:00");
-                              dUlt.setDate(dUlt.getDate() + ltDias);
-                              const fechaEntCalc = dUlt.toISOString().slice(0,10);
-                              const difiere = fechaEntCalc !== fechaEntMRP;
-                              const tooltip = `Lead time: ${ltSem} sem desde fin producción (${ultimoDia})${difiere ? ` · MRP sugería: ${fechaEntMRP}` : ""}`;
+                              // v1.2: backend entrega fecha_entrada_real al día exacto.
+                              // No re-simulamos producción aquí — confiamos en el backend.
+                              const sugerida = String(o.fecha_entrada_real || o.semana_necesidad).slice(0,10);
+                              const fechaEnt = String(aprobada?.fecha_entrada_real || sugerida).slice(0,10);
+                              const difiere = aprobada && fechaEnt !== sugerida;
                               return (
                                 <span style={{color: difiere ? C.amber : C.text, fontWeight: difiere ? 700 : 400}}
-                                  title={tooltip}>
+                                  title={difiere ? `Sugerido: ${sugerida}` : ""}>
                                   {difiere && "📅 "}
-                                  {fechaEntCalc}
+                                  {fechaEnt}
                                 </span>
                               );
                             })()}
