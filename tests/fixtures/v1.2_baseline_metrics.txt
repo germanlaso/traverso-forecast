@@ -1,0 +1,27 @@
+Baseline v1.2-piloto — referencia para fase F1 de v1.3
+========================================================
+Generado: 2026-05-02
+Endpoint: POST /plan
+Body:     {"horizonte_semanas": 6, "optimizar": true}
+Código:   forecast/optimizer.py en estado v1.2-piloto (sin cambios)
+
+=== v1.2 baseline (sin cambios) ===
+  status                : FEASIBLE
+  solver_time_sec       : 60.32
+  objective_value       : 155,727,704,550
+  ofts_produccion       : 58
+  ofts_con_paga_setup   : 22
+
+Notas:
+- El solver alcanzó el time limit (60s) — se devolvió mejor solución FEASIBLE,
+  no probó OPTIMAL en ese tiempo. Esperable con 10 SKUs × 42 días × 4 líneas.
+- "ofts_produccion" = órdenes con tipo=PRODUCCION y aprobada=False (subset de
+  "n_ordenes" en el response, que también incluye IMPORTACION y aprobadas).
+- "ofts_con_paga_setup" es el subset de ofts_produccion con paga_setup=true.
+  Equivale a contar inicio[d,k,l]=1 para SKUs PRODUCCION en el solver
+  (ver §1 de las correcciones del usuario en sesión).
+
+Métricas tras commits F1 — se irán anexando aquí:
+  (commit 1: N_max=4)               TBD
+  (commit 2: W_SETUP=0)             TBD
+  (commit 3: día 0 sin setup)       TBD
