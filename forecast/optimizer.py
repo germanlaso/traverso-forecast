@@ -18,7 +18,9 @@ Pesos del objetivo (v1.2):
   W_DEFICIT  = 100.000   penalizar stock < SS
   W_EXCESO   =  50.000   penalizar stock > cap_bodega
   W_URGENTE  =  10.000   priorizar SKUs con stock crítico
-  W_SETUP    =     200   penalizar cada inicio de corrida (incentiva consolidar)
+  W_SETUP    =       0   v1.3: desactivado en N1 — N2 (sequencer.py) optimiza
+                          setups con matriz SKU→SKU real (R9). Constante
+                          conservada para rollback rápido.
   W_ALT      =      50   preferir línea preferida vs alternativa
 
 Firma pública preservada de v1.1: optimizar_plan(plan_mrp, ...)
@@ -49,7 +51,8 @@ from calendario import (
 W_DEFICIT = 100_000
 W_EXCESO = 50_000
 W_URGENTE = 10_000
-W_SETUP = 200      # penaliza cada inicio[d,k,l]=1
+W_SETUP = 0        # v1.3: ya no se usa en N1 — N2 optimizará setups con matriz real (R9).
+                   # Conservada para rollback rápido o experimentos (e.g. W_SETUP=20).
 W_ALT = 50         # penaliza usar línea alternativa
 
 # v1.3 — Restricción de Nivel 1 (lot sizing).
@@ -483,12 +486,6 @@ def _agregar_objetivo(
         if not pref_map.get((s, l), True):
             # Es alternativa → penalizamos suavemente
             obj_terms.append(W_ALT * asig)
-
-    # Penalizar setups — incentiva consolidar corridas.
-    # Cada inicio[d,k,l]=1 cuesta W_SETUP. Sin término de slack porque forzaba
-    # a usar todas las líneas a la vez (bug detectado en pre-cajas).
-    for (d, s, l), inicio_var in m.inicio.items():
-        obj_terms.append(W_SETUP * inicio_var)
 
     m.model.Minimize(sum(obj_terms))
 

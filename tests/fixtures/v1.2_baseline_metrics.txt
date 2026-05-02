@@ -43,5 +43,49 @@ CP-SAT llegó a otra solución óptima-empate que reparte las mismas cantidades
 en más días con producción positiva, sin pagar setups adicionales (gracias
 a inicio>=asig-asig_prev del modelo v1.2). Cero regresión funcional.
 
-  (commit 2: W_SETUP=0)             TBD
+=== v1.3 commit 2 (W_SETUP=0, N2 optimizará setups, R9) ===
+Fecha: 2026-05-02
+  status                : OPTIMAL          (Δ vs baseline: FEASIBLE→OPTIMAL, mejor)
+  solver_time_sec       : 4.89             (Δ vs baseline: -55.43, -92%)
+  objective_value       : 155,727,700,050  (Δ vs baseline: -4,500; vs commit1: -4,500)
+  ofts_produccion       : 94               (Δ vs baseline: +36; vs commit1: +29)
+  ofts_con_paga_setup   : 52               (Δ vs baseline: +30; vs commit1: +30)
+
+Verificación SKUs distintos por (día, línea):
+  baseline v1.2 — max=3, avg=1.35, buckets≥4=0, buckets≥5=0
+  commit 1 v1.3 — max=3, avg=1.48, buckets≥4=0, buckets≥5=0
+  commit 2 v1.3 — max=4, avg=1.21, buckets≥4=1, buckets≥5=0
+
+Validación de predicción matemática:
+  Δ predicho si plan idéntico al de commit 1:  200 × 22 = -4,400
+  Δ observado:                                  -4,500
+  Discrepancia:                                 -100 (ruido por reorganización
+    marginal del plan: las 94 OFTs no son las mismas 65 + 29; cambios en
+    asignación a línea alternativa pueden mover ±50 puntos por OF
+    [W_ALT=50 × asig_alternativa]). Aceptable, predicción 97.7% precisa.
+
+Hallazgos del commit 2:
+
+1. FEASIBLE → OPTIMAL en 4.89s vs 60s del time-limit del baseline. El
+   W_SETUP=200 estaba haciendo el problema combinatoriamente mucho más
+   difícil para CP-SAT (el término obligaba a explorar muchos planes
+   con costos de setup distintos antes de descartar ramas). Sin él,
+   el solver llega a óptimo probado en una fracción del tiempo. Esto es
+   una señal positiva para el escalamiento a 471 SKUs: confirma que la
+   parte combinatoria difícil del v1.2 venía del término de setup, no
+   del lot sizing puro.
+
+2. ofts_con_paga_setup: 22 → 52 (+30). Esperado por diseño: sin
+   penalización en N1 el solver es indiferente a fragmentación. N2 con
+   la matriz real será quien optimice setups (R9). Para el piloto
+   actual esto no impacta planificación operativa porque el N2 todavía
+   no está integrado — F2.
+
+3. max SKUs/día/línea saltó de 3 a 4. Hay 1 bucket que toca el techo
+   N_max=4 del commit 1. Sin la restricción del commit 1, ese bucket
+   probablemente habría tenido 5+ SKUs. Confirma que las dos
+   restricciones (commit 1 + commit 2) trabajan juntas como diseñamos:
+   commit 2 libera al solver para distribuir más, commit 1 lo acota
+   para que N2 siga siendo tratable.
+
   (commit 3: día 0 sin setup)       TBD
