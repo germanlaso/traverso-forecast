@@ -351,8 +351,11 @@ def _construir_modelo(
 
                 # Detección de inicio
                 if d_idx == 0:
-                    # Día 0 paga siempre setup si hay asignación
-                    m.model.Add(inicio == asig)
+                    # v1.3 (R4): día 0 nunca paga setup. Asumimos que la línea
+                    # llega "lista" al inicio del horizonte. La decisión cerrada
+                    # en sesión de diseño v1.3 — no se persiste estado externo
+                    # (R7) y N2 hace lo mismo independientemente.
+                    m.model.Add(inicio == 0)
                 else:
                     asig_prev = m.asig[(horizonte[d_idx - 1], s, l)]
                     m.model.Add(inicio >= asig - asig_prev)

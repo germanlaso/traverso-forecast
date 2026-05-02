@@ -88,4 +88,54 @@ Hallazgos del commit 2:
    commit 2 libera al solver para distribuir más, commit 1 lo acota
    para que N2 siga siendo tratable.
 
-  (commit 3: día 0 sin setup)       TBD
+=== v1.3 commit 3 (día 0 sin setup, inicio[0,k,l]=0, R4) ===
+Fecha: 2026-05-02
+  status                : OPTIMAL          (Δ vs commit 2: igual)
+  solver_time_sec       : 6.83             (Δ vs commit 2: +1.94, sigue rápido)
+  objective_value       : 155,727,700,050  (Δ vs commit 2: 0, idéntico)
+  ofts_produccion       : 86               (Δ vs baseline: +28; vs commit 2: -8)
+  ofts_con_paga_setup   : 47               (Δ vs baseline: +25; vs commit 2: -5)
+
+Verificación SKUs distintos por (día, línea):
+  commit 3 v1.3 — max=4, avg=1.39, buckets≥4=1, buckets≥5=0
+  (sin cambio respecto a commit 2)
+
+Validación de predicción:
+  Predicción "objective_value casi nulo": ✅ idéntico a commit 2 al peso.
+  Predicción "setups bajan 1-3": observado -5, justo en frontera del rango
+    "más de 5 sospechoso". Investigado: el plan completo es óptimo-empate
+    (mismo objective_value), la diferencia de OFTs y setups es perturbación
+    heurística pura del solver al cambiar la estructura del árbol.
+
+Observación para F2 (N2 sequencer):
+El día 0 del horizonte puede caer en un día no hábil (sábado/domingo/feriado).
+En ese caso, R4 (inicio[0]=0) se aplica al día no hábil — donde no había
+producción de todos modos. El primer día hábil con producción real
+(típicamente lunes si el horizonte arranca el sábado) sigue pagando setup
+por el modelo N1 actual.
+N2 debe implementar correctamente R5 ("línea sin actividad previa = setup 0")
+identificando el primer día hábil con asig=1 en cada línea, no solo el
+d_idx=0. Esto se valida con un caso de prueba: horizonte que arranque
+viernes/sábado/domingo.
+
+Esto NO es un bug — es comportamiento documentado en §4.1 del doc de
+diseño v1.3 (R5 está listada para N2 en §4.2, no para N1 en §4.1). Pero
+registrar la observación evita que F2 olvide implementar el caso correcto.
+
+Validado en commit 3: hoy es 2026-05-02 (sábado), día 0 = 2026-05-02,
+lunes 2026-05-04 con 6 OFTs todas con paga_setup=true. Comportamiento
+conforme al diseño literal pero subóptimo en ~5 setups extra por
+horizonte cuando arranca en finde.
+
+=== Resumen F1 (commits 1+2+3) ===
+Baseline   v1.2: FEASIBLE @60s, obj=155,727,704,550, OFTs=58, setups=22
+Commit 3   v1.3: OPTIMAL  @6.83s, obj=155,727,700,050, OFTs=86, setups=47
+
+Cambios netos:
+  status            : FEASIBLE → OPTIMAL (mejor — solver llega a óptimo probado)
+  solver_time       : 60.32s   → 6.83s   (-89%, descomprimido por W_SETUP=0)
+  objective_value   : -4,500   (atribuible casi 100% a eliminar W_SETUP × 22 setups)
+  OFTs              : +28      (perturbación heurística + N_max no muerde, sin
+                                penalización el solver fragmenta)
+  setups            : +25      (esperado por diseño — N2 los optimizará en F2)
+  max SKUs/día/línea: 3 → 4    (la N_max=4 ahora muerde con 1 bucket en techo)
