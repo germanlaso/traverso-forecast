@@ -139,3 +139,44 @@ Cambios netos:
                                 penalización el solver fragmenta)
   setups            : +25      (esperado por diseño — N2 los optimizará en F2)
   max SKUs/día/línea: 3 → 4    (la N_max=4 ahora muerde con 1 bucket en techo)
+
+=== Validación F1 con horizonte real (13 semanas) ===
+Fecha: 2026-05-02
+Body: {"horizonte_semanas": 13, "optimizar": true}
+Output: tests/fixtures/v1.3_f1_horizonte13_plan.json (gitignored)
+
+  status                : OPTIMAL
+  solver_time_sec       : 6.02
+  objective_value       : 155,727,700,050
+  ofts_produccion       : 268
+  ofts_con_paga_setup   : 113
+
+Verificación SKUs distintos por (día, línea):
+  buckets (día,línea) con producción : 192
+  max SKUs distintos en un bucket    : 4
+  promedio SKUs por bucket           : 1.40
+  buckets con >=4 SKUs               : 1
+  buckets con >=5 SKUs               : 0
+
+Análisis del escalamiento:
+- Horizonte 6 sem (42 días) → OPTIMAL @ 6.83s con 86 OFTs / 47 setups
+- Horizonte 13 sem (91 días) → OPTIMAL @ 6.02s con 268 OFTs / 113 setups
+
+Doblar el horizonte (×2.17) más que duplica las OFTs (×3.1) y los setups (×2.4),
+pero el solver_time NO escala — incluso baja ligeramente (6.83 → 6.02s). Esto
+confirma que con W_SETUP=0 el problema combinatorio quedó descomprimido y el
+LP relajado encuentra óptimo rápidamente. Señal positiva muy fuerte para el
+escalamiento futuro a 471 SKUs.
+
+La N_max=4 sigue mordiendo en exactamente 1 bucket (max=4), igual que con
+horizonte 6. Esto sugiere que el techo se alcanza en un día específico de
+alta demanda agregada, y que los demás 191 buckets quedan holgados.
+
+objective_value idéntico al de commit 3 (155,727,700,050) — interesante,
+pero esperable: forecast_rich filtra por horizonte futuro [lunes_inicio,
+lunes_fin] (optimizer.py L807-810), y los SKUs/líneas/SS/cap_bodega son
+los mismos. El óptimo del problema con horizonte 13 puede empatar
+numéricamente con el de horizonte 6 si la demanda de las semanas 7-13
+queda completamente satisfecha sin déficit ni exceso adicional. El plan
+es estructuralmente más grande (268 OFTs vs 86) pero el costo penalizado
+agregado es el mismo.

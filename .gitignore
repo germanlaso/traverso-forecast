@@ -52,4 +52,4 @@ Desktop.ini
 # Las métricas extraídas (.txt) y el script (.py) SÍ se commitean.
 # Solo ignoramos los JSON crudos del endpoint, que son grandes.
 tests/fixtures/*.json
-body_baseline.json
+body_*.json
