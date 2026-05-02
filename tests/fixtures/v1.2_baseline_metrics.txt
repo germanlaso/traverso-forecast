@@ -22,6 +22,26 @@ Notas:
   (ver §1 de las correcciones del usuario en sesión).
 
 Métricas tras commits F1 — se irán anexando aquí:
-  (commit 1: N_max=4)               TBD
+
+=== v1.3 commit 1 (N_max=4 SKUs/día/línea, R2) ===
+Fecha: 2026-05-02
+  status                : FEASIBLE         (Δ: igual)
+  solver_time_sec       : 60.24            (Δ: -0.08, igual al tope solver)
+  objective_value       : 155,727,704,550  (Δ: 0, idéntico)
+  ofts_produccion       : 65               (Δ: +7 vs baseline 58)
+  ofts_con_paga_setup   : 22               (Δ: 0, idéntico)
+
+Verificación SKUs distintos por (día, línea):
+  baseline v1.2 — max=3, avg=1.35, buckets≥4=0, buckets≥5=0
+  commit 1 v1.3 — max=3, avg=1.48, buckets≥4=0, buckets≥5=0
+
+Interpretación: la restricción N_max=4 no muerde con los 10 SKUs piloto (el
+máximo natural era 3). El aumento 58→65 OFTs con mismo objective_value y
+mismos setups es perturbación de la heurística interna del solver bajo
+time-limit (60s): al cambiar el árbol de búsqueda con la nueva restricción,
+CP-SAT llegó a otra solución óptima-empate que reparte las mismas cantidades
+en más días con producción positiva, sin pagar setups adicionales (gracias
+a inicio>=asig-asig_prev del modelo v1.2). Cero regresión funcional.
+
   (commit 2: W_SETUP=0)             TBD
   (commit 3: día 0 sin setup)       TBD

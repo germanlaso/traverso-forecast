@@ -52,6 +52,13 @@ W_URGENTE = 10_000
 W_SETUP = 200      # penaliza cada inicio[d,k,l]=1
 W_ALT = 50         # penaliza usar línea alternativa
 
+# v1.3 — Restricción de Nivel 1 (lot sizing).
+# Acota cuántos SKUs distintos puede asignar el optimizador a una misma
+# línea-día. Esto contiene el problema combinatorio que enfrenta el Nivel 2
+# (sequencer.py): N≤4 por (línea, día) garantiza sub-problemas tratables
+# en milisegundos. Decisión cerrada en sesión de diseño v1.3 (R2).
+N_MAX_SKUS_DIA_LINEA = 4
+
 # Solver
 SOLVER_TIME_LIMIT_SEC = 60   # piloto. Subir a 180-300 para 471 SKUs
 SOLVER_NUM_WORKERS = 4
@@ -385,6 +392,18 @@ def _construir_modelo(
                     terms.append(stp * FACTOR_ESCALA * m.inicio[(d, s, l)])
             if terms:
                 m.model.Add(sum(terms) <= cap_l_d * FACTOR_ESCALA)
+
+            # R1b (v1.3, R2): cap. de nº de SKUs distintos asignados a esta línea-día.
+            # N1 acota Σ_k asig[d,k,l] ≤ 4 para que el sub-problema de N2
+            # (sequencer.py) sea siempre pequeño. Solo SKUs que tienen esta
+            # línea como par válido contribuyen a la suma.
+            asigs_dl = [
+                m.asig[(d, s, l)]
+                for s in m.skus
+                if l in m.pares_sku_linea[s]
+            ]
+            if asigs_dl:
+                m.model.Add(sum(asigs_dl) <= N_MAX_SKUS_DIA_LINEA)
 
     # ─── Restricciones por (d, s) ────────────────────────────────────────────
 
