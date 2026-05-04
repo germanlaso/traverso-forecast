@@ -73,8 +73,10 @@ def fetch_and_save_stock() -> dict:
     """
     logger.info("[STOCK] Iniciando descarga desde SQL Server...")
 
-    result = conn.execute(_text(_STOCK_QUERY))
-    df = pd.DataFrame(result.fetchall(), columns=result.keys())
+    engine = get_engine()
+    with engine.connect() as conn:
+        result = conn.execute(_text(_STOCK_QUERY))
+        df = pd.DataFrame(result.fetchall(), columns=result.keys())
 
     # Normalizar tipos
     df["sku"] = df["sku"].astype(str).str.strip()
@@ -92,6 +94,8 @@ def fetch_and_save_stock() -> dict:
         .str.replace(",", ".", regex=False)               # coma → punto decimal
     )
     df["stock_unidades"] = pd.to_numeric(df["stock_unidades"], errors="coerce").fillna(0)
+    # TODO(v1.4): fijar dayfirst=True o format="%d/%m/%Y" según convención
+    # de SQL Server. Hoy genera UserWarning pero no rompe el parsing.
     df["fecha_vcto"] = pd.to_datetime(df["fecha_vcto"], errors="coerce")
     df["fecha_descarga"] = pd.to_datetime(df["fecha_descarga"], errors="coerce")
 
