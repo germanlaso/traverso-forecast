@@ -470,3 +470,75 @@ def get_all_sku_lineas() -> list:
              "factor_velocidad": float(r[4] or 1.0)}
             for r in rows
         ]
+
+
+# ============================================================
+# mrp_setup_matrix (introducida v1.3 — preparación para F2)
+# ============================================================
+
+def get_setup_matrix(linea: str | None = None,
+                     sku_desde: str | None = None,
+                     sku_hasta: str | None = None) -> list[dict]:
+    """Lee filas de la matriz, opcionalmente filtradas."""
+    sql = ("SELECT sku_desde, sku_hasta, linea, tiempo_horas "
+           "FROM mrp_setup_matrix WHERE 1=1")
+    params: dict = {}
+    if linea:
+        sql += " AND linea = :linea"
+        params["linea"] = linea
+    if sku_desde:
+        sql += " AND sku_desde = :sku_desde"
+        params["sku_desde"] = sku_desde
+    if sku_hasta:
+        sql += " AND sku_hasta = :sku_hasta"
+        params["sku_hasta"] = sku_hasta
+    sql += " ORDER BY linea, sku_desde, sku_hasta"
+
+    with get_session() as session:
+        result = session.execute(text(sql), params)
+        rows = result.fetchall()
+        return [
+            {"sku_desde": str(r[0]), "sku_hasta": str(r[1]),
+             "linea": str(r[2]), "tiempo_horas": float(r[3])}
+            for r in rows
+        ]
+
+
+def get_setup_time(sku_desde: str, sku_hasta: str, linea: str) -> float | None:
+    """
+    Devuelve el tiempo de setup en horas.
+    Convención v1.3: si sku_desde == sku_hasta, devuelve 0 (auto-transición).
+    Si la fila no existe, devuelve None — el caller decide qué hacer
+    (por ejemplo, en F2: alerta de configuración).
+    """
+    if sku_desde == sku_hasta:
+        return 0.0
+
+    with get_session() as session:
+        result = session.execute(text(
+            "SELECT tiempo_horas FROM mrp_setup_matrix "
+            "WHERE sku_desde = :sku_desde AND sku_hasta = :sku_hasta AND linea = :linea"
+        ), {"sku_desde": sku_desde, "sku_hasta": sku_hasta, "linea": linea})
+        row = result.fetchone()
+        return float(row[0]) if row else None
+
+
+def upsert_setup_entry(sku_desde: str, sku_hasta: str, linea: str,
+                       tiempo_horas: float) -> None:
+    """Insert o update de una fila."""
+    with get_session() as session:
+        session.execute(text(
+            "INSERT INTO mrp_setup_matrix (sku_desde, sku_hasta, linea, tiempo_horas, updated_at) "
+            "VALUES (:sku_desde, :sku_hasta, :linea, :tiempo_horas, NOW()) "
+            "ON CONFLICT (sku_desde, sku_hasta, linea) "
+            "DO UPDATE SET tiempo_horas = EXCLUDED.tiempo_horas, updated_at = NOW()"
+        ), {"sku_desde": sku_desde, "sku_hasta": sku_hasta,
+            "linea": linea, "tiempo_horas": float(tiempo_horas)})
+        session.commit()
+
+
+def borrar_toda_setup_matrix() -> None:
+    """Limpia la tabla. Usado por la migración inicial."""
+    with get_session() as session:
+        session.execute(text("DELETE FROM mrp_setup_matrix"))
+        session.commit()
