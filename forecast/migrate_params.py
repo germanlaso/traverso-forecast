@@ -16,7 +16,13 @@ from db_mrp import (
     upsert_sku_params,
     upsert_sku_linea,
     borrar_todas_sku_lineas,
+    borrar_todas_lineas,
+    borrar_toda_setup_matrix,
+    upsert_setup_entry,
+    get_all_sku_lineas,
+    get_session,
 )
+from sqlalchemy import text
 
 EXCEL_PATH = sys.argv[1] if len(sys.argv) > 1 else "/app/data/Traverso_Parametros_MRP.xlsx"
 
@@ -31,8 +37,15 @@ def _int(v, default=0):
 def _str(v, default=""):
     return str(v).strip() if v is not None else default
 
-# Mapa nombre línea → código (para SKU_PARAMS que usa nombre)
-LINEA_NOMBRE_A_CODIGO = {}
+# V4: SKU_LINEA trae códigos en mayúsculas (SACHETERA, L1PET LV, L1PET A) pero
+# mrp_lineas (cargada desde LINEAS_PRODUCCION y SKU_PARAMS) usa formato canónico.
+# Normalizar al leer SKU_LINEA para que las claves matcheen entre tablas.
+LINEA_CODIGO_NORMALIZER = {
+    "SACHETERA": "Sachetera",
+    "L1PET LV":  "L1Pet LV",
+    "L1PET A":   "L1Pet A",
+}
+
 
 def migrar():
     print(f"Leyendo Excel: {EXCEL_PATH}")
@@ -46,12 +59,24 @@ def migrar():
     # ── Migrar LINEAS_PRODUCCION ──────────────────────────────────────────────
     ws_lin = wb['LINEAS_PRODUCCION']
     rows_lin = list(ws_lin.iter_rows(min_row=4, values_only=True))
-    
+
+    # Limpieza previa: borrar primero las hijas (mrp_sku_lineas) y después la
+    # padre (mrp_lineas). No hay FK declarada hoy, pero el orden es buena
+    # práctica defensiva por si se agrega en el futuro.
+    borrar_todas_sku_lineas()
+    borrar_todas_lineas()
+
     n_lineas = 0
+    codigos_vistos = set()
     for row in rows_lin:
         codigo = _str(row[0])
         if not codigo or codigo.startswith("Nota"):
             continue
+        # V4: LINEAS_PRODUCCION trae 1 fila por par (línea, SKU). Deduplicar
+        # para insertar cada línea una sola vez en mrp_lineas.
+        if codigo in codigos_vistos:
+            continue
+        codigos_vistos.add(codigo)
         activa = _str(row[10], "S").upper() == "S"
         if not activa:
             continue
@@ -72,7 +97,6 @@ def migrar():
             "activa":         True,
         }
         upsert_linea(linea)
-        LINEA_NOMBRE_A_CODIGO[_str(row[1]).lower()] = codigo
         cap = turnos * horas * dias * velocidad
         print(f"  Línea {codigo}: {_str(row[1])} | vel={velocidad} u/hr | cap={cap:,.0f} u/sem")
         n_lineas += 1
@@ -92,22 +116,9 @@ def migrar():
         activo_val = _str(row[14], "S").upper()
         activo = activo_val == "S"
 
-        # Mapear nombre de línea a código
-        linea_nombre = _str(row[10]).lower()
-        linea_cod = ""
-        if linea_nombre:  # solo si el Excel especifica algo
-            for nombre_key, cod_val in LINEA_NOMBRE_A_CODIGO.items():
-                if linea_nombre in nombre_key or nombre_key in linea_nombre:
-                    linea_cod = cod_val
-                    break
-            # Fallback por palabras clave SOLO si hay nombre de línea pero no match exacto
-            if not linea_cod:
-                if "liquid" in linea_nombre or "limon" in linea_nombre or "vinagre" in linea_nombre:
-                    linea_cod = "L001"
-                elif "salsa" in linea_nombre:
-                    linea_cod = "S001"
-        # NOTA: si linea_nombre está vacío (típico en IMPORTACION), linea_cod queda en ""
-        # — antes este caso caía en el fallback "liquid/vinagre/limon" y asignaba L001 mal.
+        # V4: la columna 10 trae el código de línea directo (Sachetera, L1Pet LV,
+        # L1Pet A). IMPORTACION viene vacía → linea_cod queda en "".
+        linea_cod = _str(row[10])
 
         params = {
             "sku":             sku,
@@ -137,16 +148,16 @@ def migrar():
         ws_sl = wb['SKU_LINEA']
         rows_sl = list(ws_sl.iter_rows(min_row=4, values_only=True))
 
-        # Limpieza previa: borrar todos los registros antes de re-insertar
-        borrar_todas_sku_lineas()
-
         n_sku_lineas = 0
         for row in rows_sl:
             sku    = _str(row[0])      # col A: SKU
-            linea  = _str(row[2])      # col C: Código Línea
+            linea  = _str(row[2])      # col C: Código Línea (V4 trae mayúsculas)
+            linea  = LINEA_CODIGO_NORMALIZER.get(linea, linea)
             t_camb = _float(row[4], 0) # col E: T. Cambio Batch (hrs)
             pref_s = _str(row[5], "N").upper()  # col F: Línea Preferida (S/N)
-            factor = _float(row[6], 1.0)        # col G: Factor_Velocidad
+            factor = _float(row[7], 1.0)        # col H: Factor_Linea
+            # NOTA V4: col[6] es 'Notas' (texto libre), Factor_Linea está en col[7].
+            # En V3 estaba en col[6]. Si vuelve a moverse, ajustar acá.
 
             # Filtrar filas vacías o de notas
             if not sku or not sku[0].isdigit():
@@ -177,7 +188,51 @@ def migrar():
     else:
         print("⚠ Pestaña SKU_LINEA no encontrada en el Excel — paso saltado")
 
+    _print_resumen()
+
     print("\n✅ Migración completada exitosamente")
+
+
+def _print_resumen():
+    """Conteo de filas por tabla post-carga. Sanity check visual."""
+    print("\n=== Resumen post-carga ===")
+    with get_session() as session:
+        for tabla in ['mrp_lineas', 'mrp_sku_params', 'mrp_sku_lineas']:
+            count = session.execute(text(f"SELECT COUNT(*) FROM {tabla}")).scalar()
+            print(f"  {tabla}: {count} filas")
+
+
+def cargar_setup_matrix_inicial():
+    """
+    Genera la matriz inicial simétrica desde mrp_sku_lineas.
+    Para cada línea, para cada par (sku_a, sku_b) de los SKUs asignados a esa línea:
+      - sku_a → sku_a: 0 (auto-transición)
+      - sku_a → sku_b: t_cambio_hrs[sku_b, linea]  (predecesor anónimo)
+    Cuando llegue la matriz real del Gerente (F5), esto se reemplaza por UPDATE.
+    """
+    print("\n=== Cargando mrp_setup_matrix (simétrica inicial) ===")
+    borrar_toda_setup_matrix()
+
+    sku_lineas = get_all_sku_lineas()  # [{sku, linea, t_cambio_hrs, ...}]
+
+    por_linea = {}
+    for sl in sku_lineas:
+        por_linea.setdefault(sl["linea"], []).append(sl)
+
+    total_filas = 0
+    for linea, items in por_linea.items():
+        t_cambio_de = {it["sku"]: float(it["t_cambio_hrs"]) for it in items}
+        skus = list(t_cambio_de.keys())
+        for sku_a in skus:
+            for sku_b in skus:
+                tiempo = 0.0 if sku_a == sku_b else t_cambio_de[sku_b]
+                upsert_setup_entry(sku_a, sku_b, linea, tiempo)
+                total_filas += 1
+        print(f"  {linea}: {len(skus)} SKUs → {len(skus)**2} filas")
+
+    print(f"Total filas insertadas: {total_filas}")
+
 
 if __name__ == "__main__":
     migrar()
+    cargar_setup_matrix_inicial()

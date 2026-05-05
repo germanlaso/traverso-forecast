@@ -374,6 +374,15 @@ def borrar_todas_sku_lineas():
         session.commit()
 
 
+def borrar_todas_lineas():
+    """Borra todos los registros de mrp_lineas. Usado por migrate_params.py
+    cuando se re-importa desde el Excel para evitar líneas zombies cuando
+    cambian los códigos (ej. v1.2 L001/L002/S001/S002 → v1.3 Sachetera/L1Pet LV/L1Pet A)."""
+    with get_session() as session:
+        session.execute(text("DELETE FROM mrp_lineas"))
+        session.commit()
+
+
 def upsert_sku_params(p: dict):
     """Inserta o actualiza parámetros de un SKU."""
     with get_session() as session:
