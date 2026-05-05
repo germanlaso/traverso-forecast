@@ -53,3 +53,8 @@ Desktop.ini
 # Solo ignoramos los JSON crudos del endpoint, que son grandes.
 tests/fixtures/*.json
 body_*.json
+
+# ── Backups locales de BD ─────────────────────────────────────────
+# Dumps de pg_dump generados antes de migraciones grandes.
+# Patrón específico para no afectar migrate_*.sql que SÍ se versionan.
+backup_*.sql
