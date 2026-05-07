@@ -1,0 +1,11 @@
+=== v1.3_post_ampliacion_h13_metrics ===
+
+Sesion             : 2026-05-07 (Code, ampliacion piloto 18 SKUs)
+horizonte_semanas  : 13
+status             : FEASIBLE (timeout @60s, esperado por O11)
+tiempo_ms          : 60055
+objective_value    : 468,986,450,428
+n_ordenes_total    : 263
+ofts_generadas     : 243
+n_alertas          : 68
+JSON_crudo_size    : 165 KB (gitignored: tests/fixtures/v1.3_post_ampliacion_h13_plan.json)
