@@ -54,6 +54,11 @@ W_URGENTE = 10_000
 W_SETUP = 0        # v1.3: ya no se usa en N1 — N2 optimizará setups con matriz real (R9).
                    # Conservada para rollback rápido o experimentos (e.g. W_SETUP=20).
 W_ALT = 50         # penaliza usar línea alternativa
+W_INICIO_SIMBOLICO = 1   # v1.3 (R12): desempate para evitar inicios fantasma
+                         # cuando la cota Σ inicio >= Σ asig - 1 deja al solver
+                         # indiferente. NO subir por encima de 1 (recrearía
+                         # W_SETUP=200 eliminado en F1, presión de consolidación
+                         # va en F2 con matriz real).
 
 # v1.3 — Restricción de Nivel 1 (lot sizing).
 # Acota cuántos SKUs distintos puede asignar el optimizador a una misma
@@ -349,17 +354,14 @@ def _construir_modelo(
                     m.model.Add(asig == 0)
                     m.model.Add(inicio == 0)
 
-                # Detección de inicio
-                if d_idx == 0:
-                    # v1.3 (R4): día 0 nunca paga setup. Asumimos que la línea
-                    # llega "lista" al inicio del horizonte. La decisión cerrada
-                    # en sesión de diseño v1.3 — no se persiste estado externo
-                    # (R7) y N2 hace lo mismo independientemente.
-                    m.model.Add(inicio == 0)
-                else:
-                    asig_prev = m.asig[(horizonte[d_idx - 1], s, l)]
-                    m.model.Add(inicio >= asig - asig_prev)
-                    m.model.Add(inicio <= asig)
+                # R12 (v1.3, decisión Gerente 05/05/2026): primer SKU del día
+                # NO paga setup. La cota inferior agregada
+                #   Σ_k inicio[d,k,l] >= Σ_k asig[d,k,l] - 1
+                # se aplica más abajo en la sección "Restricciones agregadas
+                # por (d, l)". Acá solo mantenemos integridad por SKU
+                # (inicio nunca 1 si asig=0). R4 (día 0 sin setup) queda
+                # subsumida por R12: si día 0 tiene N=1 SKU, Σ inicio = 0.
+                m.model.Add(inicio <= asig)
 
     # ─── Restricciones agregadas por (d, l) ──────────────────────────────────
 
@@ -410,6 +412,17 @@ def _construir_modelo(
             ]
             if asigs_dl:
                 m.model.Add(sum(asigs_dl) <= N_MAX_SKUS_DIA_LINEA)
+                # R12 (v1.3, decisión Gerente 05/05/2026): el primer SKU del día
+                # en esta línea NO paga setup. Setups totales = max(0, Σ asig - 1).
+                # Cota superior por SKU (inicio <= asig) ya se aplica arriba.
+                # El peso simbólico W_INICIO_SIMBOLICO en el objetivo evita
+                # inicios fantasma cuando hay holgura de capacidad.
+                inicios_dl = [
+                    m.inicio[(d, s, l)]
+                    for s in m.skus
+                    if l in m.pares_sku_linea[s]
+                ]
+                m.model.Add(sum(inicios_dl) >= sum(asigs_dl) - 1)
 
     # ─── Restricciones por (d, s) ────────────────────────────────────────────
 
@@ -489,6 +502,14 @@ def _agregar_objetivo(
         if not pref_map.get((s, l), True):
             # Es alternativa → penalizamos suavemente
             obj_terms.append(W_ALT * asig)
+
+    # R12: peso simbólico para evitar inicios fantasma (ver Paso 3 del doc R12).
+    # Sin este peso, la cota Σ inicio >= Σ asig - 1 deja al solver indiferente
+    # entre Σ inicio = N-1 y Σ inicio = N cuando hay holgura de capacidad. El
+    # término ε=1 desempata hacia el menor valor factible. NO usarlo para
+    # consolidar corridas — esa optimización es trabajo de N2/F2.
+    for (d, s, l), inicio in m.inicio.items():
+        obj_terms.append(W_INICIO_SIMBOLICO * inicio)
 
     m.model.Minimize(sum(obj_terms))
 
