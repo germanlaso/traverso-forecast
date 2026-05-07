@@ -40,9 +40,11 @@ Plan de trabajo con commits separados:
 
 **Paso 3 — Implementar D3 (R12) en `optimizer.py`**
 - Sigue el detalle técnico del documento `R12_PRIMER_SETUP_GRATIS.md` paso a paso.
-- Resumen del cambio: reemplazar la detección actual de `inicio[d,k,l]` (que es por SKU con `inicio >= asig - asig_prev`) por una restricción agregada por (día, línea): `Σ_k inicio[d,k,l] >= Σ_k asig[d,k,l] - 1`.
-- También: mantener `inicio[d,k,l] <= asig[d,k,l]` para cada (d,k,l) por integridad.
-- Eliminar el caso especial de día 0 (queda subsumido por R12).
+- Resumen del cambio: 
+  (a) Reemplazar la detección actual de `inicio[d,k,l]` (que es por SKU con `inicio >= asig - asig_prev`) por una restricción agregada por (día, línea): `Σ_k inicio[d,k,l] >= Σ_k asig[d,k,l] - 1`.
+  (b) Mantener `inicio[d,k,l] <= asig[d,k,l]` para cada (d,k,l) por integridad.
+  (c) **Importante**: agregar `W_INICIO_SIMBOLICO = 1` al objetivo, sumando todos los `inicio[d,k,l]`. Sin esto, el solver puede dejar "inicios fantasma" en (d,l) con cap holgada y los tests del Paso 5 fallan intermitentemente. Detalle en R12_PRIMER_SETUP_GRATIS.md §"Implementación / Paso 3".
+  (d) Eliminar el caso especial de día 0 (queda subsumido por R12).
 - ¡IMPORTANTE! Después del cambio: `docker exec traverso_forecast rm -rf /app/__pycache__` y `docker compose restart forecast`.
 - Commit: `feat(optimizer): R12 — primer SKU del día sin setup (D3 Gerente)`
 
@@ -52,7 +54,9 @@ Plan de trabajo con commits separados:
 - Comparar contra Test B' (tests/fixtures/v1.3_post_v4_test_b.json):
   - Sachetera uso% — esperado 50-80% (margen cero por O12).
   - quiebre — esperado 0.
-  - **ofts_con_paga_setup — esperado <60** (vs 130 en Test B'). Esta es la métrica crítica de R12.
+  - **ofts_con_paga_setup — esperado entre 20 y 60** (vs 130 en Test B'). Esta es la métrica crítica de R12.
+    - Si <20 (o 0): posible fragmentación extrema (días con 1 SKU). NO es éxito — inspeccionar Detalle Producción visualmente. Si se ve 1 SKU/línea/día durante todo el horizonte, R12 está liberando demasiado y el solver se aprovecha. Documentar y consultar antes de avanzar.
+    - Si >80: R12 mal implementada o `W_INICIO_SIMBOLICO` no aplicado. Re-revisar Paso 3.
   - objective_value — esperado <300 mil M (vs 521 mil M en Test B').
 - Si las métricas están en rango: continuar. Si no: diagnóstico antes de avanzar.
 
@@ -62,7 +66,7 @@ Correr los 3 tests del documento `R12_PRIMER_SETUP_GRATIS.md` sección "Tests es
 2. Total de setups baja sustancialmente vs Test B'.
 3. Días con 1 solo SKU NUNCA tienen setup.
 
-Si los 3 pasan: R12 está bien implementada. Sino: diagnóstico antes de seguir.
+Si los 3 pasan: R12 está bien implementada. Sino: diagnóstico antes de seguir. Recordá que el Test 1 puede fallar específicamente si `W_INICIO_SIMBOLICO` no fue agregado al objetivo en el Paso 3 (inicios fantasma).
 
 **Paso 6 — Validación visual**
 - Refrescar dashboard en `http://localhost:3000`.
@@ -71,10 +75,13 @@ Si los 3 pasan: R12 está bien implementada. Sino: diagnóstico antes de seguir.
 - Sin errores 500 en consola del navegador.
 - Sin alertas de validación obvia.
 
-**Paso 7 — Commit 4 condicional (frontend hardcoding)**
-- `grep -rn "L001\|L002\|S001\|S002" dashboard/src/`
-- Si aparece: arreglar referencias y commit `fix(frontend): actualizar referencias hardcodeadas a códigos de línea`.
-- Si no aparece: skip.
+**Paso 7 — Commit 4 condicional (deuda técnica V4: hardcoding de líneas en frontend)**
+Este paso NO está relacionado con R12 ni con D2. Es un pendiente del bloque V4 (recodificación de líneas con nombres descriptivos: Sachetera, L1Pet LV, L1Pet A) que conviene cerrar acá si aparece regresión visual.
+
+- Si en el Paso 6 viste algo raro en Detalle Producción (líneas no aparecen, badges mal coloreados, etc.) → buscar referencias hardcodeadas:
+  - `grep -rn "L001\|L002\|S001\|S002" dashboard/src/`
+  - Si aparece: arreglar referencias y commit `fix(frontend): actualizar referencias hardcodeadas a códigos de línea (deuda V4)`.
+- Si el dashboard funciona limpio en el Paso 6: **skip**, no buscar problemas que no existen. La deuda queda para cuando se manifieste.
 
 **Paso 8 — Commit 5 condicional (fix_stock.py)**
 - `git show 3242bce -- forecast/fix_stock.py | head -50`
@@ -122,8 +129,12 @@ Si responde 200, Claude Code puede arrancar limpio. Si no, primero `docker logs 
 
 Estos son los escenarios menos probables pero conviene tenerlos identificados:
 
-**Escenario A — `ofts_con_paga_setup` baja muy poco (<30% reducción)**
+**Escenario A — `ofts_con_paga_setup` baja muy poco (<30% reducción, p.ej. 90-130)**
 → R12 mal implementada. Re-revisar el cambio en `optimizer.py`. La restricción agregada debería estar matando muchas variables `inicio`.
+
+**Escenario A' — `ofts_con_paga_setup` baja TODA (a 0 o cerca)**
+→ Fragmentación extrema: el solver eligió poner cada SKU en un día solo para evitar siempre el setup. NO es éxito. Inspeccionar Detalle Producción: si se ve 1 SKU por línea por día, está fragmentado.
+→ Mitigación: NO subir `W_INICIO_SIMBOLICO` (eso introduce sesgo de consolidación que es trabajo de F2). Tampoco reintroducir W_SETUP=200. Documentar y consultar — probablemente conviene esperar a F2 con matriz real.
 
 **Escenario B — Sachetera sigue al 0%**
 → Algo más además de O10. Posibles culpables: matriz de setups con valores absurdos, ss_dias muy alto que el solver no logra cubrir aún con cap completa, batch_mult incompatible con cap_día.
@@ -137,5 +148,8 @@ Estos son los escenarios menos probables pero conviene tenerlos identificados:
 → Algo está rompiendo la factibilidad del modelo. Probablemente la implementación de R12 introdujo una contradicción.
 → Revertir el cambio de R12 y diagnosticar.
 → Como fallback: aplicar D2 sin R12 primero. Eso ya debería desbloquear Sachetera marginalmente (cap=9500=batch_min sin setup).
+
+**Escenario E — Test 1 falla intermitentemente (algunas (linea, día) con N_setup ≠ N_skus - 1)**
+→ Casi seguro: `W_INICIO_SIMBOLICO` no fue agregado al objetivo en el Paso 3. Verificar el bloque `obj_terms.append(W_INICIO_SIMBOLICO * m.inicio[(d, k, l)])`. Si está ausente, agregarlo y reejecutar.
 
 En cualquiera de los escenarios, **NO hacer push hasta resolverlo**. Mantener el patrón de no comprometer estado roto.
