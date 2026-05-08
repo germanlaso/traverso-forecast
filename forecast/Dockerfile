@@ -1,7 +1,7 @@
 FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y \
-    curl gnupg2 unixodbc-dev gcc g++ apt-transport-https \
+    curl gnupg2 unixodbc-dev gcc g++ make apt-transport-https \
     && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
        | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
     && curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list \
@@ -14,7 +14,8 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -c "import cmdstanpy; cmdstanpy.install_cmdstan()"
 
 COPY . .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -27,7 +27,7 @@ def get_connection_string() -> str:
         f"UID={username};"
         f"PWD={password};"
         "TrustServerCertificate=yes;"
-        "Encrypt=yes;"
+        "Encrypt=no;"
     )
 
 
