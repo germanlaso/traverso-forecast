@@ -210,3 +210,18 @@ Para volver al estado al cierre del 13/05 (nominal): git checkout 82cef34.
 ---
 
 *Cerrado al fin de la sesión nominal del 13/05/2026 (real: domingo 10/05/2026).*
+
+---
+
+## ⚠ Pendiente urgente para mañana primera hora
+
+Usuario reporta al cierre que ve **muchos quiebres en el dashboard** — más de lo esperado tras la re-importación del Excel y V6.12-mini.
+
+**Investigación pendiente** (orden sugerido):
+1. Capturar lista exacta de SKUs en rojo en el dashboard (h=4 vs h=13).
+2. Distinguir entre "stock_final<0 real" vs "BAJO_SS visualizado en rojo".
+3. Comparar lista con datos del 12/05 (¿son los mismos SKUs?).
+4. Si son los mismos: probablemente es V6.17 (SS sobredimensionado, conversación con Gerente).
+5. Si hay nuevos: investigar qué cambió tras la re-importación del Excel.
+
+**Hipótesis preferida** (a confirmar): el horizonte 4 default oculta el problema (0 órdenes stock<0) pero el dashboard de "Stock por SKU" puede estar mostrando SS_dinámico calculado sobre los próximos N días que excede lo que el plan puede producir. Es deuda V6.17 (SS sobredimensionado) llegando al ojo del usuario.
