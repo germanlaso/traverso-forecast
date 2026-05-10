@@ -186,7 +186,7 @@ export default function App() {
   };
   const [plan, setPlan] = useState(null);
   const [planLoading, setPlanLoading] = useState(false);
-  const [planHorizonte, setPlanHorizonte] = useState(13);
+  const [planHorizonte, setPlanHorizonte] = useState(4);
   const [planOptimizar, setPlanOptimizar] = useState(true);
   // Anchos iniciales columnas tabla plan (en px): N°Orden SKU Desc Tipo F.Entrada F.Lanzam Cajas Línea Alerta Acciones
   const { widths: colWidths, onMouseDown: onColDrag } = useResizableColumns(

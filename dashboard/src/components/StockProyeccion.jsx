@@ -197,7 +197,7 @@ export default function StockProyeccion({
   const [params,     setParams]     = useState(PARAMS_FALLBACK);
 
   const [selSku,     setSelSku]     = useState(initialSku || "121010290");
-  const [horizonte,  setHorizonte]  = useState(13);
+  const [horizonte,  setHorizonte]  = useState(4);
   const [forecast,   setForecast]   = useState([]);
   const [ordenes,    setOrdenes]    = useState([]);
   const [stockReal,  setStockReal]  = useState(0);
@@ -283,10 +283,16 @@ export default function StockProyeccion({
     }
     const ordenesSku = (planExterno.ordenes ?? []).filter(o => o.sku === selSku);
     setOrdenes(ordenesSku);
-    // Stock inicial desde motivo de primera orden del SKU
-    const motivo = ordenesSku[0]?.motivo ?? "";
-    const m = motivo.match(/Stock:([\d.]+)/);
-    setStockReal(m ? parseFloat(m[1]) : 0);
+    // Stock inicial: priorizar campo numérico stock_inicial_cajas (backend post-V6.14);
+    // fallback al regex sobre 'motivo' para compatibilidad con MRP clásico (formato 'Stock:N')
+    const primeraOrden = ordenesSku[0];
+    if (primeraOrden && typeof primeraOrden.stock_inicial_cajas === 'number' && primeraOrden.stock_inicial_cajas > 0) {
+      setStockReal(primeraOrden.stock_inicial_cajas);
+    } else {
+      const motivo = primeraOrden?.motivo ?? "";
+      const m = motivo.match(/Stock:([\d.]+)/);
+      setStockReal(m ? parseFloat(m[1]) : 0);
+    }
   }, [planExterno, selSku]);
 
   const p       = params[selSku] ?? {};

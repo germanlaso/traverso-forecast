@@ -49,7 +49,8 @@ from calendario import (
 # para incentivar consolidar producción y minimizar cambios de SKU.
 # El comportamiento "llenar líneas" emerge naturalmente del SS y la cap. de bodega.
 W_DEFICIT = 100_000
-W_EXCESO = 50_000
+W_QUIEBRE = 1_000_000  # V6.18: penalización adicional por stock < 0 (10× peor que bajo SS)
+W_EXCESO = 10_000
 W_URGENTE = 10_000
 W_SETUP = 0        # v1.3: ya no se usa en N1 — N2 optimizará setups con matriz real (R9).
                    # Conservada para rollback rápido o experimentos (e.g. W_SETUP=20).
@@ -118,6 +119,7 @@ class _ModeloCPSAT:
         self.stock_u: dict[tuple[date, str], cp_model.IntVar] = {}      # en unidades
         self.deficit: dict[tuple[date, str], cp_model.IntVar] = {}      # bajo SS, en unidades
         self.exceso: dict[tuple[date, str], cp_model.IntVar] = {}       # sobre cap_bodega, en unidades
+        self.quiebre: dict[tuple[date, str], cp_model.IntVar] = {}      # stock < 0 (V6.18)
         # Referencias para post-proceso
         self.skus: list[str] = []
         self.lineas: list[str] = []
@@ -308,6 +310,7 @@ def _construir_modelo(
             m.stock_u[(d, s)] = m.model.NewIntVar(stock_low, stock_high, f"stock_{d_idx}_{s}")
             m.deficit[(d, s)] = m.model.NewIntVar(0, big_ub, f"def_{d_idx}_{s}")
             m.exceso[(d, s)] = m.model.NewIntVar(0, big_ub, f"exc_{d_idx}_{s}")
+            m.quiebre[(d, s)] = m.model.NewIntVar(0, big_ub, f"qbr_{d_idx}_{s}")
 
             for l in m.pares_sku_linea[s]:
                 cap_l_d = cap_dia[(d, l)]
@@ -457,6 +460,7 @@ def _construir_modelo(
 
             # Exceso sobre cap_bodega (en unidades)
             m.model.Add(m.exceso[(d, s)] >= m.stock_u[(d, s)] - cap_bodega)
+            m.model.Add(m.quiebre[(d, s)] >= -m.stock_u[(d, s)])  # V6.18: solo > 0 si stock_u < 0
 
             # Una línea por SKU por día
             asigs_s_d = [m.asig[(d, s, l)] for l in m.pares_sku_linea[s]]
@@ -492,6 +496,9 @@ def _agregar_objetivo(
     # Penalizar exceso sobre cap bodega
     for (d, s), v in m.exceso.items():
         obj_terms.append(W_EXCESO * v)
+    # V6.18: penalizar quiebre real (stock < 0) MUY fuerte — debe evitarse a casi cualquier costo
+    for (d, s), v in m.quiebre.items():
+        obj_terms.append(W_QUIEBRE * v)
 
     # Penalizar asignación a línea alternativa (preferir la preferida)
     pref_map: dict[tuple[str, str], bool] = {}
@@ -942,7 +949,7 @@ def optimizar_plan(
             "linea": oft["linea"],
             "motivo": "OFT (optimizada)",
             "alerta": alerta,
-            "stock_inicial_cajas": 0,  # se calcula globalmente abajo
+            "stock_inicial_cajas": round(stock_inicial_rich.get(sku, 0) / upc, 1) if upc else 0.0,
             "stock_final_cajas": round(stock_ent / upc, 1) if upc else 0.0,
             "forecast_cajas": fc_cj,
             "ss_cajas": ss_cj,
