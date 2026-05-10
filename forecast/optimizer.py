@@ -887,6 +887,37 @@ def optimizar_plan(
                 "numero_of": e.get("numero_of", ""),
             })
 
+    # ─── 6b. V6.12-mini: filtrar SKUs con stock_inicial > cap_bodega ─────────
+    # Defensivo: estos SKUs generan infactibilidad estructural en CP-SAT porque
+    # la restricción stock_u[d,s] <= cap_bodega se viola desde el día 0.
+    # Se filtran del modelo y se reporta al usuario para que ajuste cap_bodega
+    # en SKU_PARAMS o revise el dato de stock.
+    skus_filtrados_cap_bodega = []
+    for sku in list(sku_params_rich.keys()):
+        cap_u = sku_params_rich[sku].get("cap_bodega_u", 0) or 0
+        stock_u = stock_inicial_rich.get(sku, 0) or 0
+        if cap_u and stock_u > cap_u:
+            upc = sku_params_rich[sku].get("u_por_caja", 1) or 1
+            skus_filtrados_cap_bodega.append({
+                "sku": sku,
+                "descripcion": sku_params_rich[sku].get("descripcion", ""),
+                "stock_actual_u": int(stock_u),
+                "stock_actual_cj": round(stock_u / upc, 1),
+                "cap_bodega_u": int(cap_u),
+                "cap_bodega_cj": round(cap_u / upc, 1),
+                "razon": "stock_inicial > cap_bodega (genera infactibilidad estructural)",
+            })
+            sku_params_rich.pop(sku, None)
+            forecast_rich.pop(sku, None)
+            stock_inicial_rich.pop(sku, None)
+            entradas_aprobadas_rich.pop(sku, None)
+
+    if skus_filtrados_cap_bodega:
+        logger.warning(
+            f"[V6.12-mini] {len(skus_filtrados_cap_bodega)} SKUs filtrados del optimizador "
+            f"por stock>cap_bodega: {[s['sku'] for s in skus_filtrados_cap_bodega]}"
+        )
+
     # ─── 7. Llamar al optimizador rico ───────────────────────────────────────
     horizonte_dias = max(horizonte_semanas * 7, 14)
     fecha_inicio = date.today()
