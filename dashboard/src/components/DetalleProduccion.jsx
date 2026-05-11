@@ -553,7 +553,10 @@ export default function DetalleProduccion({
                         || o.semana_emision
                       ).slice(0,10);
                       const pasada = fechaLanzReal <= hoy && !aprobada;
-                      const stockIni=parseFloat(o.motivo?.match(/Stock:([\d.]+)/)?.[1]??0);
+                      // V6.14 v2 / P21: leer campo numerico del backend (post-V6.14 v1).
+                      // Antes parseaba regex 'Stock:N' del campo 'motivo', que solo
+                      // existia para ordenes del MRP clasico (no para OFTs del optimizer).
+                      const stockIni = o.stock_inicial_cajas ?? 0;
                       const cobDias=o.forecast_cajas>0?Math.round((stockIni/o.forecast_cajas)*7):"—";
                       const rowBg=aprobada?"#F0FAF5":pasada?"#FFF5F5":i%2===0?"#fff":C.grayLt;
                       return(

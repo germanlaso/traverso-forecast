@@ -23,6 +23,7 @@ from ordenes import router as ordenes_router
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
+from proyeccion import construir_proyeccion_por_sku
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -555,6 +556,21 @@ def generar_plan(req: PlanRequest = None):
                 o["numero_of"] = numero_of_tentativo(o["sku"], o["semana_necesidad"], o["semana_emision"])
                 o["aprobada"] = False
 
+        # ── Proyección por SKU (Bloque B1 / V6.27) ──────────────────────────
+        # Backend emite proyección completa; frontend solo renderiza.
+        # Cierra V6.14 v2 + V6.26 (ver docs/SCHEMA_PROYECCION_POR_SKU.md).
+        # Nota: si req.skus filtra sku_params arriba (L378-379),
+        # proyeccion_por_sku solo cubre ese subset (semántica consistente con el plan).
+        proyeccion_por_sku = construir_proyeccion_por_sku(
+            ordenes_finales=ordenes,
+            aprobadas_db=aprobadas_db,
+            sku_params=sku_params,
+            forecasts=forecasts,
+            stocks_actuales=stocks_actuales,
+            fecha_inicio=_hoy_date.today(),
+            horizonte_dias=req.horizonte_semanas * 7,
+        )
+
         return {
             "n_skus": len(sku_params),
             "n_ordenes": len(ordenes),
@@ -582,6 +598,7 @@ def generar_plan(req: PlanRequest = None):
             "resumen_semanal": _mrp.resumen_semanal(ordenes),
             "carga_lineas": _mrp.resumen_por_linea(ordenes, lineas, sku_params),
             "optimizacion": diag_opt,
+            "proyeccion_por_sku": proyeccion_por_sku,
         }
 
     except HTTPException:

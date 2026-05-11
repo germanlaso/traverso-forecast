@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Legend
@@ -50,108 +50,6 @@ function getSemana(fecha) {
   return d.toISOString().slice(0, 10);
 }
 
-function getSemanaActual() {
-  const hoy = new Date();
-  const lunes = new Date(hoy);
-  lunes.setDate(hoy.getDate() - hoy.getDay() + 1);
-  return lunes.toISOString().slice(0, 10);
-}
-
-function calcularProyeccion(forecast, ordenesPlan, stockInicial, ssDias, ordenesAprobadas = []) {
-  const semanaActual = getSemanaActual();
-
-  // Mapa de aprobadas — index primario por numero_of (PK estable en BD).
-  // Índices secundarios por compat: si una orden vieja no trae numero_of
-  // o el plan trae un numero_of que difiere, podemos caer al match por SKU.
-  const aprobMap = {};
-  ordenesAprobadas.forEach(a => {
-    if (a.numero_of) aprobMap[a.numero_of] = a;
-    // Fallback: índice compuesto por sku+semana_necesidad (legacy)
-    const k1 = `${a.sku}__${fmtD(a.semana_necesidad)}`;
-    if (!aprobMap[k1]) aprobMap[k1] = a;
-  });
-
-  // Construir entradas por semana del forecast.
-  // Reglas:
-  //   - aprobada → entrada real (fecha y cantidad de la BD)
-  //   - no aprobada con lanzamiento futuro → asumir cantidad MRP
-  //   - no aprobada con lanzamiento <= hoy → NO incluir (ya debió lanzarse)
-  // v1.2: usamos fecha_lanzamiento / fecha_entrada_real (day exacto) cuando
-  // existen, agrupándolas al domingo de su semana para casar con f.ds del forecast.
-  const entradasPorSemana = {};
-  ordenesPlan.forEach(o => {
-    const dsNecesidad = fmtD(o.semana_necesidad);
-    // v1.2: lookup primario por numero_of estable; fallback al índice compuesto
-    const aprobada    = aprobMap[o.numero_of] || aprobMap[`${o.sku}__${dsNecesidad}`];
-    let cantidad = 0;
-    let fuente   = "";
-    let dsEntrada = dsNecesidad; // default: domingo del agrupador
-
-    if (aprobada) {
-      // Usar cantidad y fecha reales de la aprobación
-      cantidad  = aprobada.cantidad_real_cj;
-      // Normalizar fecha_entrada_real al domingo de su semana (para que coincida con f.ds)
-      const fer = fmtD(aprobada.fecha_entrada_real ?? aprobada.semana_necesidad);
-      dsEntrada = getSemana(fer) || dsNecesidad;
-      fuente    = "aprobada";
-    } else {
-      // No aprobada: ¿el lanzamiento aún está en el futuro?
-      // v1.2: usar fecha_lanzamiento exacta (día) si existe, sino el agrupador semanal
-      const lanzamiento = fmtD(o.fecha_lanzamiento || o.semana_emision);
-      const semLanz = lanzamiento ? (getSemana(lanzamiento) || fmtD(o.semana_emision)) : fmtD(o.semana_emision);
-      if (semLanz > semanaActual) {
-        cantidad = o.cantidad_cajas ?? 0;
-        fuente   = "asumida";
-        // Para entradas: si hay fecha_entrada_real day-exact, agruparla a su domingo
-        const fer = fmtD(o.fecha_entrada_real);
-        if (fer) dsEntrada = getSemana(fer) || dsNecesidad;
-      }
-      // si semLanz <= semanaActual y no aprobada → cantidad = 0 (no se incluye)
-    }
-
-    if (cantidad > 0) {
-      if (!entradasPorSemana[dsEntrada]) entradasPorSemana[dsEntrada] = [];
-      entradasPorSemana[dsEntrada].push({ cantidad, tipo: o.tipo, fuente, orden: o, aprobada: aprobada || null, dsNecesidadMRP: dsNecesidad });
-    }
-  });
-
-  let stock = stockInicial;
-  return forecast.map((f) => {
-    const ds      = fmtD(f.ds);
-    const ents    = entradasPorSemana[ds] ?? [];
-    const entradas = ents.reduce((s, e) => s + e.cantidad, 0);
-    const tipo    = ents[0]?.tipo ?? "";
-    const fuente  = ents[0]?.fuente ?? "";
-    const ent0    = ents[0];
-    // numero_of: usar el de la orden del plan (ya viene correcto desde el backend)
-    const numero_of     = ent0?.orden?.numero_of ?? ent0?.aprobada?.numero_of ?? null;
-    // fecha_entrada_real: usar la real de PostgreSQL si existe, sino la semana_necesidad del plan
-    const _apFER = ent0?.aprobada?.fecha_entrada_real;
-    const _ordSN  = ent0?.dsNecesidadMRP ?? fmtD(ent0?.orden?.semana_necesidad);
-    const fechaEntReal  = fmtD(_apFER) || _ordSN;
-    const fechaEntMRP   = ent0?.dsNecesidadMRP ?? null;
-    // Solo mostrar indicador si la fecha real difiere del MRP Y la orden está aprobada
-    const fechaDifiere  = !!(ent0?.aprobada && fechaEntReal && fechaEntMRP && fechaEntReal !== fechaEntMRP);
-    // Fecha entrada real vs MRP para indicador en tabla
-
-    const ss      = Math.round((f.yhat / 7) * ssDias);
-    const stockIni = Math.round(stock);
-    stock         = Math.max(0, stock + entradas - f.yhat);
-    const stockFin = Math.round(stock);
-    return {
-      ds, stockIni, entradas: Math.round(entradas), tipo, fuente,
-      ventas: Math.round(f.yhat), stockFin, ss,
-      tienePendiente: false,
-      numero_of,
-      fechaEntReal,
-      fechaEntMRP,
-      fechaDifiere,
-      yhat_lower: Math.round(f.yhat_lower ?? f.yhat * 0.8),
-      yhat_upper: Math.round(f.yhat_upper ?? f.yhat * 1.2),
-    };
-  });
-}
-
 // ── Tooltip personalizado ──────────────────────────────────────────────────────
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
@@ -197,26 +95,19 @@ export default function StockProyeccion({
   const [params,     setParams]     = useState(PARAMS_FALLBACK);
 
   const [selSku,     setSelSku]     = useState(initialSku || "121010290");
-  const [horizonte,  setHorizonte]  = useState(4);
-  const [forecast,   setForecast]   = useState([]);
   const [ordenes,    setOrdenes]    = useState([]);
   const [stockReal,  setStockReal]  = useState(0);
   const [stockInfo,  setStockInfo]  = useState(null);
-  const [loading,    setLoading]    = useState(false);
-  const [ordenesAprobadas, setOrdenesAprobadas] = useState([]);
-  const [error,      setError]      = useState("");
-
-
+  // V6.27 / Bloque B1: backend emite proyeccion_por_sku como fuente unica de verdad
+  const [proyeccionBackend, setProyeccionBackend] = useState(null);
 
   // Cargar lista de SKUs y params al montar
   useEffect(() => {
     Promise.all([
       fetch(`${API}/plan/params`).then((r) => r.json()),
       fetch(`${API}/stock/summary`).then((r) => r.json()),
-      fetch(`${API}/ordenes/aprobadas`).then((r) => r.json()),
     ])
-      .then(([p, s, aprobadas]) => {
-        setOrdenesAprobadas(Array.isArray(aprobadas) ? aprobadas : []);
+      .then(([p, s]) => {
         if (p.skus) {
           const map = {};
           p.skus.forEach((sk) => {
@@ -230,8 +121,8 @@ export default function StockProyeccion({
             };
           });
           setParams(map);
-    
-      const lista = p.skus.map((sk) => ({ sku: sk.sku, desc: sk.descripcion, tipo: sk.tipo }));
+
+          const lista = p.skus.map((sk) => ({ sku: sk.sku, desc: sk.descripcion, tipo: sk.tipo }));
           setSkuList(lista);
           // Si hay un initialSku válido en la lista, asegurarlo como seleccionado
           if (initialSku && lista.some(sk => sk.sku === initialSku)) {
@@ -243,106 +134,86 @@ export default function StockProyeccion({
       .catch(() => {});
   }, []);
 
-  // Cargar forecast cuando cambia SKU u horizonte (independiente del plan)
-  useEffect(() => {
-    if (!selSku) return;
-    setLoading(true);
-    setError("");
-
-    const hoy = new Date().toISOString().slice(0, 10);
-
-    // Recargar aprobadas por si cambiaron
-    fetch(`${API}/ordenes/aprobadas`).then((r) => r.json())
-      .then((a) => setOrdenesAprobadas(Array.isArray(a) ? a : []))
-      .catch(() => {});
-
-    fetch(`${API}/forecast`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sku: selSku, periods: horizonte + 4 }),
-    })
-      .then((r) => { if (!r.ok) throw new Error(`Forecast error ${r.status}`); return r.json(); })
-      .then((fc) => {
-        if (fc.detail) throw new Error(String(fc.detail));
-        const fcFuturo = (fc.forecast ?? []).filter((f) => f.ds >= hoy).slice(0, horizonte);
-        setForecast(fcFuturo);
-      })
-      .catch((e) => setError(e.message ?? "Error cargando forecast"))
-      .finally(() => setLoading(false));
-  }, [selSku, horizonte]);
-
-  // Sincronizar órdenes con el plan que viene del padre (App.js es la única
-  // fuente de verdad de /plan: garantiza correlativos OFT consistentes entre
-  // pestañas). Si planExterno es null, el padre aún no generó el plan y el
-  // componente muestra un mensaje al usuario para que lo genere.
+  // Sincronizar con el plan del padre (App.js es la única fuente de verdad de /plan).
+  // V6.27 / Bloque B1: leer proyeccion_por_sku del backend en vez de recalcular.
   useEffect(() => {
     if (!planExterno || !selSku) {
       setOrdenes([]);
       setStockReal(0);
+      setProyeccionBackend(null);
       return;
     }
     const ordenesSku = (planExterno.ordenes ?? []).filter(o => o.sku === selSku);
     setOrdenes(ordenesSku);
-    // Stock inicial: priorizar campo numérico stock_inicial_cajas (backend post-V6.14);
-    // fallback al regex sobre 'motivo' para compatibilidad con MRP clásico (formato 'Stock:N')
-    const primeraOrden = ordenesSku[0];
-    if (primeraOrden && typeof primeraOrden.stock_inicial_cajas === 'number' && primeraOrden.stock_inicial_cajas > 0) {
-      setStockReal(primeraOrden.stock_inicial_cajas);
-    } else {
-      const motivo = primeraOrden?.motivo ?? "";
-      const m = motivo.match(/Stock:([\d.]+)/);
-      setStockReal(m ? parseFloat(m[1]) : 0);
-    }
+    const proyBackend = planExterno.proyeccion_por_sku?.[selSku] ?? null;
+    setProyeccionBackend(proyBackend);
+    setStockReal(proyBackend?.stock_inicial_cj ?? 0);
   }, [planExterno, selSku]);
 
   const p       = params[selSku] ?? {};
   const ssDias  = p.ss_dias ?? 10;
   const tipoC   = TIPO_COLOR[p.tipo] ?? TIPO_COLOR.PRODUCCION;
 
-  // Órdenes aprobadas para este SKU
-  const aprobSku = useMemo(
-    () => ordenesAprobadas.filter(a => a.sku === selSku),
-    [ordenesAprobadas, selSku]
+  // V6.27 / Bloque B1: proyeccion derivada del backend.
+  // El frontend solo mapea: sin recalculo de entradas, ventas, SS ni stock.
+  // Las OFTs se cruzan por semana viz solo para mostrar N° OF y F. Entrada en la tabla
+  // (lookup, no calculo paralelo — el backend ya las contó en n_ofts_semana).
+  const proyeccion = useMemo(() => {
+    if (!proyeccionBackend?.semanas) return [];
+    const ofPorSemana = {};
+    ordenes.forEach(o => {
+      const fer = fmtD(o.fecha_entrada_real || o.semana_necesidad);
+      const sem = getSemana(fer);
+      if (!sem) return;
+      if (!ofPorSemana[sem]) ofPorSemana[sem] = [];
+      ofPorSemana[sem].push(o);
+    });
+    const tipoSku = params[selSku]?.tipo || "";
+    return proyeccionBackend.semanas.map(s => {
+      const primera = (ofPorSemana[s.semana] || [])[0];
+      const fuente = s.entradas_aprobadas_cj > 0 ? "aprobada"
+                   : s.entradas_sugeridas_cj > 0 ? "asumida" : "";
+      return {
+        ds: s.semana,
+        stockIni: s.stock_ini_cj,
+        entradas: s.entradas_cj,
+        entradasAprobadas: s.entradas_aprobadas_cj,
+        entradasSugeridas: s.entradas_sugeridas_cj,
+        tipo: tipoSku,
+        fuente,
+        ventas: s.ventas_cj,
+        stockFin: s.stock_fin_cj_visible,    // curva azul (clampeado >=0)
+        stockFinReal: s.stock_fin_cj_real,   // KPIs y estado (puede ser <0)
+        ss: s.ss_cj,
+        estado: s.estado,                    // "OK" | "BAJO_SS" | "QUIEBRE"
+        semanaParcial: s.semana_parcial,
+        nOftsSemana: s.n_ofts_semana,
+        tienePendiente: false,               // V6.26: backend ya consideró OFTs sugeridas
+        numero_of: primera?.numero_of ?? null,
+        fechaEntReal: primera ? fmtD(primera.fecha_entrada_real || primera.semana_necesidad) : null,
+        fechaEntMRP: primera ? fmtD(primera.semana_necesidad) : null,
+        fechaDifiere: false,
+        // TODO V6.X: bandas reales de Prophet (yhat_lower/yhat_upper). Hoy ±20% aprox.
+        yhat_lower: Math.round(s.ventas_cj * 0.8),
+        yhat_upper: Math.round(s.ventas_cj * 1.2),
+      };
+    });
+  }, [proyeccionBackend, ordenes, params, selSku]);
+
+  // n órdenes incluidas en proyección — suma de n_ofts_semana del backend
+  const nOrdenesProyeccion = useMemo(
+    () => proyeccion.reduce((s, r) => s + (r.nOftsSemana ?? 0), 0),
+    [proyeccion]
   );
 
-  const proyeccion = useMemo(() => {
-    const semActualLocal = getSemanaActual();
-    const rows = calcularProyeccion(forecast, ordenes, stockReal, ssDias, aprobSku);
-    // Post-proceso: calcular tienePendiente filtrando por SKU correcto
-    return rows.map(r => {
-      const tienePendiente = ordenes.some(o => {
-        if (o.sku !== selSku) return false;
-        const dsN = fmtD(o.semana_necesidad);
-        // v1.2: usar fecha_lanzamiento exacta cuando exista
-        const lanzamiento = fmtD(o.fecha_lanzamiento || o.semana_emision);
-        const semLanz = lanzamiento ? (getSemana(lanzamiento) || fmtD(o.semana_emision)) : fmtD(o.semana_emision);
-        // Match primario por numero_of (PK estable); fallback por (sku, sem_nec)
-        const aprobada = aprobSku.find(a => a.numero_of === o.numero_of)
-                      || aprobSku.find(a => fmtD(a.semana_necesidad) === dsN);
-        return dsN === r.ds && semLanz <= semActualLocal && !aprobada;
-      });
-      return { ...r, tienePendiente };
-    });
-  }, [forecast, ordenes, stockReal, ssDias, aprobSku, selSku]);
-
-  // n órdenes incluidas en proyección (aprobadas + futuras asumidas)
-  const semActual = getSemanaActual();
-  const nOrdenesProyeccion = useMemo(() => {
-    return ordenes.filter(o => {
-      const ds = fmtD(o.semana_necesidad);
-      // Match primario por numero_of (PK estable); fallback por sku+sem_nec
-      const aprobadaMatch = aprobSku.find(a => a.numero_of === o.numero_of)
-                         || aprobSku.find(a => fmtD(a.semana_necesidad) === ds);
-      return aprobadaMatch || ds > semActual;
-    }).length;
-  }, [ordenes, aprobSku, semActual]);
-
-  // KPIs
+  // KPIs derivados — usar stockFinReal y estado del backend
   const totalVentas   = proyeccion.reduce((s, r) => s + r.ventas,   0);
   const totalEntradas = proyeccion.reduce((s, r) => s + r.entradas, 0);
-  const minStock      = proyeccion.length ? Math.min(...proyeccion.map((r) => r.stockFin)) : 0;
-  const semBajoSS     = proyeccion.filter((r) => r.stockFin < r.ss).length;
+  const minStock      = proyeccion.length ? Math.min(...proyeccion.map((r) => r.stockFinReal)) : 0;
+  const semBajoSS     = proyeccion.filter((r) => r.estado !== "OK").length;
   const stockColor    = minStock < 0 ? C.red : semBajoSS > 0 ? C.amber : C.teal;
+  // Horizonte derivado del plan (ya no es input del usuario en este componente)
+  const horizonte     = planExterno?.horizonte_sem ?? 4;
 
   // Datos para el gráfico — separar entradas por tipo
   const chartData = proyeccion.map((r) => ({
@@ -396,13 +267,6 @@ export default function StockProyeccion({
         )}
       </div>
 
-      {error && (
-        <div style={{ background: C.redLt, border: `0.5px solid ${C.red}`, color: "#A32D2D",
-          borderRadius: 7, padding: "8px 12px", fontSize: 12, marginBottom: 12 }}>
-          {error}
-        </div>
-      )}
-
       {/* Banner: plan no generado — red de seguridad */}
       {!planExterno && (
         <div style={{
@@ -437,12 +301,18 @@ export default function StockProyeccion({
             ))}
           </select>
           <span style={s.lbl}>Horizonte:</span>
-          <select style={s.sel} value={horizonte} onChange={(e) => setHorizonte(Number(e.target.value))}>
+          <select style={{ ...s.sel, opacity: 0.6, cursor: "not-allowed" }}
+                  value={horizonte} disabled
+                  title="El horizonte se define al generar el plan">
             {[4, 8, 13, 17, 26].map((h) => (
               <option key={h} value={h}>{h} sem. (~{Math.round(h / 4.3)} meses)</option>
             ))}
+            {![4, 8, 13, 17, 26].includes(horizonte) && (
+              <option key={horizonte} value={horizonte}>{horizonte} sem.</option>
+            )}
           </select>
-          {loading && <span style={{ fontSize: 12, color: C.textMuted }}>Cargando...</span>}
+          <span style={{ fontSize: 11, color: C.textMuted, fontStyle: "italic" }}>(del plan)</span>
+          {planLoading && <span style={{ fontSize: 12, color: C.textMuted }}>Cargando...</span>}
         </div>
         {p.desc && (
           <div style={{ fontSize: 11, color: C.textMuted }}>
@@ -475,11 +345,6 @@ export default function StockProyeccion({
         <div style={s.card}>
           <div style={{ fontWeight: 600, fontSize: 13, color: C.text, marginBottom: 10 }}>
             Entradas, salidas y stock proyectado — semanas desde hoy
-            {nOrdenesProyeccion === 0 && ordenes.length > 0 && (
-              <span style={{ fontSize: 11, fontWeight: 400, color: C.amber, marginLeft: 10 }}>
-                ⚡ {ordenes.length} órdenes sugeridas pendientes de aprobación — no se muestran en la proyección
-              </span>
-            )}
           </div>
           <div style={s.leg}>
             {p.tipo === "PRODUCCION"  && <span style={s.legItem}><span style={s.legSq(C.teal)}/>Producción</span>}
@@ -621,7 +486,7 @@ export default function StockProyeccion({
         </div>
       )}
 
-      {!loading && !error && proyeccion.length === 0 && (
+      {planExterno && proyeccion.length === 0 && (
         <div style={{ ...s.card, textAlign: "center", color: C.textMuted, padding: 40 }}>
           Sin datos disponibles para este SKU — verifica que hay forecast entrenado
         </div>
