@@ -11,10 +11,10 @@
 El sistema decide:
 - **Qué** producir (qué SKUs requieren reposición).
 - **Cuándo** producir (fechas de lanzamiento al día).
-- **En qué línea** (asignación entre las líneas con velocidades distintas).
-- **En qué orden** (a partir de v1.3 — secuenciamiento intra-día, en desarrollo).
+- **En qué línea** (asignación entre 5 líneas con velocidades distintas).
+- **En qué orden** (a partir de v1.3 — secuenciamiento intra-día, parcialmente implementado).
 
-**Estado actual**: piloto operativo con 18 SKUs (16 PRODUCCION + 2 IMPORTACION) sobre 3 líneas. Próximo escalamiento: 471 SKUs activos.
+**Estado actual** (al 09/05/2026): piloto operativo con **76 SKUs activos** sobre **5 líneas**. Sistema desplegado en servidor interno (Ubuntu 26.04 LTS) accesible al equipo en `http://180.1.1.18:3000`. Pruebas con equipo de producción inician **15/05/2026**.
 
 **Versión activa**: v1.2-piloto (tag estable). En desarrollo: **v1.3** (arquitectura cascada Lot Sizing → Sequencing).
 
@@ -37,27 +37,13 @@ FastAPI (puerto 8000)
   └──────┴──────────┴──────────┴────────┴──────────────┘
 ```
 
-**Todo corre en Docker Compose** con tres contenedores principales:
-- `traverso_forecast` (FastAPI + OR-Tools + Prophet)
+**Todo corre en Docker Compose** con tres contenedores:
+- `traverso_forecast` (FastAPI + OR-Tools + Prophet + CmdStan)
 - `traverso_dashboard` (React)
-- `traverso_mrp_db` (PostgreSQL)
-- SQL Server externo (datos ERP, solo lectura). Requiere VPN activa para `/plan` y `/stock/refresh`.
+- `traverso_mrp_db` (PostgreSQL 16)
+- SQL Server externo `180.2.1.16:1433` BD `DBTraversoV2` (datos ERP, solo lectura)
 
----
-
-## Líneas de producción (datos verificados contra BD `mrp_lineas`)
-
-> **Importante:** los nombres de líneas en este proyecto son los que aparecen abajo. Versiones viejas de los docs hablaban de `L001/L002/S001/S002` — esa nomenclatura quedó obsoleta. La fuente de verdad es la BD.
-
-| Código | Área | Turnos | Hrs/turno | Días/sem | Velocidad (u/hr) | Cap/día (u) | Cap/sem (u) |
-|---|---|---|---|---|---|---|---|
-| **L1Pet LV** | LIQUIDOS/VINAGRERA | 1 | 9 | 5 | 12.223 | ~110.000 | ~550.000 |
-| **L1Pet A** | LIQUIDOS/VESPUCIO | 1 | 9 | 5 | 9.445 | ~85.000 | ~425.000 |
-| **Sachetera** | SALSAS/VESPUCIO | 1 | 9 | 5 | 1.056 | ~9.500 | ~47.500 |
-
-**Tipografía:** capitalizada exactamente así (`L1Pet LV`, `L1Pet A`, `Sachetera`). NO en mayúsculas. La PK de `mrp_lineas.codigo` es case-sensitive y `mrp_sku_lineas.linea` es FK.
-
-**Nota Sachetera:** `cap_dia ≈ batch_min = 9.500` para Mostaza/Ketchup/Salsa Barbecue. Margen cero por diseño operativo (decisión Gerente, no bug).
+**Despliegue**: servidor Ubuntu 26.04 (180.1.1.18) con backup nightly automático en `/home/ubuntu/backups/` (rotación 7 días, cron 02:00 AM).
 
 ---
 
@@ -76,9 +62,8 @@ forecast/                        # Backend FastAPI
   ordenes.py                     # gestión OFs (aprobación, PDF)
   forecaster.py                  # wrapper Prophet
   migrate_params.py              # carga inicial Excel → BD
-  data/
-    Traverso_Parametros_MRP.xlsx # canonical (PostgreSQL es fuente de verdad)
   requirements.txt
+  Dockerfile                     # incluye build-essential, install_cmdstan, sin --reload
 
 dashboard/src/                   # Frontend React
   App.js                         # estado global, llamada única a /plan
@@ -87,47 +72,18 @@ dashboard/src/                   # Frontend React
     DetalleProduccion.jsx        # ~646 líneas — grid diario por línea
     (Plan de Producción está dentro de App.js)
 
+forecast/data/                   # ★ EXCLUIDO de git (.gitignore)
+  Traverso_Parametros_MRP.xlsx   # carga inicial (PostgreSQL es fuente de verdad)
+  stock_actual.csv               # snapshot stock desde SQL Server (refresh manual)
+
 docs/
   v1.3_DISENO_ARQUITECTURA.md    # ★ LÉELO — decisiones de diseño v1.3
-  ESTADO_TECNICO_PROYECTO_*.md   # snapshots por sesión
+  GUIA_USUARIO.md                # guía para equipo durante el piloto
+  ESTADO_TECNICO_PROYECTO_*.md   # snapshots por sesión (★ último: 09-05-26)
 
 migrate_*.sql                    # scripts SQL aplicados
-docker-compose.yml
+docker-compose.yml               # con `command:` override sin --reload
 ```
-
----
-
-## SKUs del piloto (18 — datos verificados contra BD `mrp_sku_params`)
-
-### PRODUCCION (16 — entran al optimizador)
-
-| SKU | Descripción | Línea preferida | Alternativa |
-|---|---|---|---|
-| 111010290 | Vinagre Blanco 30x500 PET | L1Pet LV | — |
-| 112010290 | Vinagre Rosado 30x500 PET | L1Pet LV | — |
-| 113010290 | Vinagre Manzana 30x500 PET | L1Pet LV | — |
-| 114010290 | Vinagre Incoloro 30x500 PET | L1Pet LV | — |
-| 121010290 | Jugo Limón 30x500 PET | L1Pet LV | — |
-| 121010210 | Jugo Limón 20x1000 PET (1L) | L1Pet LV | L1Pet A |
-| 111010115 | Vinagre Blanco 12x1000 PET | L1Pet LV | L1Pet A |
-| 112011115 | Vinagre Rosado Montaner 12x1000 PET | L1Pet LV | L1Pet A |
-| 113010210 | Vinagre Manzana 20x1000 PET | L1Pet LV | L1Pet A |
-| 114010115 | Vinagre Incoloro 12x1000 PET | L1Pet LV | L1Pet A |
-| 141010160 | Salsa Soya 12x320 PET | L1Pet A | — |
-| 141010210 | Salsa Soya 20x1000 PET | L1Pet A | — |
-| 123010160 | Jugo Limón 60% 12x320 PET | L1Pet A | — |
-| 250010105 | Ketchup 10x1000 BOLSA | Sachetera | — |
-| 260010105 | Mostaza 10x1000 BOLSA | Sachetera | — |
-| 251010105 | Salsa Barbecue 10x1000 BOLSA | Sachetera | — |
-
-**Distribución**: L1Pet LV alcanza 10 SKUs (5 nativos + 5 con alt), L1Pet A alcanza 8 SKUs (3 nativos + 5 como alt), Sachetera 3 SKUs.
-
-**factor_velocidad < 1.0**: SKUs ×12×1000 (más lentos en su línea), Salsa Soya 20x1000, Jugo Limón 20x1000. Detalle en `mrp_sku_lineas`.
-
-### IMPORTACION (2 — NO entran al optimizador, solo MRP clásico)
-
-- 410010185 Sopa Inst. Carne Traverso 12x65 POTE
-- 500170180 Salsa Soya Kikkoman 12x591 VIDRIO
 
 ---
 
@@ -135,9 +91,9 @@ docker-compose.yml
 
 ### 1. Después de editar archivos `.py` en `forecast/`
 
-```powershell
+```bash
 # Sincronizar al contenedor
-docker cp forecast\optimizer.py traverso_forecast:/app/optimizer.py
+docker cp forecast/optimizer.py traverso_forecast:/app/optimizer.py
 
 # Limpiar bytecode viejo (¡crítico, ya nos ha mordido varias veces!)
 docker exec traverso_forecast rm -rf /app/__pycache__
@@ -150,128 +106,109 @@ docker compose restart forecast
 
 ### 2. Después de editar archivos `.jsx` en `dashboard/src/`
 
-```powershell
-# Sincronizar al contenedor
-docker cp dashboard\src\App.js traverso_dashboard:/app/src/App.js
-
-# El hot-reload de React a veces no compila cambios grandes — forzar:
-(Get-Content dashboard\src\App.js) | Set-Content dashboard\src\App.js
+```bash
+docker cp dashboard/src/App.js traverso_dashboard:/app/src/App.js
 docker compose restart dashboard
 ```
 
-### 3. Después de `docker compose up -d` desde cero
+### 3. Después de `docker compose up -d --build` desde cero
 
-Algunas dependencias se desinstalan al recrear el contenedor (bug conocido). **Verificar primero, reinstalar solo si imports fallan**:
+Con el `Dockerfile` actualizado del 08/05, **todas las dependencias se instalan al build** (incluyendo CmdStan, OR-Tools, cmdstanpy<1.3.0). Tarda 15-25 min pero queda funcional sin intervención manual extra.
 
-```powershell
-docker exec traverso_forecast python3 -c "import reportlab, ortools, prophet; print('ok')"
-# Si falla:
-docker exec traverso_forecast pip install reportlab==4.1.0 --break-system-packages -q
-docker exec traverso_forecast pip install ortools "numpy<2.0" "pandas<2.0" --break-system-packages -q --force-reinstall
-```
+Tras un build limpio, además del compose-up:
+1. Crear tabla `mrp_setup_matrix` (deuda V6.9): `docker exec -i traverso_mrp_db psql -U mrp_user -d mrp < migrate_v1.3_setup_matrix.sql`
+2. Importar Excel: `curl -X POST http://localhost:8000/params/importar-excel`
+3. Refresh stock: `curl -X POST http://localhost:8000/stock/refresh`
 
-Pendiente arreglar `requirements.txt` con pins (deuda V6).
-
-### 4. PowerShell tiene limitaciones que ya nos han mordido
+### 4. PowerShell tiene limitaciones
 
 | Problema | Solución |
 |---|---|
-| No soporta heredocs `<< 'EOF'` | Usar `[System.IO.File]::WriteAllText()` |
-| `Out-File` agrega BOM, rompe JSON | Usar `[System.IO.File]::WriteAllText()` para JSON |
+| No soporta heredocs `<< 'EOF'` | Usar `[System.IO.File]::WriteAllText()` o trabajar en SSH |
+| `Out-File` agrega BOM, rompe JSON | Usar `[System.IO.File]::WriteAllText()` |
 | Comillas escapadas en `curl -d "{\"k\":\"v\"}"` fallan | Usar `--data "@body.json"` con archivo |
-| No tiene `head` | `Select-Object -First N` o evitar pipe |
+| Path con espacios en scp/ssh | Comillar con doble: `"C:\Users\Pavilion Aero\..."` |
 
-Ejemplo de invocación correcta a `/plan`:
-
-```powershell
-[System.IO.File]::WriteAllText("$PWD\body.json", '{"horizonte_semanas": 13, "optimizar": true}')
-curl.exe -X POST http://localhost:8000/plan -H "Content-Type: application/json" --data "@body.json" -o plan.json -s -w "Status: %{http_code} | %{time_total}s`n"
-```
-
-### 5. Path mangling Git Bash con `docker exec`
-
-Git Bash convierte rutas Unix a Windows automáticamente, lo que rompe rutas dentro del contenedor. Solución:
+### 5. PostgreSQL: queries directas
 
 ```bash
-# MAL (Git Bash convierte /app/file → C:/Program Files/Git/app/file):
-docker exec traverso_forecast cat /app/optimizer.py
-
-# BIEN (doble slash inicial preserva la ruta):
-docker exec traverso_forecast cat //app/optimizer.py
-
-# O envolver en bash -c:
-docker exec traverso_forecast bash -c 'cat /app/optimizer.py'
-```
-
-### 6. PostgreSQL: queries directas
-
-```powershell
 docker exec traverso_mrp_db psql -U mrp_user -d mrp -c "SELECT * FROM mrp_sku_lineas;"
-docker exec traverso_mrp_db psql -U mrp_user -d mrp -c "\d mrp_aprobaciones"
+docker exec traverso_mrp_db psql -U mrp_user -d mrp -c "\d mrp_sku_params"
 ```
 
-### 7. Verificar contenido en contenedor (sin caer en pipe `head`)
+### 6. Verificar contenido en contenedor (sin caer en pipe `head` en PowerShell)
 
-```powershell
-docker exec traverso_forecast python3 -c @"
+```bash
+docker exec traverso_forecast python3 -c "
 with open('/app/optimizer.py') as f:
     for i, l in enumerate(f, 1):
         if 'palabra_clave' in l:
             print(f'L{i}: {l.rstrip()}')
-"@
+"
 ```
 
-### 8. "Antes de Y, hacé X" es bloqueante hasta confirmación
+### 7. ★ Excel canónico vive FUERA del repo
 
-Patrón observado: cuando el usuario indica "antes de Y, hacé X", la tendencia natural es saltar X y hacer Y directamente. **No hagas Y hasta tener X confirmado**, aunque parezca obvio. Si X no está claro, pregunta antes de avanzar.
+`forecast/data/` está en `.gitignore`. El Excel `Traverso_Parametros_MRP.xlsx` se mantiene en OneDrive del usuario:
 
-### 9. Display Claude Code en archivos largos
+```
+C:\Users\Pavilion Aero\OneDrive - Traverso S.A\Proyectos\Planificación de producción\traverso-pilot\traverso-pilot-git\forecast\data\Traverso_Parametros_MRP.xlsx
+```
 
-Patrón observado en sesión 06/05: archivos creados con Write tool muestran líneas duplicadas en preview de aprobación, pero el archivo en disco está limpio. **Distribución observada: 8 apariciones, 7 falsas alarmas confirmadas con Read, 1 real (heredoc original).** Mitigación: si aparece duplicación en preview, hacer Read post-creación; el archivo correcto es el que está en disco. Es bug 100% display, no afecta runtime.
+Para reimportar, primero `scp` al servidor, después `POST /params/importar-excel`.
 
 ---
 
 ## Modelo de datos clave
+
+### Líneas de producción (al 09/05/2026)
+
+| Código (PK) | Velocidad u/h | Cap día (1×9h) | Cap sem (5d) | SKUs activos |
+|---|---|---|---|---|
+| **L1Pet LV** | 12.222 | 110.000 | 550.000 | 32 |
+| **L1Pet A** | 9.445 | 85.000 | 425.000 | 13 |
+| **Sachetera** | 1.056 | 9.500 | 47.500 | 3 |
+| **Doypack** | (definir) | (definir) | (definir) | 21 |
+| **Doypack 4** | (definir) | (definir) | (definir) | 6 |
+
+⚠️ **PK case-sensitive**: usar `L1Pet LV` (capitalización exacta), no `L1PET LV`.
 
 ### Numeración de OFs (cambiará en F3 de v1.3)
 
 - **Definitivas (aprobadas)**: `OF-YYYY-NNNNN` — correlativo PostgreSQL en `mrp_contador_of`.
 - **Tentativas (sugeridas por optimizador)**: `OFT-YYYY-NNNNN`.
 - **Asignación de número**: ocurre **después** del optimizador, en `main.py`.
-- **Cambio en F3**: hoy se agrupa por `(sku, semana_emision)`. Va a cambiar a `(sku, fecha_lanzamiento, linea)` para que cada día = una OF distinta. Ver `docs/v1.3_DISENO_ARQUITECTURA.md` §4.3.
+- **Cambio en F3** (post-piloto): hoy se agrupa por `(sku, semana_emision)`. Va a cambiar a `(sku, fecha_lanzamiento, linea)`.
 
-### Tablas PostgreSQL principales
+### Tablas BD (PostgreSQL `mrp_db`)
 
-```sql
-mrp_lineas         -- 3 líneas activas con capacidades
-mrp_sku_params     -- 18 SKUs (16 PRODUCCION + 2 IMPORTACION)
-mrp_sku_lineas     -- pares SKU↔línea con t_cambio_hrs y factor_velocidad
-mrp_setup_matrix   -- ★ matriz dependiente del par (sku_desde, sku_hasta, linea)
-mrp_ordenes        -- órdenes activas
-mrp_aprobaciones   -- historial de versiones
-mrp_contador_of    -- correlativo anual
+```
+mrp_lineas            5 filas
+mrp_sku_params        77 filas (76 activos + 1 inactivo)
+mrp_sku_lineas        80 (asignaciones SKU↔línea con preferida + alt)
+mrp_setup_matrix      1.834 pares
+mrp_ordenes           dinámica (OFTs y OFs)
+mrp_aprobaciones      historial de cambios de estado
+mrp_contador_of       correlativo
 ```
 
-### `mrp_setup_matrix` — estado actual
+⚠️ **`mrp_setup_matrix` se crea con script manual** (`migrate_v1.3_setup_matrix.sql`), NO con `crear_tablas_params()`. Es la deuda V6.9.
 
-Tabla **ya existe** con datos dummy (no es F4 todavía completa, pero schema y migración inicial están hechos). Esquema:
+---
 
-```sql
-sku_desde       VARCHAR(30) NOT NULL
-sku_hasta       VARCHAR(30) NOT NULL
-linea           VARCHAR(20) NOT NULL
-tiempo_horas    DOUBLE PRECISION NOT NULL CHECK (tiempo_horas >= 0)
-updated_at      TIMESTAMP DEFAULT NOW()
-PRIMARY KEY (sku_desde, sku_hasta, linea)
-```
+## SKUs del piloto (76 activos al 09/05/2026)
 
-**Datos al 07/05/2026 (pre-importación de los 8 SKUs nuevos):** 30 pares poblados, todos con `tiempo_horas = 0.5h` excepto los diagonales `(X,X) = 0`. Es la matriz dummy "predecesor anónimo" derivada de `mrp_sku_lineas.t_cambio_hrs`.
+77 cargados — 1 inactivo (`251010175 SALSA BARBECUE TRAVERSO 12X500 DOYPACK`, sin ventas en SQL Server).
 
-**Lo que falta para cerrar F4 completa** (ver doc de arquitectura §6):
-- Endpoints CRUD: `GET / PUT / DELETE /params/setup-matrix/...`
-- Endpoint de carga masiva: `POST /params/setup-matrix/importar`
-- Función `regenerar_matriz_setup_dummy()` que repuebla la matriz desde `mrp_sku_lineas` (necesaria al agregar SKUs nuevos).
-- Conexión real con N2 (sequencer) en F2.
+**Distribución por línea preferida**:
+- L1Pet LV: 32 SKUs (vinagres + jugos 30x500 PET, mayormente)
+- Doypack: 21 SKUs (salsas formato bolsa)
+- L1Pet A: 13 SKUs (formatos 1L principalmente)
+- Doypack 4: 6 SKUs (salsas Doypack 12x1000)
+- Sachetera: 3 SKUs (salsas en sachets)
+- Sin línea (IMPORTACION): 2 SKUs (`410010185 Sopas`, `500170180 Kikkoman`)
+
+**Hallazgo del 09/05**: 8 SKUs marca privada 30x500 PET (Tottus, Cuisine&Co, Frescolim) tenían `cap_bodega_u = 14.000` insuficiente; subido temporalmente a **140.000 u** (pendiente validar con Gerente al volver).
 
 ---
 
@@ -282,58 +219,67 @@ Listado completo y autoritativo en `docs/v1.3_DISENO_ARQUITECTURA.md` §3. Resum
 1. **OF nunca en pasado**: `fem = max(necesidad - lead_time, hoy)`.
 2. **Auto-rechazo OFs vencidas**: aprobadas con `fecha_entrada ≤ hoy` no se inyectan.
 3. **OF ≤ capacidad diaria** (con factor_velocidad y descontando setup).
-4. **Lead time**: `fecha_entrada = lanzamiento + round(lead_time × 7) días`. Para PRODUCCION: `lead_time_sem = 0.15` ⇒ 1 día efectivo (regla operativa V5/D3). **Workaround V6 pendiente**: renombrar columna a `lead_time_dias` con valores enteros.
-5. **factor_velocidad**: SKU con factor 0.8 consume 1/0.8 = 1.25× más capacidad efectiva.
-6. **SS dinámico diario**: `SS = demanda_diaria × ss_dias`.
-7. **Solo PRODUCCION al optimizador**, IMPORTACION sigue MRP clásico.
-8. **OFs no atraviesan medianoche** (v1.3, R1).
-9. **N_max = 4 SKUs/día/línea** (v1.3, R2 — aplicada en F1).
-10. **Día 0 sin setup** (v1.3, R4 — aplicada en F1).
-11. **Primer SKU del día sin setup** (v1.3, R12 — aplicada en V5):
-    - Regla operativa del Gerente: la línea se prepara antes de cada jornada (limpieza/montaje extra-jornada).
-    - Implementación: `W_INICIO_SIMBOLICO = 1` y restricción `Σ inicios_dl >= Σ asigs_dl - 1`.
-    - Resultado: al menos N-1 SKUs/día pagan setup. El primero entra "limpio".
+4. **Lead time**: `fecha_entrada = lanzamiento + round(lead_time × 7) días`.
+5. **Setup primer día de corrida** (consecutivos del mismo SKU no pagan en v1.2).
+6. **factor_velocidad**: SKU con factor 0.8 consume 1/0.8 = 1.25× más capacidad.
+7. **SS dinámico diario**: `SS = demanda_diaria × ss_dias`.
+8. **Solo PRODUCCION al optimizador**, IMPORTACION sigue MRP clásico.
+9. **OFs no atraviesan medianoche** (v1.3, R1).
+10. **N_max = 4 SKUs/día/línea** (v1.3, R12).
+11. **Stock_proyectado <= cap_bodega_u** (restricción dura — si stock_inicial ya viola, INFEASIBLE).
+12. **Primer SKU del día sin penalización de setup** (R12 implementada en commit `4db4c76`).
 
 ---
 
-## Métricas: cuidado con interpretarlas
+## Comportamientos del optimizador a tener presentes
 
-- **`alertas BAJO_SS adjuntas a OFTs`** NO es métrica monotónica de calidad. Puede SUBIR cuando el plan produce más reactivo (más OFTs lanzadas más cerca del vencimiento). El dashboard visual sigue siendo el último filtro.
-- **`paga_setup count`** depende fuertemente del horizonte y de la regla R12. No comparar entre versiones sin normalizar contra la cota mínima `n_dias_con_produccion - n_lineas_con_produccion`.
-- **`solver_time`** crece con N° SKUs y horizonte. Hoy h=13 con 10 SKUs ≈ 6s. Con 18 SKUs es de esperar 15-30s. Considerar timeout 120s para corridas largas.
+⚠️ **Hoy el optimizador NO tolera estos casos** (los devuelve como `INFEASIBLE`):
+
+1. **SKU activo sin forecast** (sin ventas en SQL Server). Solución hoy: marcar `activo=false` en BD.
+2. **SKU con `stock_inicial > cap_bodega_u`**. Solución hoy: aumentar `cap_bodega_u` en Excel.
+3. **SKU activo sin `linea_preferida`** en `mrp_sku_params` (aunque tenga la línea en `mrp_sku_lineas`). Solución hoy: UPDATE manual o llenar columna en Excel.
+
+Las **deudas V6.11 y V6.12-mini** (planificadas para semana del 12-14/05) son fixes defensivos para que estos casos no rompan el plan completo.
 
 ---
 
-## Fase activa: v1.3
+## Fase activa: post-ampliación a 76 SKUs (semana 12-14/05)
 
-**Estamos en**: V5 cerrado en backend. Sesión actual amplía piloto a 18 SKUs y alinea Excel a BD.
+**Estamos en**: estabilización pre-vacaciones del usuario (15/05–29/05). Sistema en servidor con 76 SKUs operativo. Lista de tareas pre-vacaciones:
 
-**Próximos pasos**:
-- **Tarea actual** (chat web + Code, esta sesión): importar Excel V6 a BD, regenerar `mrp_setup_matrix` con los pares nuevos.
-- **F2** (sequencer.py): Nivel 2 de la cascada. Variables de orden intra-día. Esperando matriz real del Gerente.
-- **F3** (numeración por día): refactor para que cada día = una OF distinta.
-- **F4** (matriz CRUD + endpoints): schema y datos dummy ya están. Falta endpoints + función `regenerar_matriz_setup_dummy()`.
-- **F5** (cargar matriz real): cuando llegue del Gerente.
-- **F6** (frontend orden intra-día).
+### Lunes 12/05
+1. **V6.14 — Bug dashboard `Stock 0`** (prioridad #1, 2-3h).
+2. **Persistir UPDATEs en Excel** + commit/push (30 min).
+3. **V6.11 — filtrar SKUs sin forecast** (1h).
+4. **V6.12-mini — filtrar stock > cap_bodega** (1h).
+5. Smoke test final (30 min).
 
-Detalle completo: `docs/v1.3_DISENO_ARQUITECTURA.md` §8.
+### Martes 13/05
+1. Manual gráfico con screenshots (lenguaje neutro chileno) — 3-4h.
+
+### Miércoles 14/05
+1. PDF de avance v8 — 1h.
+2. Comunicación al equipo arranque del 15/05 — 30 min.
+
+### Jueves 15/05
+Buffer. Ideal: nada planificado (vacaciones inician).
 
 ---
 
 ## Tag de retorno seguro
 
-Si algo se rompe sin solución clara durante v1.3:
+Si algo se rompe sin solución clara:
 
-```powershell
+```bash
+# Restaurar BD desde backup
+docker exec -i traverso_mrp_db psql -U mrp_user -d mrp \
+  < /home/ubuntu/backups/mrp_db_20260509_160359.sql
+
+# O retornar al tag estable de código
 git checkout v1.2-piloto
 docker compose down
-docker compose up -d
-docker exec traverso_forecast pip install reportlab==4.1.0 ortools "numpy<2.0" "pandas<2.0" --break-system-packages -q --force-reinstall
-docker exec traverso_forecast rm -rf /app/__pycache__
-docker compose restart forecast
+docker compose up -d --build  # ~25 min
 ```
-
-Para volver al cierre de V5 (con ampliación a 18 SKUs): `git checkout feature/v1.3-cascada`.
 
 ---
 
@@ -343,19 +289,18 @@ Para volver al cierre de V5 (con ampliación a 18 SKUs): `git checkout feature/v
 - **JavaScript**: React funcional + hooks. No Redux. Estado global mínimo en `App.js`.
 - **Comentarios en español** son OK (el equipo es chileno). Identificadores en inglés o español, lo que sea más natural.
 - **No agregar dependencias** sin discutirlo. Cualquier nueva pip/npm va vía conversación.
-- **Tests**: hoy mínimos (proyecto piloto). En v1.3 podemos agregar tests específicos para `sequencer.py` (greenfield) — esto es bienvenido.
-- **Commits**: autor único `germanlaso`, sin `Co-Authored-By`. Mensajes en español.
+- **Documentación al equipo en español neutro** (no argentino, no chilenismos fuertes — debe leer bien para cualquier hispanohablante).
 
 ---
 
 ## Cómo trabajamos en este repo
 
 - **Decisiones grandes (arquitectura)**: chat web Claude, registramos en `docs/v1.3_DISENO_ARQUITECTURA.md`.
-- **Implementación**: Claude Code (este entorno).
+- **Implementación**: Claude Code (terminal en servidor o PC).
 - **Documentación de avance al negocio**: chat web (PDFs ejecutivos).
-- **Snapshots técnicos**: al final de cada sesión grande, generar `ESTADO_TECNICO_PROYECTO_<fecha>[-tarde|-noche].md` en `docs/`. Los snapshots históricos NO se editan — son fotos de un momento.
+- **Snapshots técnicos**: al final de cada sesión grande, generar `ESTADO_TECNICO_PROYECTO_<fecha>.md` en `docs/`.
 
-Cuando termines una sesión productiva en Claude Code, recuerda:
+Cuando termines una sesión productiva:
 1. Verificar que el cambio funciona (correr `/plan`, ver logs).
 2. Hacer commit (no es automático).
 3. Si fue un hito, sugerir un tag git.
@@ -363,8 +308,10 @@ Cuando termines una sesión productiva en Claude Code, recuerda:
 
 ---
 
-## Primera invocación recomendada
+## Primera invocación recomendada en próxima sesión
 
-Al iniciar `claude` en la raíz del repo, tu primer mensaje:
+> Lee `CLAUDE.md` y `docs/ESTADO_TECNICO_PROYECTO_09-05-26.md`. Confírmame qué entiendes del estado actual y arranquemos por la deuda V6.14 (bug del dashboard mostrando stock=0).
 
-> Lee `CLAUDE.md` y `docs/v1.3_DISENO_ARQUITECTURA.md` y el snapshot más reciente en `docs/ESTADO_TECNICO_PROYECTO_*.md`. Confírmame qué entiendes del proyecto, del estado actual y de las decisiones de v1.3. Después arrancamos con la siguiente fase.
+---
+
+**Tag estable de retorno**: `v1.2-piloto`. **Commit más reciente** (al 09/05/2026): `4fbe0ed` (08/05).
