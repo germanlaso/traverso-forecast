@@ -476,6 +476,18 @@ export default function App() {
           <div style={s.topSub}>Motor Prophet · Segmento Comercial · Piloto v1.1</div>
         </div>
         <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          {/* V6.38: badge global de plan desactualizado (visible en todas las pestañas) */}
+          {planStale && lastPlanTimestamp && (
+            <span style={{
+              ...s.badge(C.amberLt, '#854F0B'),
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+            onClick={() => { setActiveTab('plan'); }}
+            title="Click para ir al plan y regenerar">
+              ⚠ Plan desactualizado — Regenerar
+            </span>
+          )}
           {dbStatus && <span style={s.badge(dbStatus.db?.ok?C.tealLt:C.dangerLt, dbStatus.db?.ok?'#085041':'#A32D2D')}>{dbStatus.db?.ok ? '● SQL conectado' : '● Sin conexión SQL'}</span>}
         </div>
       </div>
