@@ -472,6 +472,12 @@ def generar_plan(req: PlanRequest = None):
                 # v1.2: el optimizer consumió las OFs aprobadas como entradas internas
                 # del modelo, pero el frontend igual necesita verlas en la lista.
                 # Las inyectamos como filas adicionales con aprobada=True.
+                # V6.42: usar linea y fecha_lanzamiento REALES de la aprobada (campos
+                # que V6.37 propaga desde BD). Antes se reescribian con linea_preferida
+                # del SKU y fecha_lanzamiento = fecha_entrada - lead_time, lo que rompia
+                # la visualizacion cuando el operador editaba esos campos en el modal.
+                # Fallback: si los campos no estan (datos legacy pre-F3), usar el
+                # calculo viejo para no romper.
                 from datetime import date as _date_helper, timedelta as _td_helper
                 for sku_ap, lst in entradas_fijas.items():
                     sp_ap = sku_params.get(sku_ap)
@@ -479,6 +485,7 @@ def generar_plan(req: PlanRequest = None):
                     lt_ap = getattr(sp_ap, "lead_time_semanas", 1) if sp_ap else 1
                     desc_ap = getattr(sp_ap, "descripcion", "") if sp_ap else ""
                     tipo_ap = getattr(sp_ap, "tipo", "PRODUCCION") if sp_ap else "PRODUCCION"
+                    linea_pref = getattr(sp_ap, "linea_preferida", None) if sp_ap else None
                     for ent in lst:
                         if not ent.get("aprobada"):
                             continue
@@ -489,20 +496,28 @@ def generar_plan(req: PlanRequest = None):
                             f_ent = _date_helper.fromisoformat(fer_iso)
                         except ValueError:
                             continue
-                        # Calcular fecha_lanzamiento aproximada: entrada - lead_time
-                        f_lan = f_ent - _td_helper(days=int(round(lt_ap * 7)))
+                        # V6.42: fecha_lanzamiento desde el campo propagado por V6.37,
+                        # con fallback al calculo viejo (entrada - lead_time)
+                        fl_iso = str(ent.get("fecha_lanzamiento", "") or "")[:10]
+                        if fl_iso:
+                            f_lan_iso = fl_iso
+                        else:
+                            f_lan_iso = (f_ent - _td_helper(days=int(round(lt_ap * 7)))).isoformat()
+                        # V6.42: linea desde el campo propagado por V6.37, con fallback
+                        # a linea_preferida del SKU
+                        linea_ap = ent.get("linea", "") or linea_pref
                         cj_ap = int(round(float(ent.get("cantidad_cajas", 0) or 0)))
                         ordenes.append({
                             "sku": sku_ap,
                             "descripcion": desc_ap,
                             "tipo": tipo_ap,
                             "semana_necesidad": ent.get("semana_necesidad", "") or fer_iso,
-                            "semana_emision": f_lan.isoformat(),
-                            "fecha_lanzamiento": f_lan.isoformat(),
+                            "semana_emision": f_lan_iso,
+                            "fecha_lanzamiento": f_lan_iso,
                             "fecha_entrada_real": fer_iso,
                             "cantidad_cajas": cj_ap,
                             "cantidad_unidades": cj_ap * upc_ap,
-                            "linea": getattr(sp_ap, "linea_preferida", None) if sp_ap else None,
+                            "linea": linea_ap,
                             "motivo": "OF aprobada",
                             "alerta": None,
                             "tiene_alerta": False,
