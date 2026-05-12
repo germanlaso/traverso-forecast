@@ -99,7 +99,11 @@ function ModalDesplazar({orden,aprobacion,onGuardar,onCerrar}){
   const handleGuardar=async()=>{
     setGuardando(true);
     try{
+      // V6.45: enviar numero_of explicito (mismo bug que ModalEditar — al
+      // cambiar la fecha el lookup F3 fallaba, creando OF duplicada).
+      // Este modal sera reemplazado por ModalEditar en V6.39 (deuda pendiente).
       await axios.post(`${API}/ordenes/aprobar`,{
+        numero_of:orden.numero_of,
         sku:orden.sku,descripcion:orden.descripcion,tipo:orden.tipo,
         // semana_emision/semana_necesidad: claves de aprobación en BD — no tocar
         semana_emision:orden.semana_emision,semana_necesidad:orden.semana_necesidad,
@@ -181,6 +185,25 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
     || orden?.semana_necesidad
     || ""
   ).slice(0,10));
+  // V6.46: el usuario puede editar fecha_entrada manualmente; si lo hace,
+  // perdemos el auto-recalculo. Trackeamos esto para no sobreescribir su
+  // intencion al cambiar despues fecha_lanzamiento.
+  const [fechaEntEditada,setFechaEntEditada]=useState(false);
+  // V6.46: lead_time del SKU (en semanas). Esta en el plan: orden.lead_time_sem.
+  // Fallback a 1 dia si no esta.
+  const leadTimeDias=Math.max(1,Math.round((orden?.lead_time_sem??(1/7))*7));
+  // V6.46: cuando cambia fecha_lanzamiento, recalcular fecha_entrada SOLO si
+  // el usuario no la edito manualmente. Ese es el comportamiento intuitivo:
+  // mover la produccion arrastra la entrada, salvo que el operador haya
+  // querido una entrada especifica.
+  useEffect(()=>{
+    if(fechaEntEditada || !fechaLanz) return;
+    try{
+      const d=new Date(fechaLanz+"T00:00:00");
+      d.setDate(d.getDate()+leadTimeDias);
+      setFechaEnt(d.toISOString().slice(0,10));
+    }catch{}
+  },[fechaLanz,leadTimeDias,fechaEntEditada]);
   const [comentario,setComentario]=useState(aprobacion?.comentario||"");
   const [guardando,setGuardando]=useState(false);
   const [cancelando,setCancelando]=useState(false);
@@ -190,7 +213,11 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
     try{
       // V6.44: capturamos la respuesta del backend (objeto aprobacion actualizado)
       // para que el padre pueda hacer reflejo local sin esperar a un refresh.
+      // V6.45: enviamos numero_of explicito para que el backend actualice la
+      // misma OF en lugar de crear una nueva cuando cambia fecha_lanzamiento_real
+      // (la PK F3 falla porque busca por la fecha NUEVA, no la existente).
       const {data:aprobData}=await axios.post(`${API}/ordenes/aprobar`,{
+        numero_of:orden.numero_of,
         sku:orden.sku,descripcion:orden.descripcion,tipo:orden.tipo,
         semana_emision:orden.semana_emision,semana_necesidad:orden.semana_necesidad,
         cantidad_sugerida_cj:orden.cantidad_cajas,cantidad_real_cj:Number(cantReal),
@@ -228,7 +255,8 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`1.5px solid ${C.teal}`,outline:"none"}}/>],
           ["Fecha lanzamiento real",<input type="date" value={fechaLanz} onChange={e=>setFechaLanz(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],
-          ["Fecha entrada stock real",<input type="date" value={fechaEnt} onChange={e=>setFechaEnt(e.target.value)}
+          ["Fecha entrada stock real",<input type="date" value={fechaEnt}
+            onChange={e=>{setFechaEnt(e.target.value);setFechaEntEditada(true);}}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],
           ["Comentario",<input type="text" value={comentario} onChange={e=>setComentario(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],

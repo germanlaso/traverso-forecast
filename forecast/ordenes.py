@@ -46,6 +46,7 @@ class OrdenAprobar(BaseModel):
     fecha_lanzamiento:      str   = ""   # F3: fecha sugerida por el optimizer (parte de la clave logica)
     fecha_lanzamiento_real: str   = ""   # F3: fecha real (si el usuario la modifico en el modal)
     fecha_entrada_real:     str   = ""
+    numero_of:              str   = ""   # V6.45: identificador para edicion (saltea lookup F3 cuando viene)
 
 
 def orden_key(sku, semana_necesidad, semana_emision):
@@ -116,8 +117,15 @@ def aprobar_orden(req: OrdenAprobar):
         # fecha_lanzamiento (sugerida por el optimizer) > semana_emision.
         fl_str = (req.fecha_lanzamiento_real or req.fecha_lanzamiento or se)[:10]
         linea_req = req.linea or ""
-        existente = get_orden_by_key(req.sku, fl_str, linea_req)
-        numero_of = existente["numero_of"] if existente and existente.get("numero_of") else next_numero_of()
+        # V6.45: si el request trae numero_of (edicion de OF aprobada), usamos
+        # ESE numero como identificador estable. Sin esto, al editar la fecha
+        # de lanzamiento el lookup F3 fallaba (busca por la NUEVA fecha que
+        # aun no existe en BD), creando una OF duplicada con numero distinto.
+        if req.numero_of:
+            numero_of = req.numero_of
+        else:
+            existente = get_orden_by_key(req.sku, fl_str, linea_req)
+            numero_of = existente["numero_of"] if existente and existente.get("numero_of") else next_numero_of()
 
         upsert_orden({
             "numero_of":            numero_of,
