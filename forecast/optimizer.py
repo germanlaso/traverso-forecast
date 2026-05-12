@@ -28,6 +28,7 @@ Firma pública preservada de v1.1: optimizar_plan(plan_mrp, ...)
 
 from datetime import date, timedelta
 from typing import Any
+import logging
 from ortools.sat.python import cp_model
 
 # Calendario (módulo nuevo v1.2)
@@ -38,6 +39,11 @@ from calendario import (
     generar_horizonte_diario,
     semana_iso_inicio,
 )
+
+# Logger a nivel modulo (V6.37: necesario para que _construir_modelo loguee
+# sobrecargas de aprobadas. Antes de V6.37 solo optimizar_plan() definia logger
+# localmente; las otras funciones no tenian acceso).
+logger = logging.getLogger("optimizer")
 
 
 # =============================================================================
