@@ -156,8 +156,15 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
     if(!window.confirm(`¿Retirar aprobación de ${orden.numero_of}?`)) return;
     setCancelando(true);
     try{
-      const key=`${orden.sku}__${orden.semana_necesidad}__${orden.semana_emision}`;
-      await axios.delete(`${API}/ordenes/cancelar/${key}`);
+      // V6.49: enviar numero_of directo (robusto contra cambios de fechas/PK).
+      // El endpoint legacy con key sku__sn__se estaba roto desde F3: pasaba
+      // (sku, sn, se) a get_orden_by_key(sku, fl, linea) y devolvia ok:false
+      // con status 200, dejando el frontend creyendo que cancelo.
+      const {data}=await axios.delete(`${API}/ordenes/cancelar/${orden.numero_of}`);
+      if(data && data.ok === false){
+        alert("No se pudo cancelar: "+(data.mensaje||"orden no encontrada"));
+        return;
+      }
       // V6.44: pasamos numero_of para que el padre pueda quitar la aprobacion
       // de su lista local sin refrescar.
       onCancelarAprobacion(orden.numero_of);

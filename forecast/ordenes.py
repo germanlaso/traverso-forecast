@@ -185,14 +185,38 @@ def aprobar_orden(req: OrdenAprobar):
 
 @router.delete("/cancelar/{key:path}")
 def cancelar_orden(key: str):
+    """
+    Cancela una OF aprobada (marca todas sus aprobaciones APROBADA como CANCELADA).
+
+    V6.49: acepta dos formatos en el path:
+      - numero_of directo: "OF-2026-00010" o "OFT-2026-XXXXX" (preferido,
+        introducido en V6.49 — robusto contra cambios de PK).
+      - Key legacy: "sku__sn__se" (compatibilidad).
+
+    El formato legacy era roto desde F3: el endpoint pasaba (sku, sn, se) a
+    get_orden_by_key cuya firma es (sku, fecha_lanzamiento, linea). Como
+    semana_emision != fecha_lanzamiento en F3+, el lookup nunca encontraba
+    la orden y devolvia {ok: false} con status 200, dejando el frontend
+    creyendo que cancelo cuando en realidad no cancelo nada.
+    """
     try:
+        # V6.49: si el path es un numero_of (formato OF-YYYY-NNNNN), usar directo
+        if key.startswith("OF-") or key.startswith("OFT-"):
+            n_cancelados = cancelar_orden_db(key)
+            if not n_cancelados:
+                return {"ok": False, "mensaje": f"No habia aprobacion activa para {key}"}
+            return {"ok": True, "numero_of": key}
+
+        # Legacy: key formato sku__sn__se. NOTA: este lookup esta roto desde F3
+        # (pasa (sn,se) donde get_orden_by_key espera (fecha_lanzamiento, linea)).
+        # Solo se mantiene por compatibilidad con clientes viejos.
         partes = key.split("__")
         if len(partes) != 3:
             raise HTTPException(status_code=400, detail="Key inválido")
         sku, sn, se = partes
         existente = get_orden_by_key(sku, sn, se)
         if not existente:
-            return {"ok": False, "mensaje": "Orden no encontrada"}
+            return {"ok": False, "mensaje": "Orden no encontrada (legacy key — usar numero_of)"}
         cancelar_orden_db(existente["numero_of"])
         return {"ok": True, "key": key, "numero_of": existente["numero_of"]}
     except HTTPException:
