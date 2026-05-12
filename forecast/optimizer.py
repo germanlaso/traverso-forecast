@@ -368,6 +368,65 @@ def _construir_modelo(
 
     # ─── Restricciones agregadas por (d, l) ──────────────────────────────────
 
+    # V6.37: Pre-cómputo de ocupación por OFs aprobadas
+    # ----------------------------------------------------------------
+    # Para cada (fecha_lanzamiento, linea) suma de unidades aprobadas y
+    # conjunto de SKUs aprobados. Se usa para:
+    #   (a) descontar cap_dia en R1a (capacidad fisica ocupada),
+    #   (b) descontar slot N_MAX en R1b (numero de SKUs distintos),
+    #   (c) prohibir OFTs nuevas del mismo SKU ya aprobado ese (d, l),
+    #   (d) ajustar R12 (la "primera del dia gratis" es la aprobada si existe).
+    # Las aprobadas se siguen modelando como entrada de stock en el balance
+    # via _entradas_del_dia(); este pre-computo es el lado "ocupacion de recurso".
+    # ----------------------------------------------------------------
+    aprobadas_u_dl: dict[tuple[date, str], int] = {}
+    aprobadas_skus_dl: dict[tuple[date, str], set] = {}
+    sobrecargas_aprobadas: list[dict] = []
+
+    for sku_ap, lst in entradas_aprobadas.items():
+        for e in lst:
+            fl = e.get("fecha_lanzamiento")
+            ln = e.get("linea", "")
+            u_ap = int(e.get("cantidad_u", 0) or 0)
+            if not isinstance(fl, date) or not ln or u_ap <= 0:
+                continue
+            key = (fl, ln)
+            aprobadas_u_dl[key] = aprobadas_u_dl.get(key, 0) + u_ap
+            aprobadas_skus_dl.setdefault(key, set()).add(sku_ap)
+
+    # Detectar (linea, dia) ya saturados solo por aprobadas (politica decidida:
+    # se asume capacidad libre 0 con advertencia, el operador decide que hacer).
+    for (d_ap, l_ap), u_ap in aprobadas_u_dl.items():
+        cap = cap_dia.get((d_ap, l_ap), 0)
+        n_ap = len(aprobadas_skus_dl[(d_ap, l_ap)])
+        cap_excedida = u_ap > cap
+        nmax_excedido = n_ap > N_MAX_SKUS_DIA_LINEA
+        if cap_excedida or nmax_excedido:
+            motivos = []
+            if cap_excedida:
+                motivos.append(f"cap excedida ({u_ap}u > {cap}u)")
+            if nmax_excedido:
+                motivos.append(f"N_max excedido ({n_ap} SKUs > {N_MAX_SKUS_DIA_LINEA})")
+            sobrecargas_aprobadas.append({
+                "linea": l_ap,
+                "fecha": d_ap.isoformat(),
+                "u_aprobadas": u_ap,
+                "cap_dia": cap,
+                "n_skus_aprobados": n_ap,
+                "n_max": N_MAX_SKUS_DIA_LINEA,
+                "motivo": " + ".join(motivos),
+            })
+
+    if sobrecargas_aprobadas:
+        logger.warning(
+            f"[V6.37] {len(sobrecargas_aprobadas)} (linea,dia) saturados solo "
+            f"por OFs aprobadas - se asume capacidad libre 0 ese par. "
+            f"Detalle: {sobrecargas_aprobadas}"
+        )
+
+    # Exponer en el modelo para que se propague en _post_procesar -> diag
+    m.sobrecargas_aprobadas = sobrecargas_aprobadas
+
     for d_idx, d in enumerate(horizonte):
         for l in m.lineas:
             cap_l_d = cap_dia[(d, l)]
@@ -387,6 +446,9 @@ def _construir_modelo(
             #
             # Donde u[k,l] = u_por_caja[k] × cajas[d,k,l].
             # Pre-calculamos costo_caja_escalado[s,l] = round(FACTOR_ESCALA / factor) × upc.
+            #
+            # V6.37: el lado derecho es cap_libre = max(0, cap_l_d - u_aprobadas[d,l]).
+            # Si cap_libre = 0, sum(terms) <= 0 fuerza cajas=0 ese (d,l) (variables >= 0).
             # ----------------------------------------------------------------
             terms = []
             for s in m.skus:
@@ -402,30 +464,50 @@ def _construir_modelo(
                     # Setup en "unidades-escala-línea": t_cambio × vel × FACTOR_ESCALA
                     terms.append(stp * FACTOR_ESCALA * m.inicio[(d, s, l)])
             if terms:
-                m.model.Add(sum(terms) <= cap_l_d * FACTOR_ESCALA)
+                # V6.37: restar unidades de OFs aprobadas ya ocupando este (d, l)
+                u_ap_dl = aprobadas_u_dl.get((d, l), 0)
+                cap_libre_u = max(0, cap_l_d - u_ap_dl)
+                m.model.Add(sum(terms) <= cap_libre_u * FACTOR_ESCALA)
 
             # R1b (v1.3, R2): cap. de nº de SKUs distintos asignados a esta línea-día.
             # N1 acota Σ_k asig[d,k,l] ≤ 4 para que el sub-problema de N2
-            # (sequencer.py) sea siempre pequeño. Solo SKUs que tienen esta
-            # línea como par válido contribuyen a la suma.
+            # (sequencer.py) sea siempre pequeño.
+            # V6.37: SKUs ya aprobados ese (d,l) ocupan slot (decuento de N_MAX) y
+            # se prohibe OFT nueva del mismo SKU (decision A: operador edita la OF
+            # existente en lugar de tener una OFT paralela).
+            skus_ap_dl = aprobadas_skus_dl.get((d, l), set())
+            n_ap_dl = len(skus_ap_dl)
+            n_max_libre = max(0, N_MAX_SKUS_DIA_LINEA - n_ap_dl)
+
+            # Prohibir OFT nueva (asig=1) para SKUs ya aprobados ese (d, l)
+            for s in skus_ap_dl:
+                if l in m.pares_sku_linea[s]:
+                    m.model.Add(m.asig[(d, s, l)] == 0)
+
+            # SKUs candidatos a OFT nueva ese (d, l)
             asigs_dl = [
                 m.asig[(d, s, l)]
                 for s in m.skus
-                if l in m.pares_sku_linea[s]
+                if l in m.pares_sku_linea[s] and s not in skus_ap_dl
             ]
             if asigs_dl:
-                m.model.Add(sum(asigs_dl) <= N_MAX_SKUS_DIA_LINEA)
+                m.model.Add(sum(asigs_dl) <= n_max_libre)
                 # R12 (v1.3, decisión Gerente 05/05/2026): el primer SKU del día
-                # en esta línea NO paga setup. Setups totales = max(0, Σ asig - 1).
-                # Cota superior por SKU (inicio <= asig) ya se aplica arriba.
-                # El peso simbólico W_INICIO_SIMBOLICO en el objetivo evita
-                # inicios fantasma cuando hay holgura de capacidad.
+                # en esta línea NO paga setup.
+                # V6.37 (decision B): si hay aprobadas ese (d,l), la "primera del
+                # dia gratis" YA es una aprobada (la linea fisicamente arranco con
+                # ella). Todas las OFTs nuevas pagan setup -> inicios >= asigs (no -1).
                 inicios_dl = [
                     m.inicio[(d, s, l)]
                     for s in m.skus
-                    if l in m.pares_sku_linea[s]
+                    if l in m.pares_sku_linea[s] and s not in skus_ap_dl
                 ]
-                m.model.Add(sum(inicios_dl) >= sum(asigs_dl) - 1)
+                if n_ap_dl == 0:
+                    # Sin aprobadas: R12 estándar (la primera nueva es gratis)
+                    m.model.Add(sum(inicios_dl) >= sum(asigs_dl) - 1)
+                else:
+                    # Con aprobadas: todas las OFTs nuevas pagan setup
+                    m.model.Add(sum(inicios_dl) >= sum(asigs_dl))
 
     # ─── Restricciones por (d, s) ────────────────────────────────────────────
 
@@ -552,6 +634,7 @@ def _resultado_vacio(mensaje: str, status: str = "EMPTY",
         "alertas": [{"tipo": "INFO", "mensaje": mensaje}],
         "uso_linea": {},
         "resumen": {"mensaje": mensaje},
+        "sobrecargas_aprobadas": [],  # V6.37
     }
 
 
@@ -703,6 +786,7 @@ def _post_procesar(
         "alertas": alertas,
         "uso_linea": uso_linea,
         "resumen": resumen,
+        "sobrecargas_aprobadas": getattr(m, "sobrecargas_aprobadas", []),  # V6.37
     }
 
 
@@ -886,8 +970,17 @@ def optimizar_plan(
                 fecha_obj = date.fromisoformat(str(fer)[:10])
             except ValueError:
                 continue
+            # V6.37: fecha_lanzamiento (= dia de produccion) y linea, para
+            # descontar cap diaria (R1a) y slot N_MAX (R1b).
+            fl_raw = e.get("fecha_lanzamiento", "")
+            try:
+                fl_obj = date.fromisoformat(str(fl_raw)[:10]) if fl_raw else None
+            except ValueError:
+                fl_obj = None
             entradas_aprobadas_rich.setdefault(sku, []).append({
                 "fecha_entrada": fecha_obj,
+                "fecha_lanzamiento": fl_obj,           # V6.37
+                "linea": e.get("linea", "") or "",     # V6.37
                 "cantidad_u": int(cj * upc),
                 "numero_of": e.get("numero_of", ""),
             })
@@ -1033,6 +1126,7 @@ def optimizar_plan(
         },
         "uso_promedio_lineas_pct": resultado["resumen"].get("uso_promedio_lineas_pct", {}),
         "horizonte_dias": resultado["resumen"].get("horizonte_dias", horizonte_dias),
+        "sobrecargas_aprobadas": resultado.get("sobrecargas_aprobadas", []),  # V6.37
     }
 
     return ordenes_finales, diag

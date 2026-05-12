@@ -418,6 +418,8 @@ def generar_plan(req: PlanRequest = None):
         for ap in aprobadas_db:
             sku_ap = str(ap.get("sku",""))
             fer = str(ap.get("fecha_entrada_real") or ap.get("semana_necesidad",""))[:10]
+            fl  = str(ap.get("fecha_lanzamiento_real") or "")[:10]   # V6.37
+            ln  = str(ap.get("linea") or "")                          # V6.37
             cj  = float(ap.get("cantidad_real_cj") or 0)
             # Solo inyectar entradas futuras — las pasadas ya están en el stock real de SQL
             # Auto-rechazo: si fer <= hoy, asumimos que la OF se perdió o ya llegó al stock real
@@ -426,6 +428,8 @@ def generar_plan(req: PlanRequest = None):
                     entradas_fijas[sku_ap] = []
                 entradas_fijas[sku_ap].append({
                     "fecha_entrada": fer,
+                    "fecha_lanzamiento": fl,         # V6.37: descuento cap/N_max
+                    "linea": ln,                     # V6.37: descuento cap/N_max
                     "semana_necesidad": str(ap.get("semana_necesidad",""))[:10],
                     "cantidad_cajas": cj,
                     "numero_of": ap.get("numero_of",""),
