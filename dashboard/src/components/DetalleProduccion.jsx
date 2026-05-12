@@ -188,7 +188,9 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
   const handleGuardar=async()=>{
     setGuardando(true);
     try{
-      await axios.post(`${API}/ordenes/aprobar`,{
+      // V6.44: capturamos la respuesta del backend (objeto aprobacion actualizado)
+      // para que el padre pueda hacer reflejo local sin esperar a un refresh.
+      const {data:aprobData}=await axios.post(`${API}/ordenes/aprobar`,{
         sku:orden.sku,descripcion:orden.descripcion,tipo:orden.tipo,
         semana_emision:orden.semana_emision,semana_necesidad:orden.semana_necesidad,
         cantidad_sugerida_cj:orden.cantidad_cajas,cantidad_real_cj:Number(cantReal),
@@ -196,7 +198,7 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
         comentario,linea:orden.linea||"",
         fecha_lanzamiento_real:fechaLanz,fecha_entrada_real:fechaEnt,
       });
-      onGuardar();
+      onGuardar(aprobData);
     }catch(e){alert("Error: "+(e.response?.data?.detail||e.message));}
     finally{setGuardando(false);}
   };
@@ -206,7 +208,9 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
     try{
       const key=`${orden.sku}__${orden.semana_necesidad}__${orden.semana_emision}`;
       await axios.delete(`${API}/ordenes/cancelar/${key}`);
-      onCancelarAprobacion();
+      // V6.44: pasamos numero_of para que el padre pueda quitar la aprobacion
+      // de su lista local sin refrescar.
+      onCancelarAprobacion(orden.numero_of);
     }catch(e){alert("Error: "+(e.response?.data?.detail||e.message));}
     finally{setCancelando(false);}
   };
@@ -318,6 +322,11 @@ export default function DetalleProduccion({
   ordenesPlan=[],
   ordenesAprobadas=[],
   onPlanChanged,
+  // V6.44: callbacks de reflejo local — el padre (App.js) actualiza
+  // ordenesAprobadas en memoria sin esperar a un refresh. Independientes
+  // de onPlanChanged que solo marca el plan como stale.
+  onAprobacionEditada,
+  onAprobacionRetirada,
   planLoading=false,
   onSolicitarPlan=null,
 }){
@@ -397,8 +406,18 @@ export default function DetalleProduccion({
       {modalDesplazar&&<ModalDesplazar orden={modalDesplazar.orden} aprobacion={modalDesplazar.aprobacion}
         onGuardar={()=>{setModalDesplazar(null);recargar();}} onCerrar={()=>setModalDesplazar(null)}/>}
       {modalEditar&&<ModalEditar orden={modalEditar.orden} aprobacion={modalEditar.aprobacion}
-        onGuardar={()=>{setModalEditar(null);recargar();}}
-        onCancelarAprobacion={()=>{setModalEditar(null);recargar();}}
+        onGuardar={(aprobUpdated)=>{
+          setModalEditar(null);
+          // V6.44: reflejo local instantaneo + marcar stale
+          if(onAprobacionEditada && aprobUpdated) onAprobacionEditada(aprobUpdated);
+          recargar();
+        }}
+        onCancelarAprobacion={(numero_of)=>{
+          setModalEditar(null);
+          // V6.44: quitar de la lista local + marcar stale
+          if(onAprobacionRetirada && numero_of) onAprobacionRetirada(numero_of);
+          recargar();
+        }}
         onCerrar={()=>setModalEditar(null)}/>}
 
       {/* Banner: plan no generado — red de seguridad */}

@@ -994,6 +994,29 @@ export default function App() {
           ordenesAprobadas={ordenesAprobadas}
           onAprobar={(o) => abrirModal(o)}
           onPlanChanged={() => marcarPlanStale()}
+          /* V6.44: reflejo local sin esperar refresh */
+          onAprobacionEditada={(aprobUpdated) => {
+            setOrdenesAprobadas(prev =>
+              prev.map(a => a.numero_of === aprobUpdated.numero_of ? aprobUpdated : a)
+            );
+          }}
+          onAprobacionRetirada={(numero_of) => {
+            // Quitar de la lista de aprobadas. La OF vuelve a ser pendiente (OFT)
+            // en el plan automaticamente porque el grid filtra por aprobMap.
+            setOrdenesAprobadas(prev => prev.filter(a => a.numero_of !== numero_of));
+            // En el plan en memoria: la OF vuelve a aparecer como pendiente.
+            // Si la OF era una OFT del optimizer (no manual), su entrada en
+            // plan.ordenes sigue ahi; solo cambiamos aprobada=false.
+            setPlan(prev => {
+              if (!prev?.ordenes) return prev;
+              return {
+                ...prev,
+                ordenes: prev.ordenes.map(o =>
+                  o.numero_of === numero_of ? { ...o, aprobada: false } : o
+                ),
+              };
+            });
+          }}
           planLoading={planLoading}
           onSolicitarPlan={() => runPlan()}
         />}
