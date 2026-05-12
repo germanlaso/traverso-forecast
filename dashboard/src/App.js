@@ -3,6 +3,7 @@ import { ComposedChart, Line, Area, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import axios from 'axios';
 import StockProyeccion from './components/StockProyeccion';
 import DetalleProduccion from './components/DetalleProduccion';
+import ProgramacionDiaria from './components/ProgramacionDiaria';
 
 const API = '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -178,6 +179,17 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Helper: formatea un ISO timestamp como "hace X min/h/dias"
+  const formatTimestampRelativo = (iso) => {
+    if (!iso) return '';
+    const diffMin = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (diffMin < 1) return 'recien';
+    if (diffMin < 60) return `hace ${diffMin} min`;
+    const diffH = Math.round(diffMin / 60);
+    if (diffH < 24) return `hace ${diffH} h`;
+    return `hace ${Math.round(diffH / 24)} dias`;
+  };
   const [dbStatus, setDbStatus] = useState(null);
   const [csvMode, setCsvMode] = useState(false);
   const [csvPath, setCsvPath] = useState('/app/data/ventas.csv');
@@ -193,7 +205,18 @@ export default function App() {
     setStockNav(n => n + 1);   // fuerza re-render aunque el SKU sea el mismo
     setActiveTab('stock');
   };
-  const [plan, setPlan] = useState(null);
+  // Plan persiste entre refreshes via localStorage. El usuario decide cuando
+  // regenerarlo con el boton "Regenerar Plan" (cierra V6.36 — auto-trigger
+  // hacia esperar ~90s en cada refresh).
+  const [plan, setPlan] = useState(() => {
+    try {
+      const cached = localStorage.getItem('traverso:lastPlan');
+      return cached ? JSON.parse(cached) : null;
+    } catch { return null; }
+  });
+  const [lastPlanTimestamp, setLastPlanTimestamp] = useState(() => {
+    return localStorage.getItem('traverso:lastPlanTimestamp') || null;
+  });
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(4);
   const [planOptimizar, setPlanOptimizar] = useState(true);
@@ -269,6 +292,13 @@ export default function App() {
         optimizar: planOptimizar,
       });
       setPlan(data);
+      // Cachear plan para sobrevivir refreshes (V6.36)
+      try {
+        localStorage.setItem('traverso:lastPlan', JSON.stringify(data));
+        const ts = new Date().toISOString();
+        localStorage.setItem('traverso:lastPlanTimestamp', ts);
+        setLastPlanTimestamp(ts);
+      } catch (e) { console.warn('No se pudo cachear plan en localStorage:', e); }
       // Actualizar resumen de stock si viene en la respuesta
       if (data.stock_info) setStockInfo(data.stock_info);
     } catch(e) {
@@ -278,26 +308,15 @@ export default function App() {
     }
   };
 
-  // ── Auto-trigger del plan ──────────────────────────────────────────────────
-  // La primera vez que el usuario entra a una pestaña que necesita el plan
-  // (Plan, Stock, Detalle), se dispara runPlan() automáticamente. Esto evita
-  // que los componentes hijos hagan su propio fetch a /plan (que generaría
-  // correlativos OFT distintos) y que el usuario olvide generar el plan.
-  // Mantenemos runPlan en un ref para no incluirlo en deps del effect.
-  const runPlanRef = useRef(runPlan);
-  useEffect(() => { runPlanRef.current = runPlan; });
+  // ── Auto-trigger del plan: ELIMINADO el 12/05/2026 (V6.36) ─────────────
+  // Antes: cada refresh regeneraba el plan (~90s espera) porque setState
+  // arrancaba en null. Ahora el plan persiste en localStorage entre refreshes
+  // (single source: el state inicializado en useState al montar el componente).
+  // El usuario regenera explicitamente con el boton "Regenerar Plan".
+  //
+  // Helper para mostrar "hace X minutos / horas / dias" en la UI.
 
-  useEffect(() => {
-    const tabsNeedingPlan = ['plan', 'stock', 'detalle'];
-    if (
-      tabsNeedingPlan.includes(activeTab) &&
-      plan === null &&
-      !planLoading &&
-      !error.startsWith('Error plan:')   // evitar loop si la última corrida falló
-    ) {
-      runPlanRef.current();
-    }
-  }, [activeTab, plan, planLoading, error]);
+  // (sin useEffect — el cache de localStorage hace el trabajo)
 
   const refreshStock = async () => {
     setStockRefreshing(true); setError('');
@@ -438,7 +457,7 @@ export default function App() {
   return (
     <div style={s.app}>
       {/* Topbar */}
-      <div style={s.topbar}>
+      <div className="no-print" style={s.topbar}>
         <div>
           <div style={s.topTitle}>Traverso S.A. — Sistema de Planificación de Producción</div>
           <div style={s.topSub}>Motor Prophet · Segmento Comercial · Piloto v1.1</div>
@@ -449,8 +468,8 @@ export default function App() {
       </div>
 
       {/* Tabs */}
-      <div style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
-        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU'],['detalle','🔧 Detalle Producción']].map(([tab,label]) => (
+      <div className="no-print" style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
+        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria']].map(([tab,label]) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:500,background:'transparent',color:activeTab===tab?C.teal:C.textMuted,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
             {label}
@@ -660,6 +679,22 @@ export default function App() {
                             cursor:planLoading?'not-allowed':'pointer'}}/>
                   ⚙ OR-Tools
                 </label>
+                {/* Timestamp del último plan generado (V6.36) */}
+                {lastPlanTimestamp && (
+                  <span style={{
+                    marginLeft:'auto',
+                    fontSize:11,
+                    color: (() => {
+                      const diffH = (Date.now() - new Date(lastPlanTimestamp).getTime()) / 3600000;
+                      if (diffH >= 168) return C.danger;   // > 7 dias: rojo
+                      if (diffH >= 24)  return C.amber;    // > 24h: amarillo
+                      return C.textMuted;                  // normal
+                    })(),
+                    fontStyle:'italic'
+                  }}>
+                    Plan generado {formatTimestampRelativo(lastPlanTimestamp)}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -933,6 +968,9 @@ export default function App() {
           onPlanChanged={() => runPlan()}
           planLoading={planLoading}
           onSolicitarPlan={() => runPlan()}
+        />}
+        {activeTab === 'programacion' && <ProgramacionDiaria
+          ordenesAprobadas={ordenesAprobadas}
         />}
       </div>
     </div>
