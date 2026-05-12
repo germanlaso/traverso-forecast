@@ -217,6 +217,16 @@ export default function App() {
   const [lastPlanTimestamp, setLastPlanTimestamp] = useState(() => {
     return localStorage.getItem('traverso:lastPlanTimestamp') || null;
   });
+  // V6.38: planStale marca el plan como desactualizado cuando el operador
+  // modifica/desaprueba una OF. Persiste en localStorage para sobrevivir
+  // refreshes. Se limpia cuando se regenera con exito.
+  const [planStale, setPlanStale] = useState(() => {
+    return localStorage.getItem('traverso:planStale') === '1';
+  });
+  const marcarPlanStale = () => {
+    localStorage.setItem('traverso:planStale', '1');
+    setPlanStale(true);
+  };
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(4);
   const [planOptimizar, setPlanOptimizar] = useState(true);
@@ -298,6 +308,9 @@ export default function App() {
         const ts = new Date().toISOString();
         localStorage.setItem('traverso:lastPlanTimestamp', ts);
         setLastPlanTimestamp(ts);
+        // V6.38: limpiar stale tras regeneracion exitosa
+        localStorage.removeItem('traverso:planStale');
+        setPlanStale(false);
       } catch (e) { console.warn('No se pudo cachear plan en localStorage:', e); }
       // Actualizar resumen de stock si viene en la respuesta
       if (data.stock_info) setStockInfo(data.stock_info);
@@ -679,20 +692,23 @@ export default function App() {
                             cursor:planLoading?'not-allowed':'pointer'}}/>
                   ⚙ OR-Tools
                 </label>
-                {/* Timestamp del último plan generado (V6.36) */}
+                {/* Timestamp del último plan generado (V6.36) + indicador stale (V6.38) */}
                 {lastPlanTimestamp && (
                   <span style={{
                     marginLeft:'auto',
                     fontSize:11,
-                    color: (() => {
+                    color: planStale ? C.amber : (() => {
                       const diffH = (Date.now() - new Date(lastPlanTimestamp).getTime()) / 3600000;
                       if (diffH >= 168) return C.danger;   // > 7 dias: rojo
                       if (diffH >= 24)  return C.amber;    // > 24h: amarillo
                       return C.textMuted;                  // normal
                     })(),
-                    fontStyle:'italic'
+                    fontStyle: planStale ? 'normal' : 'italic',
+                    fontWeight: planStale ? 600 : 'normal'
                   }}>
-                    Plan generado {formatTimestampRelativo(lastPlanTimestamp)}
+                    {planStale
+                      ? '⚠ Plan desactualizado — Regenerar'
+                      : `Plan generado ${formatTimestampRelativo(lastPlanTimestamp)}`}
                   </span>
                 )}
               </div>
@@ -965,7 +981,7 @@ export default function App() {
           ordenesPlan={plan?.ordenes ?? []}
           ordenesAprobadas={ordenesAprobadas}
           onAprobar={(o) => abrirModal(o)}
-          onPlanChanged={() => runPlan()}
+          onPlanChanged={() => marcarPlanStale()}
           planLoading={planLoading}
           onSolicitarPlan={() => runPlan()}
         />}
