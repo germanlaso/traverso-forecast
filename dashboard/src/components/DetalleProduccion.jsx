@@ -466,6 +466,16 @@ export default function DetalleProduccion({
             // Pendientes: si fecha de lanzamiento cae en esta semana o la siguiente
             return fechaLanz >= iniSem && fechaLanz <= finSemSig;
           }
+        }).sort((a, b) => {
+          // V6.40: ordenar por fecha_lanzamiento ASC (efectiva: aprobada gana sobre OFT),
+          // desempate por sku y numero_of para determinismo
+          const aprobA = aprobMap[a.numero_of];
+          const aprobB = aprobMap[b.numero_of];
+          const fA = String(aprobA?.fecha_lanzamiento_real || a.fecha_lanzamiento || a.semana_emision || "").slice(0,10);
+          const fB = String(aprobB?.fecha_lanzamiento_real || b.fecha_lanzamiento || b.semana_emision || "").slice(0,10);
+          if (fA !== fB) return fA.localeCompare(fB);
+          if (a.sku !== b.sku) return String(a.sku).localeCompare(String(b.sku));
+          return String(a.numero_of || "").localeCompare(String(b.numero_of || ""));
         });
 
         return(
