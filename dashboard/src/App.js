@@ -312,6 +312,15 @@ export default function App() {
         localStorage.removeItem('traverso:planStale');
         setPlanStale(false);
       } catch (e) { console.warn('No se pudo cachear plan en localStorage:', e); }
+      // V6.48: refetch de ordenesAprobadas para reconciliar el state local
+      // con la verdad de BD. Sin esto, modificaciones locales (desaprobaciones
+      // via setOrdenesAprobadas que despues son re-aprobadas en BD por otro
+      // flujo, o cambios de version no reflejados) dejan el grid mostrando
+      // OFs como pendientes cuando en BD estan aprobadas.
+      try {
+        const aps = await axios.get(`${API}/ordenes/aprobadas`);
+        setOrdenesAprobadas(aps.data || []);
+      } catch (e) { console.warn('No se pudieron refetchear aprobadas:', e); }
       // Actualizar resumen de stock si viene en la respuesta
       if (data.stock_info) setStockInfo(data.stock_info);
     } catch(e) {
