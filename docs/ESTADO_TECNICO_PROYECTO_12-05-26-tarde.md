@@ -285,4 +285,83 @@ Backup BD pre-F3: `/home/ubuntu/backups/mrp_db_pre_F3_20260512_122026.sql` (154 
 
 ---
 
-*Cerrado al fin de la sesión chat web del 12/05/2026 tarde. F3 + Programación Diaria + V6.36 en producción. Próxima sesión: manual del usuario.*
+## 11. Hallazgo crítico al cierre — V6.37 (PRIORIDAD ALTA mañana)
+
+**Detectado al revisar el dashboard tras commit + push del cierre.**
+
+### Síntoma
+
+El optimizador genera OFTs nuevas que **ignoran la capacidad ocupada por OFs ya aprobadas en esa línea/día**. Dos restricciones violadas simultáneamente:
+
+1. **Capacidad diaria**: el indicador del Detalle Producción muestra valores >100% de uso ("400%", "144%", "102%") en días donde hay OFs aprobadas + OFTs sugeridas. El sistema **sabe que está saturado** (lo dice en el indicador) pero el optimizador no lo evita al generar el plan.
+
+2. **N_max=4 SKUs/día/línea**: violada cuando se cuentan los SKUs aprobados + tentativos del mismo día/línea. Caso visto: L1Pet LV martes 12/05 con 3 OFs aprobadas + 5 OFTs sugeridas = 8 SKUs en un día (debería ser ≤4).
+
+### Evidencia visual (capturas del 12/05 al cierre)
+
+**Doypack — martes 12/05** (cap diaria 5.400 u):
+- 3 OFs aprobadas (`OF-2026-00004`, `00010`, `00012`) = 16.200 u (ya satura ~300%).
+- 1 OFT sugerida adicional (`OFT-2026-94645`) = 5.400 u, marcada "Urgente" con fecha_lanzamiento = 2026-05-12.
+- Indicador: **"400% / 0% libre"** + "17% setup".
+- Total real del día: 21.600 u, 400% de la cap.
+
+**L1Pet LV — martes 12/05** (cap diaria 110.000 u):
+- 3 OFs aprobadas (`OF-2026-00013`, `00011`, `00002`) = 22.390 u.
+- 5 OFTs sugeridas (`85883`, `77778`, `52475`, `73212`, otra) = ~82.000 u, todas "Urgente" con fecha_lanzamiento = 2026-05-12.
+- Indicador: **"102% / 0% libre"** + "17% setup".
+- 8 SKUs distintos en un solo día/línea (viola N_max=4).
+
+### Hipótesis del bug (orden de probabilidad)
+
+1. **Hipótesis 1 (más probable)**: en `forecast/optimizer.py`, el modelo CP-SAT recibe `cap_dia[linea]` directo de BD. **No descuenta** la cap ocupada por OFs ya aprobadas en esa línea/día.
+
+2. **Hipótesis 2**: la restricción `Σ_k asig[d,k,l] ≤ N_max` solo cuenta variables `asig[d,k,l]` del modelo (OFTs tentativas en decisión). No cuenta SKUs ya aprobados como "fijos" en ese día.
+
+3. **Hipótesis 3 (peor caso)**: las OFs aprobadas se inyectan en el plan **después** del optimizador (post-procesamiento en `main.py`), no se pasan como input. Si esto es así, el fix es arquitectónico más grande.
+
+Las 3 hipótesis describen la misma falla con distinto alcance del fix. Hay que leer:
+- `forecast/optimizer.py` — sección "entradas aprobadas" y cómo se construye el modelo.
+- `forecast/main.py` — cómo se merge el plan tentativo con OFs aprobadas antes de devolver.
+- `docs/v1.3_DISENO_ARQUITECTURA.md` §3 R3 ("OFs aprobadas en N2 respetan SKU + cantidad. El N2 sí puede mover su posición intra-día si reduce setups"). El doc dice qué debería pasar; hay que verificar si el código lo implementa.
+
+### Severidad
+
+**Alta para validar antes del 15/05**, pero **no completamente bloqueante**:
+- El equipo va a ver indicadores en rojo (400%) — pérdida de confianza en el sistema.
+- El planificador es el filtro humano: rechazaría manualmente lo imposible. Pero esa carga es exactamente lo que el optimizador debería evitar.
+- Si las pruebas arrancan con este bug, hay riesgo de que el equipo dude del optimizador entero.
+
+### Plan para mañana primera hora
+
+1. **Diagnóstico (1h)**:
+   - Leer `optimizer.py` secciones de capacidad y `asig`.
+   - Leer `main.py` post-optimizer (merge con aprobadas).
+   - Determinar cuál de las 3 hipótesis aplica.
+2. **Decisión arquitectónica**: dónde descontar — en el modelo CP-SAT (cap_dia ajustada) o en pre-procesamiento (filtrar SKUs sin espacio).
+3. **Implementación (1-2h)**: el descuento en N1 es el primer paso. Validar también N_max con SKUs aprobados sumados.
+4. **Validación (1h)**: smoke tests con OFs aprobadas en varios días/líneas, h=4 y h=13.
+5. **Commit + push**.
+
+**Estimación total**: 3-4h. **Decisión operativa**: V6.37 ANTES del manual del usuario mañana. Sin el fix, el manual sería confuso (¿cómo se explica al equipo que el sistema sugiere lo imposible?).
+
+### Re-plan pre-vacaciones
+
+- **Martes 13/05**: V6.37 (3-4h) → Manual del usuario (3-4h). Día completo, 6-8h.
+- **Miércoles 14/05**: PDF v8 (1h) + comunicación al equipo (30 min). Más holgado.
+- **Jueves 15/05**: Partida vacaciones.
+
+### Comando recomendado para arrancar mañana
+
+```bash
+cd /home/ubuntu/traverso-forecast
+git status
+git log --oneline -5
+docker compose ps
+```
+
+Y arrancar chat web con:
+> Lee `CLAUDE.md`, `docs/ESTADO_TECNICO_PROYECTO_11-05-26-cierre-B1.md` y `docs/ESTADO_TECNICO_PROYECTO_12-05-26-tarde.md` con énfasis en §11 (V6.37 descubierto al cierre). Arranquemos por diagnosticar el bug del optimizador antes del manual.
+
+---
+
+*Cerrado al fin de la sesión chat web del 12/05/2026 tarde. F3 + Programación Diaria + V6.36 en producción. **V6.37 descubierto al cierre, prioridad #1 mañana antes del manual.** Próxima sesión: diagnóstico + fix V6.37, después manual del usuario.*
