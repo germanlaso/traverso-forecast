@@ -62,7 +62,7 @@ function OrdenBadge({orden,esPreferida,estaAprobada,onClick}){
       ? `⚙ Setup: ${fmtN(orden.setup_unidades)} u`
       : `⚙ Paga setup`);
   }
-  tooltipLines.push("", "Click para desplazar");
+  tooltipLines.push("", estaAprobada ? "Click para editar / retirar aprobación" : "Click para aprobar");
   return(
     <div onClick={onClick}
       title={tooltipLines.join("\n")}
@@ -83,92 +83,15 @@ function OrdenBadge({orden,esPreferida,estaAprobada,onClick}){
   );
 }
 
-function ModalDesplazar({orden,aprobacion,onGuardar,onCerrar}){
-  // v1.2: prefill con la fecha exacta del optimizador (día), no el agrupador.
-  const fechaActual=String(
-    aprobacion?.fecha_lanzamiento_real
-    || orden?.fecha_lanzamiento
-    || orden?.semana_emision
-    || ""
-  ).slice(0,10);
-  const [nuevaFecha,setNuevaFecha]=useState(fechaActual);
-  const [guardando,setGuardando]=useState(false);
-  if(!orden) return null;
-  const diasDiff=Math.round((new Date(nuevaFecha)-new Date(fechaActual))/86400000);
-  const esHabil=esDiaHabil(nuevaFecha);
-  const handleGuardar=async()=>{
-    setGuardando(true);
-    try{
-      // V6.45: enviar numero_of explicito (mismo bug que ModalEditar — al
-      // cambiar la fecha el lookup F3 fallaba, creando OF duplicada).
-      // Este modal sera reemplazado por ModalEditar en V6.39 (deuda pendiente).
-      await axios.post(`${API}/ordenes/aprobar`,{
-        numero_of:orden.numero_of,
-        sku:orden.sku,descripcion:orden.descripcion,tipo:orden.tipo,
-        // semana_emision/semana_necesidad: claves de aprobación en BD — no tocar
-        semana_emision:orden.semana_emision,semana_necesidad:orden.semana_necesidad,
-        cantidad_sugerida_cj:orden.cantidad_cajas,cantidad_real_cj:aprobacion.cantidad_real_cj,
-        u_por_caja:aprobacion.u_por_caja??1,responsable:aprobacion.responsable,
-        comentario:aprobacion.comentario||"",linea:orden.linea||"",
-        fecha_lanzamiento_real:nuevaFecha,
-        // Fallback en cascada: aprobada → backend day-exact → semana
-        fecha_entrada_real:aprobacion.fecha_entrada_real||orden.fecha_entrada_real||orden.semana_necesidad,
-      });
-      onGuardar();
-    }catch(e){alert("Error: "+(e.response?.data?.detail||e.message));}
-    finally{setGuardando(false);}
-  };
-  return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,
-                 display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{background:"#fff",borderRadius:12,padding:24,width:380,
-                   boxShadow:"0 8px 32px rgba(0,0,0,.18)"}}>
-        <div style={{fontSize:14,fontWeight:700,color:C.tealMid,marginBottom:4}}>Desplazar orden</div>
-        <div style={{fontSize:11,color:C.textMuted,marginBottom:16}}>
-          {orden.numero_of} · {orden.sku} · {orden.descripcion?.slice(0,40)}
-        </div>
-        <div style={{marginBottom:10}}>
-          <label style={{fontSize:11,fontWeight:600,display:"block",marginBottom:4}}>Fecha actual</label>
-          <div style={{fontSize:13,fontWeight:700}}>{fechaActual}</div>
-        </div>
-        <div style={{marginBottom:12}}>
-          <label style={{fontSize:11,fontWeight:600,display:"block",marginBottom:4}}>Nueva fecha de lanzamiento</label>
-          <input type="date" value={nuevaFecha} onChange={e=>setNuevaFecha(e.target.value)}
-            style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,
-                    border:`1.5px solid ${C.teal}`,outline:"none"}}/>
-          {nuevaFecha!==fechaActual&&(
-            <div style={{fontSize:11,marginTop:4,color:diasDiff>0?C.amber:C.red}}>
-              {diasDiff>0?`▶ Avanza ${diasDiff} día(s)`:`◀ Retrocede ${Math.abs(diasDiff)} día(s)`}
-              {!esHabil&&<span style={{color:C.amber,marginLeft:8}}>
-                ⚠ {esFeriado(nuevaFecha)?"Feriado":"Fin de semana"}
-              </span>}
-            </div>
-          )}
-        </div>
-        <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
-          {[-2,-1,1,2,7].map(d=>(
-            <button key={d} onClick={()=>setNuevaFecha(addDias(fechaActual,d))}
-              style={{fontSize:10,padding:"3px 8px",borderRadius:5,border:`0.5px solid ${C.border}`,
-                      background:C.grayLt,cursor:"pointer",color:d<0?C.red:C.tealMid}}>
-              {d>0?`+${d}d`:`${d}d`}
-            </button>
-          ))}
-        </div>
-        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <button onClick={onCerrar}
-            style={{padding:"7px 16px",borderRadius:7,border:`0.5px solid ${C.border}`,
-                    background:"#fff",cursor:"pointer",fontSize:12}}>Cancelar</button>
-          <button onClick={handleGuardar} disabled={guardando||nuevaFecha===fechaActual}
-            style={{padding:"7px 16px",borderRadius:7,border:"none",
-                    background:nuevaFecha===fechaActual?C.grayMid:C.teal,
-                    color:"#fff",cursor:"pointer",fontSize:12,fontWeight:700}}>
-            {guardando?"Guardando...":"Guardar"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// V6.39 (12/05/2026): ModalDesplazar eliminado. Click en badge de OF
+// ahora abre:
+//   - ModalEditar si la OF esta aprobada (mismo flujo que boton "Editar"
+//     de la tabla, permite ajustar fecha/cantidad/desaprobar).
+//   - Modal de aprobacion (App.js abrirModal) si esta pendiente (mismo
+//     flujo que boton "Aprobar" de la tabla).
+// El comportamiento es simetrico con la tabla y consistente con la
+// arquitectura de modales canonicos.
+
 
 function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar}){
   const [cantReal,setCantReal]=useState(aprobacion?.cantidad_real_cj??orden?.cantidad_cajas??0);
@@ -337,7 +260,7 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
       usoPct:Math.round(usoPctReal*100)/100,
       esDesborde:false,        // v1.2: el backend nunca desborda — la cap es por construcción
       uProduccion:uProd,
-      ultimoDiaProd:fechaIni,  // mismo día (legacy: lo consume ModalDesplazar)
+      ultimoDiaProd:fechaIni,  // mismo día (V6.39: legacy, ModalDesplazar fue eliminado)
       fechaEntradaCalc:o.fecha_entrada_real||o.semana_necesidad,
     });
     capUsada[fechaIni]=(capUsada[fechaIni]||0)+usoPctReal;
@@ -364,7 +287,6 @@ export default function DetalleProduccion({
   const [ordenes,setOrdenes]=useState([]);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
-  const [modalDesplazar,setModalDesplazar]=useState(null);
   const [modalEditar,setModalEditar]=useState(null);
 
   useEffect(()=>{
@@ -431,8 +353,6 @@ export default function DetalleProduccion({
 
   return(
     <div style={{fontFamily:"Arial,sans-serif",color:C.text}}>
-      {modalDesplazar&&<ModalDesplazar orden={modalDesplazar.orden} aprobacion={modalDesplazar.aprobacion}
-        onGuardar={()=>{setModalDesplazar(null);recargar();}} onCerrar={()=>setModalDesplazar(null)}/>}
       {modalEditar&&<ModalEditar orden={modalEditar.orden} aprobacion={modalEditar.aprobacion}
         onGuardar={(aprobUpdated)=>{
           setModalEditar(null);
@@ -573,7 +493,15 @@ export default function DetalleProduccion({
                         const esPreferida=params[o.sku]?.linea===linea.codigo;
                         return(<OrdenBadge key={i} orden={o} esPreferida={esPreferida}
                           estaAprobada={!!aprobacion}
-                          onClick={()=>setModalDesplazar({orden:o,aprobacion})}/>);
+                          onClick={()=>{
+                            // V6.39: simetria con la tabla. Aprobada -> editar/desaprobar.
+                            // Pendiente -> aprobar (mismo modal del boton "Aprobar" de tabla).
+                            if(aprobacion){
+                              setModalEditar({orden:o,aprobacion});
+                            }else if(onAprobar){
+                              onAprobar(o);
+                            }
+                          }}/>);
                       })}
                       {ords.length===0&&<div style={{fontSize:9,color:C.textMuted,textAlign:"center",paddingTop:8}}>—</div>}
                     </div>
