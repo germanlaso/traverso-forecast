@@ -43,7 +43,8 @@ class OrdenAprobar(BaseModel):
     responsable:            str
     comentario:             str   = ""
     linea:                  str   = ""
-    fecha_lanzamiento_real: str   = ""
+    fecha_lanzamiento:      str   = ""   # F3: fecha sugerida por el optimizer (parte de la clave logica)
+    fecha_lanzamiento_real: str   = ""   # F3: fecha real (si el usuario la modifico en el modal)
     fecha_entrada_real:     str   = ""
 
 
@@ -110,7 +111,12 @@ def aprobar_orden(req: OrdenAprobar):
     try:
         sn = req.semana_necesidad[:10]
         se = req.semana_emision[:10]
-        existente = get_orden_by_key(req.sku, sn, se)
+        # F3 (12/05/2026): clave logica es (sku, fecha_lanzamiento, linea).
+        # Cascada de fallbacks: fecha_lanzamiento_real (si el usuario la edito) >
+        # fecha_lanzamiento (sugerida por el optimizer) > semana_emision.
+        fl_str = (req.fecha_lanzamiento_real or req.fecha_lanzamiento or se)[:10]
+        linea_req = req.linea or ""
+        existente = get_orden_by_key(req.sku, fl_str, linea_req)
         numero_of = existente["numero_of"] if existente and existente.get("numero_of") else next_numero_of()
 
         upsert_orden({
@@ -120,6 +126,7 @@ def aprobar_orden(req: OrdenAprobar):
             "tipo":                 req.tipo,
             "semana_emision":       _parse_date(se),
             "semana_necesidad":     _parse_date(sn),
+            "fecha_lanzamiento":    _parse_date(fl_str),
             "cantidad_sugerida_cj": req.cantidad_sugerida_cj,
             "cantidad_sugerida_u":  req.cantidad_sugerida_cj * req.u_por_caja,
             "u_por_caja":           req.u_por_caja,

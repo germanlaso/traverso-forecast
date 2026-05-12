@@ -93,19 +93,6 @@ class TrainBatchRequest(BaseModel):
     events: list[EventoComercial] = []
 
 
-class AprobacionRequest(BaseModel):
-    sku: str
-    descripcion: str
-    tipo: str
-    semana_emision: str
-    semana_necesidad: str
-    cantidad_sugerida_cj: int
-    cantidad_real_cj: int
-    u_por_caja: int = 1
-    responsable: str
-    comentario: str = ""
-
-
 class PlanRequest(BaseModel):
     skus: Optional[list[str]] = None
     canal: Optional[str] = None
@@ -548,12 +535,15 @@ def generar_plan(req: PlanRequest = None):
                 o["aprobada"] = True
                 continue
             # Caso 2: buscar en BD
-            existente = get_orden_by_key(o["sku"], o["semana_necesidad"], o["semana_emision"])
+            # F3 (12/05/2026): clave (sku, fecha_lanzamiento, linea). Antes (sku, sn, se).
+            fl = o.get("fecha_lanzamiento") or o.get("semana_emision")
+            linea_o = o.get("linea") or ""
+            existente = get_orden_by_key(o["sku"], fl, linea_o)
             if existente and existente.get("numero_of"):
                 o["numero_of"] = existente["numero_of"]
                 o["aprobada"] = bool(existente.get("estado") == "APROBADA")
             else:
-                o["numero_of"] = numero_of_tentativo(o["sku"], o["semana_necesidad"], o["semana_emision"])
+                o["numero_of"] = numero_of_tentativo(o["sku"], fl, linea_o)
                 o["aprobada"] = False
 
         # ── Proyección por SKU (Bloque B1 / V6.27) ──────────────────────────
@@ -719,70 +709,6 @@ def importar_excel_a_bd():
         return {"ok": True, "output": result.stdout[-500:]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ── Endpoints: Órdenes aprobadas ──────────────────────────────────────────────
-
-@app.post("/ordenes/aprobar", tags=["Ordenes"])
-def aprobar(req: AprobacionRequest):
-    """
-    Aprueba una orden sugerida por el MRP.
-    El jefe de producción puede modificar la cantidad (cantidad_real_cj).
-    Si la orden ya existe (mismo SKU + semanas), la actualiza.
-    """
-    try:
-        return aprobar_orden(
-            sku=req.sku,
-            descripcion=req.descripcion,
-            tipo=req.tipo,
-            semana_emision=req.semana_emision,
-            semana_necesidad=req.semana_necesidad,
-            cantidad_sugerida_cj=req.cantidad_sugerida_cj,
-            cantidad_real_cj=req.cantidad_real_cj,
-            u_por_caja=req.u_por_caja,
-            responsable=req.responsable,
-            comentario=req.comentario,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/ordenes/{orden_id}/cancelar", tags=["Ordenes"])
-def cancelar(orden_id: str):
-    """Cancela una orden aprobada. Puede reaprobarse después."""
-    try:
-        return cancelar_orden(orden_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/ordenes", tags=["Ordenes"])
-def listar(
-    sku:    Optional[str] = None,
-    estado: Optional[str] = None,
-):
-    """
-    Lista órdenes aprobadas/canceladas.
-    Filtros opcionales: sku, estado (APROBADA | CANCELADA)
-    """
-    return listar_ordenes(sku=sku, estado=estado)
-
-
-@app.get("/ordenes/resumen", tags=["Ordenes"])
-def resumen_ordenes():
-    """Resumen de aprobaciones: totales, aprobadas, canceladas."""
-    return resumen_aprobaciones()
-
-
-@app.get("/ordenes/por-semana", tags=["Ordenes"])
-def ordenes_semana():
-    """
-    Órdenes aprobadas indexadas por semana_necesidad.
-    Usado por el dashboard de proyección de stock.
-    """
-    return ordenes_aprobadas_por_semana()
 
 
 @app.get("/regressors", tags=["Estacionalidad"])

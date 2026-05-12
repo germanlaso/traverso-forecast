@@ -42,8 +42,9 @@ class MrpOrden(Base):
     sku             = Column(String(20), nullable=False, index=True)
     descripcion     = Column(Text)
     tipo            = Column(String(20))                    # PRODUCCION/MAQUILA/IMPORTACION
-    semana_emision  = Column(Date)                          # fecha lanzamiento sugerida MRP
-    semana_necesidad= Column(Date)                          # fecha entrada stock sugerida MRP
+    semana_emision  = Column(Date)                          # fecha lanzamiento sugerida MRP (informativo)
+    semana_necesidad= Column(Date)                          # fecha entrada stock sugerida MRP (informativo)
+    fecha_lanzamiento = Column(Date)                        # F3: fecha de lanzamiento real, parte de PK logica (sku, fecha_lanzamiento, linea)
     cantidad_sugerida_cj = Column(Numeric(12, 2))
     cantidad_sugerida_u  = Column(Numeric(12, 2))
     u_por_caja      = Column(Numeric(8, 2), default=1)
@@ -128,15 +129,20 @@ def next_numero_of(year: int = None) -> str:
     return f"OF-{y}-{n:05d}"
 
 
-def numero_of_tentativo(sku: str, semana_necesidad: str, semana_emision: str, year: int = None) -> str:
+def numero_of_tentativo(sku: str, fecha_lanzamiento: str, linea: str, year: int = None) -> str:
     """
-    Número tentativo determinista para órdenes NO aprobadas.
-    Basado en hash del key — siempre el mismo para la misma orden.
+    Numero tentativo determinista para ordenes NO aprobadas.
+    F3 (12/05/2026): clave (sku, fecha_lanzamiento, linea) — antes era (sku, sn, se).
+    Cambio motivado porque el optimizer parte producciones del mismo SKU en
+    distintos dias dentro de la misma semana; la clave anterior colisionaba
+    para todas esas OFTs (~43% de OFTs en h=4) generando bugs de aprobacion
+    y render del frontend. Ver ESTADO_TECNICO_PROYECTO_12-05-26-tarde.md.
+
     Prefijo 'OFT' para distinguirlo de las definitivas (OF).
     """
     import hashlib
     y = year or datetime.now().year
-    key = f"{sku}__{semana_necesidad}__{semana_emision}"
+    key = f"{sku}__{fecha_lanzamiento}__{linea}"
     h = int(hashlib.md5(key.encode()).hexdigest(), 16) % 99999 + 1
     return f"OFT-{y}-{h:05d}"
 
@@ -163,10 +169,13 @@ def upsert_orden(data: dict) -> MrpOrden:
         return orden
 
 
-def get_orden_by_key(sku: str, semana_necesidad: str, semana_emision: str) -> dict | None:
-    """Busca una orden por su clave natural (sku + fechas)."""
+def get_orden_by_key(sku: str, fecha_lanzamiento: str, linea: str) -> dict | None:
+    """
+    Busca una orden por su clave natural F3: (sku, fecha_lanzamiento, linea).
+    Si existe, devuelve datos de la orden + datos de la ultima aprobacion (si la tiene).
+    Acepta fecha_lanzamiento como str ISO 'YYYY-MM-DD' o como date.
+    """
     with get_session() as session:
-        # Buscar la aprobación más reciente para este par sku+fechas
         result = session.execute(text("""
             SELECT o.*, a.cantidad_real_cj, a.cantidad_real_u,
                    a.fecha_lanzamiento_real, a.fecha_entrada_real,
@@ -179,12 +188,12 @@ def get_orden_by_key(sku: str, semana_necesidad: str, semana_emision: str) -> di
                     WHERE numero_of = o.numero_of
                 )
             WHERE o.sku = :sku
-              AND o.semana_necesidad = :sn
-              AND o.semana_emision = :se
+              AND o.fecha_lanzamiento = :fl
+              AND COALESCE(o.linea, '') = COALESCE(:linea, '')
         """), {
             "sku": sku,
-            "sn": semana_necesidad,
-            "se": semana_emision
+            "fl": fecha_lanzamiento,
+            "linea": linea or "",
         }).fetchone()
         return dict(result._mapping) if result else None
 

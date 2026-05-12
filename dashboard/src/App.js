@@ -5,6 +5,15 @@ import StockProyeccion from './components/StockProyeccion';
 import DetalleProduccion from './components/DetalleProduccion';
 
 const API = '';
+// BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
+// distinto de API que es path relativo (funciona con el proxy del dev-server
+// para fetch/XHR). En dev (dashboard:3000) backend esta en :8000.
+// En produccion (mismo origen tras nginx) usa el origin sin cambio.
+const BACKEND_URL = (() => {
+  const { protocol, hostname, port } = window.location;
+  const backendPort = port === '3000' ? '8000' : port;
+  return `${protocol}//${hostname}${backendPort ? ':' + backendPort : ''}`;
+})();
 
 const C = {
   teal:'#1D9E75',tealLt:'#E1F5EE',tealMid:'#0F6E56',
@@ -363,6 +372,7 @@ export default function App() {
         responsable:            aprobForm.responsable,
         comentario:             aprobForm.comentario || '',
         linea:                  modalOrden.linea || '',
+        fecha_lanzamiento:      modalOrden.fecha_lanzamiento || modalOrden.semana_emision || '',
         fecha_lanzamiento_real: aprobForm.fecha_lanzamiento_real || '',
         fecha_entrada_real:     aprobForm.fecha_entrada_real     || '',
       });
@@ -371,6 +381,26 @@ export default function App() {
         // la reemplaza; si es nueva, la agrega.
         const numero = aprobData.numero_of;
         return [...prev.filter(a => a.numero_of !== numero), aprobData];
+      });
+      // Reflejar la aprobacion en el plan en memoria sin esperar al proximo
+      // runPlan: reemplazar el OFT tentativo por el OF definitivo y marcar
+      // aprobada=true. Match por numero_of (el OFT-... que tenia la fila
+      // clickeada), unico por OFT incluso cuando el optimizer parte un SKU
+      // en varias OFTs dentro de la misma semana. No usar (sku, se, sn)
+      // como clave porque no es unica: el plan tiene multiples OFTs del
+      // mismo SKU con misma semana cuando el batch se parte (~43% de OFTs
+      // en h=4 estan en tuplas duplicadas, ver V6.24/V6.32).
+      const oftAnterior = modalOrden.numero_of;
+      setPlan(prev => {
+        if (!prev?.ordenes) return prev;
+        return {
+          ...prev,
+          ordenes: prev.ordenes.map(o =>
+            o.numero_of === oftAnterior
+              ? { ...o, numero_of: aprobData.numero_of, aprobada: true }
+              : o
+          ),
+        };
       });
       cerrarModal();
     } catch(e) {
@@ -674,17 +704,26 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(plan.ordenes||[]).map((o,i) => {
+                      {(plan.ordenes||[])
+                        .slice()
+                        .sort((a, b) => {
+                          // F3: ordenar por fecha_lanzamiento. Empate: por SKU para estabilidad.
+                          const fa = (a.fecha_lanzamiento || a.semana_emision || '').slice(0,10);
+                          const fb = (b.fecha_lanzamiento || b.semana_emision || '').slice(0,10);
+                          if (fa !== fb) return fa.localeCompare(fb);
+                          return (a.sku || '').localeCompare(b.sku || '');
+                        })
+                        .map((o,i) => {
                         const tc = tipoColor(o.tipo);
                         const key = ordenKey(o);
                         const aprobada = aprobadaMap[key];
                         const cantMostrar = aprobada ? aprobada.cantidad_real_cj : o.cantidad_cajas;
                         const modificada = aprobada && aprobada.cantidad_real_cj !== o.cantidad_cajas;
                         return (
-                          <tr key={i} style={{background:aprobada?'#F0FAF5':o.tiene_alerta?'#FFF5F5':i%2===0?'#fff':C.grayLt}}>
+                          <tr key={o.numero_of} style={{background:aprobada?'#F0FAF5':o.tiene_alerta?'#FFF5F5':i%2===0?'#fff':C.grayLt}}>
                             <td style={{padding:'5px 10px',whiteSpace:'nowrap'}}>
                               {aprobada ? (
-                                <a href={`http://localhost:8000/ordenes/${aprobada.numero_of || o.numero_of}/pdf`}
+                                <a href={`${BACKEND_URL}/ordenes/${aprobada.numero_of}/pdf`}
                                    target="_blank" rel="noreferrer"
                                    title="Ver PDF de orden de fabricación"
                                    style={{fontSize:10,fontWeight:700,color:C.tealMid,textDecoration:'none',
@@ -889,7 +928,8 @@ export default function App() {
         />}
         {activeTab === 'detalle' && <DetalleProduccion
           ordenesPlan={plan?.ordenes ?? []}
-          onAprobar={(o) => { abrirModal(o); setActiveTab('plan'); }}
+          ordenesAprobadas={ordenesAprobadas}
+          onAprobar={(o) => abrirModal(o)}
           onPlanChanged={() => runPlan()}
           planLoading={planLoading}
           onSolicitarPlan={() => runPlan()}

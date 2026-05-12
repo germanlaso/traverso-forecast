@@ -768,9 +768,14 @@ def optimizar_plan(
         )
         if tipo and tipo.upper() != "PRODUCCION":
             o_dict = _orden_a_dict(o)
-            # Aseguramos fecha_lanzamiento = lunes ISO de la semana_emision (decisión 2)
+            # F3 (12/05/2026): para IMPORTACION usamos semana_emision directamente
+            # como fecha_lanzamiento (no lunes ISO) porque MRP clasico genera
+            # multiples OFTs del mismo SKU IMPORTACION en distintas semanas con
+            # fechas de emision distintas; colapsarlas al lunes pierde el
+            # discriminador y causa colisiones de numero_of (clave F3 es
+            # (sku, fecha_lanzamiento, linea)).
             if o_dict.get("semana_emision"):
-                o_dict["fecha_lanzamiento"] = _a_lunes_iso(o_dict["semana_emision"])
+                o_dict["fecha_lanzamiento"] = o_dict["semana_emision"]
             if o_dict.get("semana_necesidad"):
                 o_dict["fecha_entrada_real"] = _a_lunes_iso(o_dict["semana_necesidad"])
             o_dict["paga_setup"] = False

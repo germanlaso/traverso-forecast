@@ -441,7 +441,7 @@ def generar_plan_sku(
                     semana_emision=fecha_semana.strftime("%Y-%m-%d"),
                     cantidad_cajas=int(round(entrada_aprobada_sem)),
                     cantidad_unidades=int(round(entrada_aprobada_sem * params.unidades_por_caja)),
-                    linea=params.linea_preferida or None,
+                    linea=params.linea_preferida or ("IMPORTACION" if params.tipo == "IMPORTACION" else None),
                     motivo=f"OF_APROBADA:{nof_ap} FC:{yhat_cajas:.0f} SS:{ss_cajas:.0f} Stock:{stock_antes_entrada:.0f} Neta:{nec_neta:.0f}",
                     alerta=None,
                     stock_inicial_cajas=round(stock_antes_entrada, 1),
@@ -471,6 +471,11 @@ def generar_plan_sku(
         linea_asignada = None
         if params.tipo == "PRODUCCION" and params.linea_preferida:
             linea_asignada = params.linea_preferida
+        elif params.tipo == "IMPORTACION":
+            # F3 (12/05/2026): IMPORTACION no tiene linea fisica, asignamos "IMPORTACION"
+            # como linea logica para que la clave (sku, fecha_lanzamiento, linea) sea unica
+            # y no colisione cuando hay >1 OFT IMPORTACION del mismo SKU/fecha.
+            linea_asignada = "IMPORTACION" 
             if params.linea_preferida in lineas:
                 linea = lineas[params.linea_preferida]
                 cap_cajas = linea.capacidad_u_semana / params.unidades_por_caja

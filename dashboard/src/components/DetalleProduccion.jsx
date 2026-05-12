@@ -316,6 +316,7 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
 export default function DetalleProduccion({
   onAprobar,
   ordenesPlan=[],
+  ordenesAprobadas=[],
   onPlanChanged,
   planLoading=false,
   onSolicitarPlan=null,
@@ -324,18 +325,19 @@ export default function DetalleProduccion({
   const [lineas,setLineas]=useState([]);
   const [params,setParams]=useState({});
   const [ordenes,setOrdenes]=useState([]);
-  const [aprobadas,setAprobadas]=useState([]);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
   const [modalDesplazar,setModalDesplazar]=useState(null);
   const [modalEditar,setModalEditar]=useState(null);
 
   useEffect(()=>{
-    Promise.all([axios.get(`${API}/plan/params`),axios.get(`${API}/ordenes/aprobadas`)])
-      .then(([p,a])=>{
+    // ordenesAprobadas viene por prop desde App.js (single source of truth).
+    // Solo cargamos params del plan aqui.
+    axios.get(`${API}/plan/params`)
+      .then(p=>{
         setLineas(p.data.lineas??[]);
         const map={};(p.data.skus??[]).forEach(s=>{map[s.sku]={upj:s.u_por_caja,linea:s.linea_preferida,ss_dias:s.ss_dias,lead_time_sem:s.lead_time_sem??1};});
-        setParams(map);setAprobadas(a.data??[]);
+        setParams(map);
       }).catch(e=>setError("Error cargando parámetros: "+(e.response?.data?.detail||e.message)));
   },[]);
 
@@ -348,18 +350,17 @@ export default function DetalleProduccion({
   },[ordenesPlan]);
 
   const recargar=useCallback(()=>{
-    axios.get(`${API}/ordenes/aprobadas`).then(r=>setAprobadas(r.data??[]));
+    // ordenesAprobadas se actualiza desde App.js. Solo regeneramos el plan.
     if(onPlanChanged) onPlanChanged();
   },[onPlanChanged]);
 
   const diasExt=useMemo(()=>diasDesde(semanaBase,2),[semanaBase]);
   const dias=useMemo(()=>diasExt.slice(0,7),[diasExt]);
   const aprobMap=useMemo(()=>{
-    // v1.2: indexar por numero_of (PK estable en mrp_aprobaciones).
-    // Si una corrida del optimizer dura varios días, todas sus sub-OFTs
-    // comparten numero_of → todas se pintan verdes con una sola aprobación.
-    const m={};aprobadas.forEach(a=>{m[a.numero_of]=a;});return m;
-  },[aprobadas]);
+    // F3 (12/05/2026): indexar por numero_of. Datos vienen del prop ordenesAprobadas
+    // (single source of truth en App.js). Antes era state local con su propio fetch.
+    const m={};ordenesAprobadas.forEach(a=>{m[a.numero_of]=a;});return m;
+  },[ordenesAprobadas]);
   const hoy=new Date().toISOString().slice(0,10);
   const ordenesProd=useMemo(()=>ordenes.filter(o=>o.tipo==="PRODUCCION"),[ordenes]);
   function getOrdenesLinea(linea){
