@@ -443,6 +443,20 @@ export default function App() {
           ),
         };
       });
+      // V6.43: marcar plan stale solo si la aprobacion difiere de lo sugerido
+      // por el optimizer (en cantidad o en fecha de lanzamiento). Aprobar tal
+      // cual lo sugiere el sistema no rompe el balance global del plan, asi
+      // que no hay nada que regenerar. Pero un cambio si invalida los calculos
+      // de cap/N_max para el resto del plan -> avisamos.
+      const cantSugerida = Number(modalOrden.cantidad_cajas);
+      const cantAprobada = Number(aprobForm.cantidad_real_cj);
+      const fechaSugerida = String(modalOrden.fecha_lanzamiento || modalOrden.semana_emision || '').slice(0,10);
+      const fechaAprobada = String(aprobForm.fecha_lanzamiento_real || '').slice(0,10);
+      const cambioCantidad = !isNaN(cantSugerida) && !isNaN(cantAprobada) && cantSugerida !== cantAprobada;
+      const cambioFecha = fechaAprobada && fechaSugerida && fechaAprobada !== fechaSugerida;
+      if (cambioCantidad || cambioFecha) {
+        marcarPlanStale();
+      }
       cerrarModal();
     } catch(e) {
       alert(`Error: ${e?.response?.data?.detail || e.message}`);
