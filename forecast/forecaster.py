@@ -23,6 +23,11 @@ MODELS_DIR.mkdir(exist_ok=True)
 
 FREQ = "W"  # Semanal
 
+# Tope del forecast: yhat nunca puede superar FORECAST_CAP_FACTOR x el máximo
+# histórico real del SKU. Frena la extrapolación explosiva de Prophet en SKUs
+# de poca o errática historia (picos de decenas de miles que rompían el optimizador).
+FORECAST_CAP_FACTOR = 3.0
+
 
 # ── Clave de segmento ─────────────────────────────────────────────────────────
 
@@ -235,6 +240,27 @@ def list_trained_models() -> list[dict]:
 
 # ── Pipeline completo ─────────────────────────────────────────────────────────
 
+def _cap_forecast(fc: pd.DataFrame,
+                  prophet_df: pd.DataFrame,
+                  factor: float = FORECAST_CAP_FACTOR) -> pd.DataFrame:
+    """Limita yhat/yhat_lower/yhat_upper a `factor` x máximo histórico real del SKU.
+
+    Si el SKU no tiene venta histórica positiva (max_hist <= 0), NO capa: su caso
+    (SKU sin historia / nuevo) se trata por separado, no aplastando su forecast a 0.
+    El tope es por segmento SKU, no global.
+    """
+    if prophet_df is None or prophet_df.empty:
+        return fc
+    max_hist = float(prophet_df["y"].max())
+    if max_hist <= 0:
+        return fc
+    tope = factor * max_hist
+    fc = fc.copy()
+    for col in ("yhat", "yhat_lower", "yhat_upper"):
+        fc[col] = fc[col].clip(upper=tope)
+    return fc
+
+
 def run_sku_pipeline(df: pd.DataFrame,
                      sku: str,
                      canal: str | None          = None,
@@ -265,9 +291,10 @@ def run_sku_pipeline(df: pd.DataFrame,
         cached = load_model(key)
         if cached:
             model, meta = cached
-            fc = make_forecast(model, forecast_periods, regressors)
-            # Siempre devolver historial aunque venga del caché
             prophet_df = prepare_prophet_df(df, sku, canal, zona)
+            fc = make_forecast(model, forecast_periods, regressors)
+            fc = _cap_forecast(fc, prophet_df)
+            # Siempre devolver historial aunque venga del caché
             history = (
                 prophet_df
                 .rename(columns={"ds": "fecha", "y": "real"})
@@ -296,6 +323,7 @@ def run_sku_pipeline(df: pd.DataFrame,
     # Entrenar con historial completo
     model = train_model(prophet_df, regressors=regressors, extra_events=extra_events)
     fc    = make_forecast(model, forecast_periods, regressors, extra_events)
+    fc    = _cap_forecast(fc, prophet_df)
 
     save_model(model, key, metadata={
         "metrics":        metrics,
