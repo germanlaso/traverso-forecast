@@ -282,28 +282,32 @@ def optimizar_plan_v12_rich(
     status = solver.Solve(m.model)
     status_name = solver.StatusName(status)
     solver_time = solver.WallTime()
-    n_soluciones = solver.SolutionCount()
 
     # ── Clasificacion de status (fix 11/06: timeout != infeasible) ──────────
-    # CP-SAT devuelve:
-    #   OPTIMAL    (4 en enum) -> solucion probadamente optima
-    #   FEASIBLE   (2)         -> solucion factible, no probada optima
-    #   INFEASIBLE (3)         -> probado que NO existe solucion
-    #   UNKNOWN    (0)         -> se acabo el tiempo sin conclusion
-    #   MODEL_INVALID (1)      -> error de construccion del modelo
+    # CP-SAT (ortools 9.x) devuelve:
+    #   OPTIMAL    -> solucion probadamente optima
+    #   FEASIBLE   -> hay solucion factible (NO probada optima). CP-SAT ya
+    #                 reporta FEASIBLE -no UNKNOWN- cuando agota el tiempo
+    #                 pero encontro al menos una solucion. Es decir: el caso
+    #                 'timeout con solucion parcial' YA llega aca como FEASIBLE.
+    #   INFEASIBLE -> probado que NO existe solucion
+    #   UNKNOWN    -> se acabo el tiempo SIN ninguna solucion (ni pruebas)
+    #   MODEL_INVALID -> error de construccion del modelo
     #
-    # El bug anterior metia UNKNOWN (timeout) en el mismo saco que INFEASIBLE
-    # y descartaba la solucion parcial. Ahora: si hay AL MENOS una solucion
-    # (SolutionCount > 0), el modelo es factible aunque el solver no haya
-    # terminado -> post-procesamos esa solucion y la reportamos como
-    # FEASIBLE_TIMEOUT (suboptima). Solo devolvemos vacio cuando NO hay
-    # ninguna solucion utilizable.
-    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        # Camino normal. status_name ya es 'OPTIMAL' o 'FEASIBLE'.
-        pass
-    elif n_soluciones > 0:
-        # Timeout (UNKNOWN) pero CON solucion parcial: es factible, suboptima.
-        status_name = "FEASIBLE_TIMEOUT"
+    # El bug anterior trataba UNKNOWN igual que INFEASIBLE. Ahora cada caso
+    # se distingue. Para marcar el subcaso 'FEASIBLE por timeout' (sin probar
+    # optimalidad) miramos si el solver consumio casi todo el limite: si
+    # FEASIBLE y WallTime >= 95% del limite, fue corte por tiempo.
+    # Nota: no se usa solver.SolutionCount() — ese metodo no existe en
+    # CpSolver (pertenece al callback); el status ya indica si hay solucion.
+    if status == cp_model.OPTIMAL:
+        pass  # status_name = 'OPTIMAL'
+    elif status == cp_model.FEASIBLE:
+        # Hay solucion. Distinguir si fue corte por tiempo (suboptima) o si
+        # el solver simplemente devolvio factible. En ambos casos es operable.
+        if solver_time >= 0.95 * time_limit_sec:
+            status_name = "FEASIBLE_TIMEOUT"
+        # else: queda 'FEASIBLE' normal
     elif status == cp_model.INFEASIBLE:
         # Infactibilidad REAL probada por el solver.
         return _resultado_vacio(
@@ -316,8 +320,8 @@ def optimizar_plan_v12_rich(
             status="MODEL_INVALID", solver_time_sec=solver_time,
         )
     else:
-        # UNKNOWN sin ninguna solucion: se acabo el tiempo sin encontrar nada.
-        # NO es lo mismo que INFEASIBLE -> status propio para no confundir al usuario.
+        # UNKNOWN: se acabo el tiempo sin encontrar ninguna solucion.
+        # NO es lo mismo que INFEASIBLE -> status propio para no confundir.
         return _resultado_vacio(
             f"El solver no encontró solución dentro del límite de tiempo "
             f"({time_limit_sec}s) y no pudo probar infactibilidad. "
