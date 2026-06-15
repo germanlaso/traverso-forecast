@@ -75,8 +75,36 @@ W_INICIO_SIMBOLICO = 1   # v1.3 (R12): desempate para evitar inicios fantasma
 N_MAX_SKUS_DIA_LINEA = 4
 
 # Solver
-SOLVER_TIME_LIMIT_SEC = 60   # piloto. Subir a 180-300 para 471 SKUs
-SOLVER_NUM_WORKERS = 4
+# Timeout del solver por horizonte (en SEMANAS, tal como llega del picklist
+# de la UI: App.js y StockProyeccion.jsx ofrecen [4, 8, 13, 17, 26]).
+# Una entrada por cada opcion del selector. El modelo crece con el horizonte
+# (248 SKUs x 7 dias/sem), por lo que el limite escala con el.
+#   h=4  -> 60s   (piloto, validado)
+#   h=13 -> 300s  (confirmado FEASIBLE empiricamente el 11/06/2026)
+#   h=8/17/26 tentativos (a calibrar con mediciones reales).
+SOLVER_TIME_LIMIT_POR_HORIZONTE = {
+    4:  60,
+    8:  120,
+    13: 300,
+    17: 420,
+    26: 600,
+}
+# Fallback si llega un horizonte fuera del picklist (p.ej. llamada directa a
+# la API con un valor no listado). Evita KeyError: un horizonte desconocido
+# no debe romper el plan, solo usar un limite prudente.
+SOLVER_TIME_LIMIT_DEFAULT = 300
+SOLVER_NUM_WORKERS = 8   # subido de 4: mas workers ayuda en modelos grandes (h>=13)
+
+
+def _time_limit_para(horizonte_semanas: int) -> int:
+    """Devuelve el time-limit del solver (segundos) para un horizonte dado.
+
+    Usa la tabla por horizonte; si el valor no esta listado, cae al default
+    (nunca lanza KeyError).
+    """
+    return SOLVER_TIME_LIMIT_POR_HORIZONTE.get(
+        int(horizonte_semanas), SOLVER_TIME_LIMIT_DEFAULT
+    )
 
 # Escala entera para evitar floats en CP-SAT (factor_velocidad por SKU-Línea).
 # costo_unidad_escalado[s,l] = round(FACTOR_ESCALA / factor_sl[s,l]).
@@ -150,6 +178,7 @@ def optimizar_plan_v12_rich(
     entradas_aprobadas: dict[str, list[dict]],
     fecha_inicio: date | None = None,
     horizonte_dias: int = HORIZONTE_DIAS_DEFAULT,
+    time_limit_sec: int | None = None,
 ) -> dict[str, Any]:
     """
     [API rica v1.2 — uso interno y testing]
@@ -165,6 +194,12 @@ def optimizar_plan_v12_rich(
     """
     if fecha_inicio is None:
         fecha_inicio = date.today()
+
+    # Time-limit: si el caller no lo especifica, derivarlo del horizonte en
+    # semanas (aprox dias/7). El wrapper legacy lo pasa explicito desde el
+    # picklist; en uso directo/testing se infiere.
+    if time_limit_sec is None:
+        time_limit_sec = _time_limit_para(round(horizonte_dias / 7))
 
     horizonte = generar_horizonte_diario(fecha_inicio, horizonte_dias)
     fecha_fin = horizonte[-1]
@@ -242,26 +277,76 @@ def optimizar_plan_v12_rich(
 
     # ─── 7. Resolver ─────────────────────────────────────────────────────────
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = SOLVER_TIME_LIMIT_SEC
+    solver.parameters.max_time_in_seconds = time_limit_sec
     solver.parameters.num_search_workers = SOLVER_NUM_WORKERS
     status = solver.Solve(m.model)
     status_name = solver.StatusName(status)
     solver_time = solver.WallTime()
+    n_soluciones = solver.SolutionCount()
 
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    # ── Clasificacion de status (fix 11/06: timeout != infeasible) ──────────
+    # CP-SAT devuelve:
+    #   OPTIMAL    (4 en enum) -> solucion probadamente optima
+    #   FEASIBLE   (2)         -> solucion factible, no probada optima
+    #   INFEASIBLE (3)         -> probado que NO existe solucion
+    #   UNKNOWN    (0)         -> se acabo el tiempo sin conclusion
+    #   MODEL_INVALID (1)      -> error de construccion del modelo
+    #
+    # El bug anterior metia UNKNOWN (timeout) en el mismo saco que INFEASIBLE
+    # y descartaba la solucion parcial. Ahora: si hay AL MENOS una solucion
+    # (SolutionCount > 0), el modelo es factible aunque el solver no haya
+    # terminado -> post-procesamos esa solucion y la reportamos como
+    # FEASIBLE_TIMEOUT (suboptima). Solo devolvemos vacio cuando NO hay
+    # ninguna solucion utilizable.
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        # Camino normal. status_name ya es 'OPTIMAL' o 'FEASIBLE'.
+        pass
+    elif n_soluciones > 0:
+        # Timeout (UNKNOWN) pero CON solucion parcial: es factible, suboptima.
+        status_name = "FEASIBLE_TIMEOUT"
+    elif status == cp_model.INFEASIBLE:
+        # Infactibilidad REAL probada por el solver.
         return _resultado_vacio(
-            f"Solver no encontró solución factible: status={status_name}",
-            status=status_name, solver_time_sec=solver_time,
+            "El solver probó que no existe plan factible con las restricciones actuales (INFEASIBLE real). Revisar parámetros (cap_bodega, SS, capacidad).",
+            status="INFEASIBLE", solver_time_sec=solver_time,
+        )
+    elif status == cp_model.MODEL_INVALID:
+        return _resultado_vacio(
+            "Modelo invalido (MODEL_INVALID): error de construccion del modelo CP-SAT.",
+            status="MODEL_INVALID", solver_time_sec=solver_time,
+        )
+    else:
+        # UNKNOWN sin ninguna solucion: se acabo el tiempo sin encontrar nada.
+        # NO es lo mismo que INFEASIBLE -> status propio para no confundir al usuario.
+        return _resultado_vacio(
+            f"El solver no encontró solución dentro del límite de tiempo "
+            f"({time_limit_sec}s) y no pudo probar infactibilidad. "
+            f"Probar un horizonte menor o subir el time-limit.",
+            status="TIMEOUT_SIN_SOLUCION", solver_time_sec=solver_time,
         )
 
     # ─── 8. Post-procesar a OFTs y stock visible ─────────────────────────────
-    return _post_procesar(
+    resultado = _post_procesar(
         m=m, solver=solver,
         horizonte=horizonte, sku_params=sku_params, lineas_params=lineas_params,
         sku_a_lineas=sku_a_lineas, cap_dia=cap_dia,
         status_name=status_name, solver_time_sec=solver_time,
         objective_value=solver.ObjectiveValue(),
     )
+
+    # Si la solucion es suboptima por timeout, dejar constancia para el usuario
+    # con una alerta INFO (alimenta el backlog #2: estados del solver en la UI).
+    if status_name == "FEASIBLE_TIMEOUT":
+        resultado.setdefault("alertas", []).insert(0, {
+            "tipo": "INFO",
+            "mensaje": (
+                f"Plan FACTIBLE pero subóptimo: el solver alcanzó el límite de "
+                f"tiempo ({time_limit_sec}s) antes de probar optimalidad. "
+                f"La solución es válida y operable."
+            ),
+        })
+
+    return resultado
 
 
 # =============================================================================
@@ -1027,6 +1112,10 @@ def optimizar_plan(
     fecha_inicio = date.today()
     fecha_fin = fecha_inicio + timedelta(days=horizonte_dias - 1)
 
+    # Time-limit segun el horizonte del picklist (4/8/13/17/26 sem).
+    time_limit_sec = _time_limit_para(horizonte_semanas)
+    logger.info(f"[optimizer] horizonte={horizonte_semanas} sem -> time_limit={time_limit_sec}s, workers={SOLVER_NUM_WORKERS}")
+
     resultado = optimizar_plan_v12_rich(
         plan_mrp={"ordenes": ordenes_mrp},
         sku_params=sku_params_rich,
@@ -1037,6 +1126,7 @@ def optimizar_plan(
         entradas_aprobadas=entradas_aprobadas_rich,
         fecha_inicio=fecha_inicio,
         horizonte_dias=horizonte_dias,
+        time_limit_sec=time_limit_sec,
     )
 
     # ─── 8. Convertir OFTs ricas → órdenes legacy ────────────────────────────
@@ -1119,7 +1209,9 @@ def optimizar_plan(
 
     # ─── 11. Diagnóstico ─────────────────────────────────────────────────────
     diag = {
-        "optimizado": resultado["status"] in ("OPTIMAL", "FEASIBLE"),
+        # FEASIBLE_TIMEOUT cuenta como optimizado: hay un plan operable, solo
+        # que no se probo optimalidad. INFEASIBLE/TIMEOUT_SIN_SOLUCION no.
+        "optimizado": resultado["status"] in ("OPTIMAL", "FEASIBLE", "FEASIBLE_TIMEOUT"),
         "status": resultado["status"],
         "tiempo_ms": int((resultado.get("solver_time_sec") or 0) * 1000),
         "objective_value": resultado.get("objective_value"),
