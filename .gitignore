@@ -58,3 +58,9 @@ body_*.json
 # Dumps de pg_dump generados antes de migraciones grandes.
 # Patrón específico para no afectar migrate_*.sql que SÍ se versionan.
 backup_*.sql
+
+# ── Diagnóstico de forecast (evidencia ordenada en evidencia/) ────
+# Backups de código y CSV crudos de eval_forecast_error.py.
+# Los CSV de evidencia versionada viven en evidencia/, no se ignoran.
+*.bak
+forecast/eval_error_*.csv
