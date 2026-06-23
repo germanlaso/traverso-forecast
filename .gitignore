@@ -64,3 +64,8 @@ backup_*.sql
 # Los CSV de evidencia versionada viven en evidencia/, no se ignoran.
 *.bak
 forecast/eval_error_*.csv
+
+# artefactos de tuning (jun 2026)
+*.bak-*
+forecast/*.log
+forecast/eval_*.csv
