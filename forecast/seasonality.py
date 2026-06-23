@@ -39,7 +39,8 @@ _YEARS = list(range(2021, 2029))
 
 def _semanas_del_rango(inicio: date, fin: date) -> list[str]:
     semanas = []
-    d = inicio - timedelta(days=inicio.weekday())
+    # alineado a DOMINGO (inicio de semana del pipeline): lunes - 1 dia
+    d = inicio - timedelta(days=inicio.weekday() + 1)
     while d <= fin:
         semanas.append(d.strftime("%Y-%m-%d"))
         d += timedelta(weeks=1)
@@ -64,15 +65,17 @@ def _semana_santa(year: int) -> list[str]:
     day   = ((h + l - 7 * m + 114) % 31) + 1
     pascua = date(year, month, day)
     viernes = pascua - timedelta(days=2)
-    lunes   = viernes - timedelta(days=viernes.weekday())
-    return [(lunes - timedelta(weeks=w)).strftime("%Y-%m-%d") for w in range(3)]
+    # ancla en DOMINGO de la semana del pipeline (lunes - 1 dia)
+    domingo = viernes - timedelta(days=viernes.weekday() + 1)
+    return [(domingo - timedelta(weeks=w)).strftime("%Y-%m-%d") for w in range(3)]
 
 
 def _semanas_previas_fecha(year: int, mes: int, dia: int, n: int = 4) -> list[str]:
     """N semanas previas (inclusive) a una fecha."""
     fecha = date(year, mes, dia)
-    lunes = fecha - timedelta(days=fecha.weekday())
-    return [(lunes - timedelta(weeks=w)).strftime("%Y-%m-%d") for w in range(n)]
+    # ancla en DOMINGO de la semana del pipeline (lunes - 1 dia)
+    domingo = fecha - timedelta(days=fecha.weekday() + 1)
+    return [(domingo - timedelta(weeks=w)).strftime("%Y-%m-%d") for w in range(n)]
 
 
 def _temporada(meses: list[int]) -> list[str]:
@@ -243,6 +246,46 @@ def get_category_regressors(categoria: str) -> list[dict]:
     # SOYA, ESENCIAS, KIKKOMAN, MELITTA, ACEITES, CUIDADO DEL HOGAR,
     # CUIDADO PERSONAL, GRANELES, ABARROTES, OTROS
     return []
+
+
+
+# ── Regresor global: SEMANA DEL MES ───────────────────────────────────────────
+# Posicion ordinal de la semana dentro del mes (sem1 floja ... sem4 pico, sem5
+# cola). Patron transversal a todos los canales (~8% gap tardias vs tempranas),
+# que la estacionalidad anual de Prophet no captura del todo. Dummies por posicion
+# (sem3 = referencia). Fechas generadas como DOMINGOS (inicio de semana del pipeline).
+def _semana_del_mes(posicion: int) -> list[str]:
+    """Domingos cuya posicion ordinal en el mes (1..5 por dia 1-7,8-14,...) coincide
+    con `posicion`, para todos los anos en _YEARS."""
+    fechas = []
+    for y in _YEARS:
+        d = date(y, 1, 1)
+        # retroceder al domingo de esa semana (weekday 6 = domingo)
+        d = d - timedelta(days=(d.weekday() + 1) % 7)
+        fin = date(y, 12, 31)
+        while d <= fin:
+            if min((d.day - 1) // 7 + 1, 5) == posicion:
+                fechas.append(d.strftime("%Y-%m-%d"))
+            d += timedelta(weeks=1)
+    return fechas
+
+
+def _regresores_semana_mes() -> list[dict]:
+    """Dummies de semana-del-mes (global, todas las categorias). sem3 = referencia."""
+    etiquetas = {1: "1a semana (floja)", 2: "2a semana",
+                 4: "4a semana (pico)", 5: "5a semana (cola)"}
+    return [
+        {"name": f"semmes_{p}", "label": f"Semana del mes: {etiquetas[p]}",
+         "dates": _semana_del_mes(p), "value": 1.0}
+        for p in (1, 2, 4, 5)
+    ]
+
+
+def get_regressors(categoria: str) -> list[dict]:
+    """Regresores efectivos para un SKU: los de su categoria MAS el regresor
+    global de semana-del-mes. Es el punto de entrada que deben usar los llamadores
+    (forecaster.py, eval_forecast_error.py) en lugar de get_category_regressors."""
+    return get_category_regressors(categoria) + _regresores_semana_mes()
 
 
 def get_all_regressors_summary() -> dict:

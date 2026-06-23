@@ -15,7 +15,7 @@ import numpy as np
 from prophet import Prophet
 from sklearn.metrics import mean_absolute_percentage_error
 
-from seasonality import get_category_regressors
+from seasonality import get_category_regressors, get_regressors
 
 logger     = logging.getLogger(__name__)
 MODELS_DIR = Path("/app/models")
@@ -283,7 +283,7 @@ def run_sku_pipeline(df: pd.DataFrame,
     categoria = get_categoria(df, sku)
 
     # Regressores automáticos según categoría
-    regressors = get_category_regressors(categoria)
+    regressors = get_regressors(categoria)
     logger.info(f"SKU={sku} | categoria='{categoria}' | regressors={[r['name'] for r in regressors]}")
 
     # Intentar modelo en caché (solo si no hay eventos manuales que cambien el modelo)

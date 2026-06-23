@@ -46,7 +46,7 @@ from forecaster import (
     prepare_prophet_df, train_model, make_forecast, _cap_forecast,
     get_categoria, make_key, FREQ, FORECAST_CAP_FACTOR,
 )
-from seasonality import get_category_regressors
+from seasonality import get_category_regressors, get_regressors
 
 
 # ── Robustez datalake: timeout en la conexión (patrón backlog #4) ──────────────
@@ -110,7 +110,8 @@ def _cv_consolidado_bottomup(df_sku: pd.DataFrame,
                              regressors: list,
                              n_cutoffs: int,
                              min_sem_canal: int,
-                             horizon_semanas: int = 4) -> dict | None:
+                             horizon_semanas: int = 4,
+                             cps: float | None = None) -> dict | None:
     """Bottom-up: entrena un modelo por canal con historia suficiente, suma los
     yhat por semana, y mide el error del TOTAL consolidado del SKU.
 
@@ -173,7 +174,8 @@ def _cv_consolidado_bottomup(df_sku: pd.DataFrame,
             if len(train_sub) < min_train:
                 continue
             try:
-                model = train_model(train_sub, regressors=regressors)
+                model = train_model(train_sub, regressors=regressors,
+                                     **({"changepoint_prior_scale": cps} if cps is not None else {}))
                 fc = make_forecast(model, periods=horizon_semanas, regressors=regressors)
                 fc = _cap_forecast(fc, train_sub)
                 fc_map = dict(zip(fc["ds"], fc["yhat"]))
@@ -214,7 +216,8 @@ def _cv_consolidado_bottomup(df_sku: pd.DataFrame,
 def _cv_un_sku(prophet_df: pd.DataFrame,
                regressors: list,
                n_cutoffs: int,
-               horizon_semanas: int = 4) -> dict | None:
+               horizon_semanas: int = 4,
+               cps: float | None = None) -> dict | None:
     """Rolling-origin: para cada cutoff, entrena con lo anterior y predice
     `horizon_semanas` hacia adelante. Acumula pares (real, pred) semanales.
     Devuelve arrays semanales + un DataFrame fecha/real/pred para agregación mensual.
@@ -239,7 +242,8 @@ def _cv_un_sku(prophet_df: pd.DataFrame,
         if len(train) < min_train or test.empty:
             continue
         try:
-            model = train_model(train, regressors=regressors)
+            model = train_model(train, regressors=regressors,
+                                 **({"changepoint_prior_scale": cps} if cps is not None else {}))
             fc = make_forecast(model, periods=horizon_semanas, regressors=regressors)
             fc = _cap_forecast(fc, train)  # cap como en producción
             pred = fc.iloc[-horizon_semanas:][["ds", "yhat"]].reset_index(drop=True)
@@ -294,6 +298,8 @@ def main():
                          "(contadas desde la fecha máxima de datos) antes de tomar el top por volumen.")
     ap.add_argument("--min-semanas", type=int, default=20)
     ap.add_argument("--cutoffs", type=int, default=6)
+    ap.add_argument("--cps", type=float, default=None,
+                    help="changepoint_prior_scale. None usa el default de produccion (0.05).")
     ap.add_argument("--canal", type=str, default=None)
     ap.add_argument("--por-canal", action="store_true",
                     help="Modo bottom-up: modela por canal y consolida (vs top-down).")
@@ -308,6 +314,8 @@ def main():
         if args.activos_semanas is not None:
             suf += f"_act{args.activos_semanas}s"
         modo_tag = "bottomup" if args.por_canal else "topdown"
+        if args.cps is not None:
+            suf += f"_cps{args.cps}"
         args.out = f"/app/eval_error_{modo_tag}_{suf}.csv"
 
     print(f"[1/4] Configurando timeout de datalake = {args.timeout_seg}s")
@@ -352,7 +360,7 @@ def main():
     for idx, sku in enumerate(skus, 1):
         meta = top[top["sku"] == sku].iloc[0]
         categoria = get_categoria(df, sku)
-        regressors = get_category_regressors(categoria)
+        regressors = get_regressors(categoria)
         df_sku = df[df["sku"] == sku]
         if df_sku.empty:
             print(f"  [{idx}/{len(skus)}] {sku}: sin datos tras filtro — skip")
@@ -363,6 +371,7 @@ def main():
                 df_sku, sku, regressors,
                 n_cutoffs=args.cutoffs,
                 min_sem_canal=args.min_semanas_canal,
+                cps=args.cps,
             )
         else:
             try:
@@ -370,7 +379,7 @@ def main():
             except ValueError:
                 print(f"  [{idx}/{len(skus)}] {sku}: sin datos — skip")
                 continue
-            r = _cv_un_sku(pdf, regressors, n_cutoffs=args.cutoffs)
+            r = _cv_un_sku(pdf, regressors, n_cutoffs=args.cutoffs, cps=args.cps)
 
         if r is None:
             print(f"  [{idx}/{len(skus)}] {sku}: historia insuficiente para CV — skip")
