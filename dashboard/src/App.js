@@ -490,6 +490,85 @@ export default function App() {
   const aprobadaMap = Object.fromEntries(ordenesAprobadas.map(a => [a.numero_of, a]));
   const tipoColor = (tipo) => tipo==='PRODUCCION' ? {bg:C.tealLt,color:C.teal} : tipo==='IMPORTACION' ? {bg:C.purpleLt,color:C.purple} : {bg:C.amberLt,color:C.amber};
 
+  // ── Descarga del plan completo a CSV (formato Chile) ────────────────────────
+  // Exporta TODAS las ordenes de plan.ordenes (sugeridas + aprobadas), con las
+  // mismas columnas que la tabla del dashboard + una columna Estado que en la
+  // UI se ve por color/badge. Formato Chile: separador ';', decimales con ','
+  // y fechas dd-mm-yyyy. BOM UTF-8 para que Excel muestre bien los acentos.
+  // Reutiliza exactamente la logica de la tabla (aprobadaMap, fechas de fallback).
+  const descargarPlanCSV = () => {
+    if (!plan?.ordenes?.length) return;
+
+    // ISO (yyyy-mm-dd) -> dd-mm-yyyy. Deja intacto lo que no matchee.
+    const fechaCL = (v) => {
+      const s = String(v ?? '').slice(0, 10);
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      return m ? `${m[3]}-${m[2]}-${m[1]}` : (v ?? '');
+    };
+    // Numero -> string con separador decimal ',' (es-CL). Sin separador de miles
+    // para no chocar con el ';' de columnas.
+    const numCL = (n) => (n == null || isNaN(n)) ? '' : String(n).replace('.', ',');
+    // Escapa un campo para CSV: envuelve en comillas si tiene ';', comillas o salto.
+    const esc = (v) => {
+      const str = String(v ?? '');
+      return /[";\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+    };
+
+    // Misma F. Entrada que la tabla: aprobada.fecha_entrada_real > o.fecha_entrada_real
+    // > fallback lead-time desde semana_emision/necesidad.
+    const fEntrada = (o, aprobada) => {
+      if (aprobada?.fecha_entrada_real) return aprobada.fecha_entrada_real;
+      if (o.fecha_entrada_real) return o.fecha_entrada_real;
+      const ltD = Math.round((o.lead_time_sem ?? 1) * 7);
+      const base = o.semana_emision || o.semana_necesidad;
+      if (!base) return '';
+      const d = new Date(base + 'T12:00:00');
+      d.setDate(d.getDate() + ltD);
+      return d.toISOString().slice(0, 10);
+    };
+
+    const cols = ['N° Orden','Estado','SKU','Descripción','Tipo','F. Entrada',
+                  'F. Lanzamiento','Cajas (cj)','Línea','Alerta'];
+
+    // Mismo orden que la tabla: por fecha_lanzamiento, desempate por SKU.
+    const filas = (plan.ordenes || [])
+      .slice()
+      .sort((a, b) => {
+        const fa = (a.fecha_lanzamiento || a.semana_emision || '').slice(0,10);
+        const fb = (b.fecha_lanzamiento || b.semana_emision || '').slice(0,10);
+        if (fa !== fb) return fa.localeCompare(fb);
+        return (a.sku || '').localeCompare(b.sku || '');
+      })
+      .map((o) => {
+        const aprobada = aprobadaMap[ordenKey(o)];
+        const cantMostrar = aprobada ? aprobada.cantidad_real_cj : o.cantidad_cajas;
+        return [
+          aprobada ? (aprobada.numero_of || o.numero_of) : o.numero_of,
+          aprobada ? 'Aprobada' : 'Sugerida',
+          o.sku,
+          o.descripcion,
+          o.tipo,
+          fechaCL(fEntrada(o, aprobada)),
+          fechaCL(o.fecha_lanzamiento || o.semana_emision),
+          numCL(cantMostrar),
+          o.linea || '',
+          o.alerta || '',
+        ];
+      });
+
+    const lineas = [cols, ...filas].map(row => row.map(esc).join(';'));
+    const csv = '\uFEFF' + lineas.join('\r\n');   // BOM UTF-8 para Excel
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `plan_produccion_traverso_${todayStr}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div style={s.app}>
       {/* Topbar */}
@@ -727,6 +806,13 @@ export default function App() {
                             cursor:planLoading?'not-allowed':'pointer'}}/>
                   ⚙ OR-Tools
                 </label>
+                {/* Descarga del plan completo (sugeridas + aprobadas) a CSV formato Chile */}
+                {plan?.ordenes?.length > 0 && (
+                  <button style={s.btn} onClick={descargarPlanCSV}
+                    title="Descargar todo el plan (sugerido y aprobado) en CSV para Excel">
+                    ⬇ Descargar plan (CSV)
+                  </button>
+                )}
                 {/* Timestamp del último plan generado (V6.36) + indicador stale (V6.38) */}
                 {lastPlanTimestamp && (
                   <span style={{
