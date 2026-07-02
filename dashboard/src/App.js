@@ -230,6 +230,8 @@ export default function App() {
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(4);
   const [planOptimizar, setPlanOptimizar] = useState(true);
+  // Filtro VISUAL de la tabla del plan por línea (no regenera plan, no afecta KPIs).
+  const [filtroLinea, setFiltroLinea] = useState('');  // '' = todas
   // Anchos iniciales columnas tabla plan (en px): N°Orden SKU Desc Tipo F.Entrada F.Lanzam Cajas Línea Alerta Acciones
   const { widths: colWidths, onMouseDown: onColDrag } = useResizableColumns(
     [120, 90, 180, 55, 90, 100, 70, 55, 160, 80]
@@ -783,12 +785,30 @@ export default function App() {
                 <select style={{...s.input,fontSize:13,padding:'6px 10px',cursor:'pointer'}} value={planHorizonte} onChange={e => setPlanHorizonte(e.target.value)}>
                   {[4,8,13,17,26].map(p => <option key={p} value={p}>{p} sem. (~{Math.round(p/4.3)} meses)</option>)}
                 </select>
+                {/* Selector de canal OCULTO (no se usa actualmente). No borrar: recuperable si se decide volver a filtrar el plan por canal.
                 <span style={{fontSize:12,fontWeight:600,color:C.textMuted}}>Canal:</span>
                 <select style={{...s.input,fontSize:13,padding:'6px 10px',cursor:'pointer',minWidth:180}} value={canal}
                   onChange={e => { canalRef.current=e.target.value; setCanal(e.target.value); }}>
                   <option value="">Todos los canales</option>
                   {canales.filter(c => c !== 'OFICINA').map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
+                */}
+                {/* Filtro VISUAL por línea (client-side): filtra solo la tabla de órdenes, no los KPIs ni el resumen. Opciones = líneas presentes en el plan. */}
+                {plan?.ordenes?.length > 0 && (() => {
+                  const conteoLinea = {};
+                  (plan.ordenes || []).forEach(o => { const l = o.linea || '(sin línea)'; conteoLinea[l] = (conteoLinea[l] || 0) + 1; });
+                  const lineasPlan = Object.keys(conteoLinea).sort((a, b) => a.localeCompare(b));
+                  return (
+                    <>
+                      <span style={{fontSize:12,fontWeight:600,color:C.textMuted}}>Línea:</span>
+                      <select style={{...s.input,fontSize:13,padding:'6px 10px',cursor:'pointer',minWidth:180}}
+                        value={filtroLinea} onChange={e => setFiltroLinea(e.target.value)}>
+                        <option value="">Todas las líneas ({plan.ordenes.length})</option>
+                        {lineasPlan.map(l => <option key={l} value={l}>{l} ({conteoLinea[l]})</option>)}
+                      </select>
+                    </>
+                  );
+                })()}
                 <button style={s.btnPrimary} onClick={runPlan} disabled={planLoading}>
                   {planLoading ? (planOptimizar ? '⚙ Optimizando...' : 'Calculando...') : '▶ Generar plan'}
                 </button>
@@ -877,6 +897,7 @@ export default function App() {
                     </thead>
                     <tbody>
                       {(plan.ordenes||[])
+                        .filter(o => !filtroLinea || (o.linea || '(sin línea)') === filtroLinea)
                         .slice()
                         .sort((a, b) => {
                           // F3: ordenar por fecha_lanzamiento. Empate: por SKU para estabilidad.
