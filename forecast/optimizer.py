@@ -67,6 +67,48 @@ W_INICIO_SIMBOLICO = 1   # v1.3 (R12): desempate para evitar inicios fantasma
                          # W_SETUP=200 eliminado en F1, presión de consolidación
                          # va en F2 con matriz real).
 
+# =============================================================================
+# N2 (03-07-2026) — Objetivo por DESVIACIÓN % del SS (elimina sesgo de unidades)
+# =============================================================================
+# Motivación (diagnóstico N2): con la penalización uniforme POR UNIDAD y
+# capacidad de línea ajustada, el solver salvaba preferentemente los SKU rápidos
+# (factor_velocidad alto) y dejaba quebrar a los lentos (factor 0.6, SKU de 1 kg
+# en Miele LV) — porque "salvar" una unidad rinde lo mismo pero cuesta menos
+# capacidad en un SKU rápido. Fix: medir déficit/exceso/quiebre como % del SS de
+# cada SKU (adimensional), con curva CONVEXA (pendiente creciente hacia abajo) y
+# un término de EVENTO de quiebre UNIFORME entre SKU.
+#
+# desv% = (stock - SS) / SS       (SS = demanda_diaria × ss_dias, dinámico)
+#   SS = 0  -> déficit/quiebre APAGADOS (sin demanda no hay servicio que cuidar);
+#             exceso se mide vs cap_bodega (no llenar bodega de SKU sin rotación).
+#
+# Coeficientes "por punto porcentual" de desviación (calibración de arranque
+# 03-07; se afinan con la corrida de validación h=4):
+W_EXC_ALTO   = 8    # exceso  > +100% del SS   (leve, freno a sobreacumular)
+W_EXC_LEVE   = 3    # exceso    0 a +100%       (sobrar cuesta poco)
+W_DEF_LEVE   = 20   # déficit   0 a  -50%       (empieza a doler)
+W_DEF_GRAVE  = 60   # déficit -50 a -100%       (cerca del quiebre, duele más)
+W_QBR_MAG    = 200  # quiebre  < -100% (magnitud, creciente)  -> castigo doble (1/2)
+# Evento de quiebre: término binario por (SKU, semana), UNIFORME entre SKU.
+# Es lo que rompe el sesgo: evitar el quiebre de cualquier SKU pesa igual, sin
+# importar factor ni volumen. Castigo doble (2/2). En "puntos de penalización".
+W_QBR_EVENTO = 5_000
+# Exceso sobre cap_bodega cuando SS=0 (por unidad; único freno sin demanda).
+W_EXC_BODEGA_SS0 = 3
+
+# Escala entera del objetivo: los coeficientes "por punto %" se convierten a
+# "por unidad" dividiendo por (SS/100). Para mantener enteros con precisión sin
+# truncar a 0 en SKU de SS grande, multiplicamos por ESCALA_OBJ.
+#   coef_unidad_tramo = round(W_tramo * 100 * ESCALA_OBJ / SS)
+#   evento_escalado   = W_QBR_EVENTO * ESCALA_OBJ
+ESCALA_OBJ = 1_000
+# Breakpoints de la curva, como fracción del SS (déficit hacia abajo):
+#   0 -> 0.5·SS  (tramo leve) ; 0.5·SS -> 1.0·SS (grave) ; >1.0·SS (quiebre mag.)
+# y exceso: 0 -> 1.0·SS (leve) ; >1.0·SS (alto).
+FRAC_DEF_LEVE  = 0.5   # hasta -50% del SS
+FRAC_DEF_GRAVE = 1.0   # hasta -100% del SS (stock = 0)
+FRAC_EXC_LEVE  = 1.0   # hasta +100% del SS
+
 # v1.3 — Restricción de Nivel 1 (lot sizing).
 # Acota cuántos SKUs distintos puede asignar el optimizador a una misma
 # línea-día. Esto contiene el problema combinatorio que enfrenta el Nivel 2
@@ -154,6 +196,19 @@ class _ModeloCPSAT:
         self.deficit: dict[tuple[date, str], cp_model.IntVar] = {}      # bajo SS, en unidades
         self.exceso: dict[tuple[date, str], cp_model.IntVar] = {}       # sobre cap_bodega, en unidades
         self.quiebre: dict[tuple[date, str], cp_model.IntVar] = {}      # stock < 0 (V6.18)
+        # N2 (03-07): tramos de la curva convexa en % del SS (por día, SKU)
+        self.def_leve: dict[tuple[date, str], cp_model.IntVar] = {}     # déficit 0..-50% (unidades)
+        self.def_grave: dict[tuple[date, str], cp_model.IntVar] = {}    # déficit -50..-100% (unidades)
+        self.qbr_mag: dict[tuple[date, str], cp_model.IntVar] = {}      # quiebre <-100% (unidades)
+        self.exc_leve: dict[tuple[date, str], cp_model.IntVar] = {}     # exceso 0..+100% (unidades)
+        self.exc_alto: dict[tuple[date, str], cp_model.IntVar] = {}     # exceso >+100% (unidades)
+        self.exc_bodega: dict[tuple[date, str], cp_model.IntVar] = {}   # exceso vs cap_bodega si SS=0
+        self.coef_def_leve: dict[tuple[date, str], int] = {}            # coef/unidad escalado por SS
+        self.coef_def_grave: dict[tuple[date, str], int] = {}
+        self.coef_qbr_mag: dict[tuple[date, str], int] = {}
+        self.coef_exc_leve: dict[tuple[date, str], int] = {}
+        self.coef_exc_alto: dict[tuple[date, str], int] = {}
+        self.evento_qbr: dict[tuple[str, str], cp_model.IntVar] = {}    # binaria (sku, semana_iso)
         # Referencias para post-proceso
         self.skus: list[str] = []
         self.lineas: list[str] = []
@@ -631,13 +686,58 @@ def _construir_modelo(
                     m.stock_u[(d, s)] == stock_prev + prod_u_total_d + entrada_d - demanda_d
                 )
 
-            # Déficit bajo SS (en unidades, SS dinámico = demanda × ss_dias)
+            # Déficit bajo SS (SS dinámico = demanda_diaria × ss_dias, en unidades)
             ss_d = demanda_d * ss_dias
-            m.model.Add(m.deficit[(d, s)] >= ss_d - m.stock_u[(d, s)])
 
-            # Exceso sobre cap_bodega (en unidades)
+            # Compatibilidad: mantenemos deficit/exceso/quiebre ligados (post-proceso
+            # y otras lecturas). El OBJETIVO usa los tramos en % del SS (abajo).
+            m.model.Add(m.deficit[(d, s)] >= ss_d - m.stock_u[(d, s)])
             m.model.Add(m.exceso[(d, s)] >= m.stock_u[(d, s)] - cap_bodega)
-            m.model.Add(m.quiebre[(d, s)] >= -m.stock_u[(d, s)])  # V6.18: solo > 0 si stock_u < 0
+            m.model.Add(m.quiebre[(d, s)] >= -m.stock_u[(d, s)])  # V6.18: >0 solo si stock<0
+
+            big_ub_s = 100 * cap_bodega
+
+            if ss_d > 0:
+                # ── Curva convexa en % del SS ─────────────────────────────────
+                # Déficit descompuesto en tramos (unidades). La suma cubre el
+                # déficit total; el solver llena primero el tramo más barato
+                # (coeficientes crecientes) -> convexidad sin binarios.
+                lim_leve = int(FRAC_DEF_LEVE * ss_d)               # 0..-50% del SS
+                lim_grave = int((FRAC_DEF_GRAVE - FRAC_DEF_LEVE) * ss_d)  # -50..-100%
+                m.def_leve[(d, s)] = m.model.NewIntVar(0, max(1, lim_leve), f"dfl_{d_idx}_{s}")
+                m.def_grave[(d, s)] = m.model.NewIntVar(0, max(1, lim_grave), f"dfg_{d_idx}_{s}")
+                m.qbr_mag[(d, s)] = m.model.NewIntVar(0, big_ub_s, f"qmg_{d_idx}_{s}")
+                # suma de tramos >= déficit total (ss_d - stock); >=0 implícito
+                m.model.Add(
+                    m.def_leve[(d, s)] + m.def_grave[(d, s)] + m.qbr_mag[(d, s)]
+                    >= ss_d - m.stock_u[(d, s)]
+                )
+
+                # Exceso SOBRE SS descompuesto (leve 0..+100%, alto >+100%)
+                lim_exc_leve = int(FRAC_EXC_LEVE * ss_d)
+                m.exc_leve[(d, s)] = m.model.NewIntVar(0, max(1, lim_exc_leve), f"exl_{d_idx}_{s}")
+                m.exc_alto[(d, s)] = m.model.NewIntVar(0, big_ub_s, f"exa_{d_idx}_{s}")
+                m.model.Add(
+                    m.exc_leve[(d, s)] + m.exc_alto[(d, s)] >= m.stock_u[(d, s)] - ss_d
+                )
+
+                # Coeficientes por unidad, escalados: W_tramo · 100 · ESCALA / SS
+                m.coef_def_leve[(d, s)] = int(round(W_DEF_LEVE * 100 * ESCALA_OBJ / ss_d))
+                m.coef_def_grave[(d, s)] = int(round(W_DEF_GRAVE * 100 * ESCALA_OBJ / ss_d))
+                m.coef_qbr_mag[(d, s)] = int(round(W_QBR_MAG * 100 * ESCALA_OBJ / ss_d))
+                m.coef_exc_leve[(d, s)] = int(round(W_EXC_LEVE * 100 * ESCALA_OBJ / ss_d))
+                m.coef_exc_alto[(d, s)] = int(round(W_EXC_ALTO * 100 * ESCALA_OBJ / ss_d))
+
+                # Evento de quiebre por (SKU, semana ISO): binaria uniforme.
+                w = semana_iso_inicio(d).isoformat()
+                if (s, w) not in m.evento_qbr:
+                    m.evento_qbr[(s, w)] = m.model.NewBoolVar(f"evq_{s}_{w}")
+                # Si hay quiebre este día (>0), forzar evento_qbr=1 de la semana.
+                m.model.Add(m.evento_qbr[(s, w)] * big_ub_s >= m.quiebre[(d, s)])
+            else:
+                # SS = 0: déficit/quiebre APAGADOS. Solo freno a llenar bodega.
+                m.exc_bodega[(d, s)] = m.model.NewIntVar(0, big_ub_s, f"exb_{d_idx}_{s}")
+                m.model.Add(m.exc_bodega[(d, s)] >= m.stock_u[(d, s)] - cap_bodega)
 
             # Una línea por SKU por día
             asigs_s_d = [m.asig[(d, s, l)] for l in m.pares_sku_linea[s]]
@@ -666,16 +766,32 @@ def _agregar_objetivo(
 
     obj_terms = []
 
-    # Penalizar déficit bajo SS
-    for (d, s), v in m.deficit.items():
-        obj_terms.append(W_DEFICIT * v)
+    # N2 (03-07): penalización por DESVIACIÓN % del SS (curva convexa) + evento
+    # uniforme de quiebre. Reemplaza la penalización por-unidad (W_DEFICIT/
+    # W_EXCESO/W_QUIEBRE) que sesgaba contra SKU lentos bajo capacidad ajustada.
 
-    # Penalizar exceso sobre cap bodega
-    for (d, s), v in m.exceso.items():
-        obj_terms.append(W_EXCESO * v)
-    # V6.18: penalizar quiebre real (stock < 0) MUY fuerte — debe evitarse a casi cualquier costo
-    for (d, s), v in m.quiebre.items():
-        obj_terms.append(W_QUIEBRE * v)
+    # Déficit progresivo (0..-50%, -50..-100%) y quiebre-magnitud (<-100%)
+    for (d, s), v in m.def_leve.items():
+        obj_terms.append(m.coef_def_leve[(d, s)] * v)
+    for (d, s), v in m.def_grave.items():
+        obj_terms.append(m.coef_def_grave[(d, s)] * v)
+    for (d, s), v in m.qbr_mag.items():
+        obj_terms.append(m.coef_qbr_mag[(d, s)] * v)   # castigo doble (1/2): magnitud
+
+    # Exceso sobre SS progresivo (leve < alto), menor que el déficit
+    for (d, s), v in m.exc_leve.items():
+        obj_terms.append(m.coef_exc_leve[(d, s)] * v)
+    for (d, s), v in m.exc_alto.items():
+        obj_terms.append(m.coef_exc_alto[(d, s)] * v)
+
+    # Exceso vs cap_bodega cuando SS=0 (único freno sin demanda)
+    for (d, s), v in m.exc_bodega.items():
+        obj_terms.append(W_EXC_BODEGA_SS0 * ESCALA_OBJ * v)
+
+    # Evento de quiebre UNIFORME por (SKU, semana): rompe el sesgo de factor.
+    # Castigo doble (2/2): evitar QUE un SKU quiebre pesa igual para todos.
+    for (s, w), b in m.evento_qbr.items():
+        obj_terms.append(W_QBR_EVENTO * ESCALA_OBJ * b)
 
     # Penalizar asignación a línea alternativa (preferir la preferida)
     pref_map: dict[tuple[str, str], bool] = {}
