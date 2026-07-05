@@ -127,7 +127,7 @@ def load_params_from_db():
             descripcion         = row.get("descripcion", ""),
             tipo                = row.get("tipo", "PRODUCCION"),
             lead_time_semanas   = float(row.get("lead_time_sem", 1) or 1),
-            stock_seguridad_dias= int(row.get("ss_dias", 15) or 15),
+            stock_seguridad_dias= int(row.get("ss_dias") if row.get("ss_dias") is not None else 15),
             batch_minimo        = int(row.get("batch_min_u", 0) or 0),
             multiplo_batch      = int(row.get("batch_mult_u", 1) or 1),
             cap_bodega          = int(row.get("cap_bodega_u", 999999) or 999999),
