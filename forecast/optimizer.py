@@ -84,10 +84,10 @@ W_INICIO_SIMBOLICO = 1   # v1.3 (R12): desempate para evitar inicios fantasma
 #
 # Coeficientes "por punto porcentual" de desviación (calibración de arranque
 # 03-07; se afinan con la corrida de validación h=4):
-W_EXC_ALTO   = 8    # exceso  > +100% del SS   (leve, freno a sobreacumular)
-W_EXC_LEVE   = 3    # exceso    0 a +100%       (sobrar cuesta poco)
-W_DEF_LEVE   = 20   # déficit   0 a  -50%       (empieza a doler)
-W_DEF_GRAVE  = 60   # déficit -50 a -100%       (cerca del quiebre, duele más)
+W_EXC_ALTO   = 0    # N1-min 07-07: era 8  (exceso>+100% SS -> N2)
+W_EXC_LEVE   = 0    # N1-min 07-07: era 3  (exceso 0..+100% SS -> N2)
+W_DEF_LEVE   = 0    # N1-min 07-07: era 20 (deficit 0..-50% SS -> N2)
+W_DEF_GRAVE  = 0    # N1-min 07-07: era 60 (deficit -50..-100% SS -> N2)
 W_QBR_MAG    = 200  # quiebre  < -100% (magnitud, creciente)  -> castigo doble (1/2)
 # Evento de quiebre: término binario por (SKU, semana), UNIFORME entre SKU.
 # Es lo que rompe el sesgo: evitar el quiebre de cualquier SKU pesa igual, sin
@@ -127,7 +127,7 @@ N_MAX_SKUS_DIA_LINEA = 4
 SOLVER_TIME_LIMIT_POR_HORIZONTE = {
     4:  60,
     8:  120,
-    13: 300,
+    8:  300,  # N1-min 07-07: era 120 (viejo, 77 SKU); 250 SKU necesita mas
     17: 420,
     26: 600,
 }
