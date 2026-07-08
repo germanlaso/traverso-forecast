@@ -169,7 +169,7 @@ def main():
         alertas_stock=alertas_vcto, entradas_fijas=entradas_fijas,
     )
     log.info("[6/8] optimizando (OR-Tools)...")
-    _, diag = optimizar_plan(
+    ordenes_opt, diag = optimizar_plan(
         ordenes_mrp=ordenes, sku_params=sku_params, lineas=lineas,
         forecasts=forecasts, stocks_actuales=stocks_actuales,
         entradas_fijas=entradas_fijas, horizonte_semanas=args.horizonte,
@@ -181,6 +181,72 @@ def main():
         log.error("[6/8] no se capturo la capa rica -> abortar (no persisto)")
         sys.exit(5)
     rich = _RICH[-1]
+
+    # Asignar numero_of a cada orden (copia literal de /plan L537-566).
+    # Sin esto las ordenes salen con numero_of=null y el frontend no las
+    # identifica (columna N Orden vacia, no se pueden aprobar).
+    import re as _re
+    from db_mrp import get_orden_by_key, numero_of_tentativo
+    for o in ordenes_opt:
+        sku_p = sku_params.get(o.get('sku', ''))
+        if sku_p and 'lead_time_sem' not in o:
+            o['lead_time_sem'] = getattr(sku_p, 'lead_time_semanas', 1)
+        if o.get('numero_of') and o.get('aprobada'):
+            continue
+        motivo = o.get('motivo', '')
+        m_ap = _re.search(r'OF_APROBADA:([\w-]+)', motivo)
+        if m_ap:
+            o['numero_of'] = m_ap.group(1); o['aprobada'] = True; continue
+        fl = o.get('fecha_lanzamiento') or o.get('semana_emision')
+        linea_o = o.get('linea') or ''
+        existente = get_orden_by_key(o['sku'], fl, linea_o)
+        if existente and existente.get('numero_of'):
+            o['numero_of'] = existente['numero_of']
+            o['aprobada'] = bool(existente.get('estado') == 'APROBADA')
+        else:
+            o['numero_of'] = numero_of_tentativo(o['sku'], fl, linea_o)
+            o['aprobada'] = False
+
+    # proyeccion_por_sku (copia literal de /plan L573-581): la pestana Stock
+    # la lee como fuente unica de verdad (planExterno.proyeccion_por_sku[sku]).
+    from proyeccion import construir_proyeccion_por_sku
+    import datetime as _dt2
+    try:
+        proyeccion_por_sku = construir_proyeccion_por_sku(
+            ordenes_finales=ordenes_opt, aprobadas_db=aprobadas_db,
+            sku_params=sku_params, forecasts=forecasts,
+            stocks_actuales=stocks_actuales, fecha_inicio=_dt2.date.today(),
+            horizonte_dias=args.horizonte * 7,
+        )
+    except Exception as e:
+        log.warning(f'[6/8] no se pudo construir proyeccion_por_sku: {e}')
+        proyeccion_por_sku = {}
+
+        # vista_dashboard: forma LEGACY que el frontend consume (App.js usa
+    # plan.ordenes/stock_info/n_alertas/resumen_semanal/n_skus/n_ordenes).
+    # Se guarda en el snapshot para que GET /plan/vigente la sirva directo,
+    # sin traducir rico->legacy al vuelo.
+    try:
+        vencidos = [a for a in alertas_vcto if a.get('tipo') == 'VENCIDO']
+        proximos = [a for a in alertas_vcto if a.get('tipo') == 'PROXIMO_VENCIMIENTO']
+        rich['vista_dashboard'] = {
+            'n_skus': len(sku_params),
+            'n_ordenes': len(ordenes_opt),
+            'n_alertas': sum(1 for o in ordenes_opt if o.get('tiene_alerta')),
+            'horizonte_sem': args.horizonte,
+            'stock_info': {
+                'usa_stock_real': True,
+                'advertencia': None,
+                'n_lotes_vencidos_excluidos': len(vencidos),
+                'n_lotes_proximos_vencer': len(proximos),
+            },
+            'ordenes': ordenes_opt,
+            'resumen_semanal': _mrp.resumen_semanal(ordenes_opt),
+            'proyeccion_por_sku': proyeccion_por_sku,
+        }
+    except Exception as e:
+        log.warning(f'[6/8] no se pudo armar vista_dashboard: {e}')
+        rich['vista_dashboard'] = None
 
     # ── 7. GATE ──────────────────────────────────────────────────────────────
     from persistencia import evaluar_gate_n1, persistir_plan, promover_plan

@@ -266,6 +266,28 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Cargar el PLAN VIGENTE persistido (el que promovio el cron). El dashboard
+  // lo muestra por defecto; el boton 'Generar plan' queda deshabilitado (warm
+  // start futuro). Si no hay vigente, deja el plan como estaba (cache local).
+  const [planFrescura, setPlanFrescura] = useState(null);
+  useEffect(() => {
+    axios.get(`${API}/plan/vigente`)
+      .then(r => {
+        if (r.data && r.data.disponible) {
+          setPlan(r.data);
+          setPlanFrescura({
+            stockEsHoy: r.data.stock_es_hoy,
+            advertencia: r.data.advertencia_frescura,
+            timestampStock: r.data.timestamp_stock,
+            createdAt: r.data.created_at,
+            gap: r.data.gap, horizonteSem: r.data.horizonte_sem,
+          });
+          if (r.data.stock_info) setStockInfo(r.data.stock_info);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     const params = csvMode ? {use_csv: csvPath} : {};
     axios.get(`${API}/skus`, {params})
@@ -809,8 +831,8 @@ export default function App() {
                     </>
                   );
                 })()}
-                <button style={s.btnPrimary} onClick={runPlan} disabled={planLoading}>
-                  {planLoading ? (planOptimizar ? '⚙ Optimizando...' : 'Calculando...') : '▶ Generar plan'}
+                <button style={{...s.btnPrimary, opacity:0.5, cursor:'not-allowed'}} onClick={runPlan} disabled={true} title="Deshabilitado: el plan lo genera el proceso diario (cron). Regenerar on-demand con warm start: proximamente.">
+                  {'▶ Generar plan (auto 6 AM)'}
                 </button>
                 <label style={{display:'flex',alignItems:'center',gap:6,
                   cursor:planLoading?'not-allowed':'pointer',

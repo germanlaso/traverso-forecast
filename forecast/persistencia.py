@@ -8,7 +8,7 @@ from db_mrp import SessionLocal
 
 CLAVES_SNAPSHOT = (
     "ofts", "stock_diario", "alertas", "uso_linea",
-    "resumen", "sobrecargas_aprobadas",
+    "resumen", "sobrecargas_aprobadas", "vista_dashboard",
 )
 
 _SQL_INSERT = text("""

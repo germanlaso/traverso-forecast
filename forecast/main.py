@@ -623,6 +623,58 @@ def generar_plan(req: PlanRequest = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/plan/vigente", tags=["Plan de Produccion"])
+def get_plan_vigente():
+    """Devuelve el plan VIGENTE persistido en mrp_planes (el que promovio el cron).
+
+    El dashboard consume este endpoint en vez de regenerar el plan al vuelo.
+    Retorna la vista_dashboard (forma legacy: ordenes/stock_info/n_alertas/
+    resumen_semanal/n_skus/n_ordenes) + metadata de frescura para avisar si el
+    stock es viejo. Si no hay plan vigente, retorna disponible=False.
+    """
+    from sqlalchemy import text as _sql
+    from db_mrp import SessionLocal
+    from datetime import date as _date
+    with SessionLocal() as s:
+        row = s.execute(_sql(
+            "SELECT id, horizonte_sem, status, gap, aceptable, "
+            "timestamp_stock, created_at, snapshot "
+            "FROM mrp_planes WHERE vigente LIMIT 1"
+        )).mappings().first()
+    if row is None:
+        return {"disponible": False,
+                "mensaje": "No hay plan vigente. El cron aun no genero uno, o ninguno paso el gate."}
+    snap = row["snapshot"] or {}
+    vista = snap.get("vista_dashboard") or {}
+    ts_stock = row["timestamp_stock"]
+    # frescura: el stock del plan vigente es de hoy?
+    stock_es_hoy = bool(ts_stock and ts_stock.date() == _date.today())
+    return {
+        "disponible": True,
+        "plan_id": row["id"],
+        "horizonte_sem": row["horizonte_sem"],
+        "status": row["status"],
+        "gap": row["gap"],
+        "aceptable": row["aceptable"],
+        "timestamp_stock": str(ts_stock) if ts_stock else None,
+        "created_at": str(row["created_at"]),
+        "stock_es_hoy": stock_es_hoy,
+        "advertencia_frescura": (
+            None if stock_es_hoy
+            else f"El stock del plan vigente es del {ts_stock}, no de hoy. "
+                 f"Puede estar desactualizado."
+        ),
+        # los 6 campos que el frontend espera (misma forma que POST /plan):
+        "n_skus": vista.get("n_skus"),
+        "n_ordenes": vista.get("n_ordenes"),
+        "n_alertas": vista.get("n_alertas"),
+        "stock_info": vista.get("stock_info"),
+        "ordenes": vista.get("ordenes", []),
+        "resumen_semanal": vista.get("resumen_semanal"),
+        "proyeccion_por_sku": vista.get("proyeccion_por_sku", {}),
+    }
+
+
 @app.get("/plan/params", tags=["Plan de Produccion"])
 def get_mrp_params():
     """Lista los SKUs con parámetros MRP cargados desde PostgreSQL (fallback Excel)."""
