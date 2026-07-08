@@ -300,6 +300,10 @@ def main():
     ap.add_argument("--cutoffs", type=int, default=6)
     ap.add_argument("--cps", type=float, default=None,
                     help="changepoint_prior_scale. None usa el default de produccion (0.05).")
+    ap.add_argument("--ventas-csv", type=str, default=None,
+                    help="Si se indica, descensura las ventas con la serie de "
+                         "ventas_descensurada.csv (escala cantidad por sku-semana "
+                         "imputada; preserva el mix de canal).")
     ap.add_argument("--canal", type=str, default=None)
     ap.add_argument("--por-canal", action="store_true",
                     help="Modo bottom-up: modela por canal y consolida (vs top-down).")
@@ -349,6 +353,24 @@ def main():
 
     print(f"[3/4] Cargando ventas de {len(skus)} SKUs desde datalake...")
     df = load_sales(skus=skus)
+    if args.ventas_csv:
+        dz = pd.read_csv(args.ventas_csv, dtype={"sku": str})
+        dz["semana"] = pd.to_datetime(dz["semana"])
+        dz = dz[dz["imputada"]]
+        ratio = {}
+        for s, w, vo, vd in zip(dz["sku"], dz["semana"],
+                                dz["venta_original"], dz["venta_descensurada"]):
+            ratio[(s, pd.Timestamp(w))] = (vd / vo) if vo > 0 else None
+        df = df.copy()
+        df["fecha_semana"] = pd.to_datetime(df["fecha_semana"])
+        def _esc(r):
+            f = ratio.get((r["sku"], r["fecha_semana"]))
+            return r["cantidad"] * f if f else r["cantidad"]
+        n_antes = df["cantidad"].sum()
+        df["cantidad"] = df.apply(_esc, axis=1)
+        n_tocadas = sum(1 for k in ratio if ratio[k])
+        print(f"      [descensurado] {n_tocadas} sku-semana escaladas | "
+              f"volumen {n_antes:,.0f} -> {df['cantidad'].sum():,.0f}")
     if args.canal:
         df = df[df["canal"] == args.canal]
         print(f"      filtrado a canal='{args.canal}': {len(df)} filas")

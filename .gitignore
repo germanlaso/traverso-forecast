@@ -69,3 +69,14 @@ forecast/eval_error_*.csv
 *.bak-*
 forecast/*.log
 forecast/eval_*.csv
+
+# Scratchpads de diagnostico N1/N2 (read-only, no productivos)
+_n1_*
+_n2_*
+forecast/_n1_*
+forecast/_n2_*
+analisis_cps*.py
+diag_quiebres_stock.py
+patch_cps.py
+forecast/plan_*.json
+forecast/ventas_descensurada.csv
