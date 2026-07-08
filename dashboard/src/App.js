@@ -1170,6 +1170,7 @@ export default function App() {
             });
           }}
           planLoading={planLoading}
+          onIrAStock={irAStock}
           onSolicitarPlan={() => runPlan()}
         />}
         {activeTab === 'programacion' && <ProgramacionDiaria

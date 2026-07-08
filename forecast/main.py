@@ -681,12 +681,21 @@ def get_mrp_params():
     import importlib, mrp as _mrp_params
     try:
         try:
-            sku_params, lineas, _ = _mrp_params.load_params_from_db()
+            sku_params, lineas, _sku_lineas = _mrp_params.load_params_from_db()
             if not sku_params:
                 raise ValueError("BD vacía")
         except Exception as _e2:
             logger.warning(f"Fallback Excel /plan/params: {_e2}")
-            sku_params, lineas, _ = _mrp_params.load_params_from_excel(MRP_EXCEL_PATH)
+            sku_params, lineas, _sku_lineas = _mrp_params.load_params_from_excel(MRP_EXCEL_PATH)
+        # factor_velocidad vive en sku_lineas (par SKU-linea). Para /plan/params
+        # exponemos el factor de la LINEA PREFERIDA de cada SKU (el que aplica en
+        # el grid de Detalle, que agrupa por linea preferida). Default 1.0.
+        _factor_pref = {}
+        for _sl in (_sku_lineas or []):
+            # nos quedamos con el de la linea preferida; si no hay preferida marcada,
+            # el primero que aparezca sirve de fallback.
+            if getattr(_sl, "preferida", False) or _sl.sku not in _factor_pref:
+                _factor_pref[_sl.sku] = float(getattr(_sl, "factor_velocidad", 1.0) or 1.0)
         return {
             "n_skus": len(sku_params),
             "n_lineas": len(lineas),
@@ -704,6 +713,7 @@ def get_mrp_params():
                     "pct_dia_max": getattr(p, 'pct_dia_max', 1.0),
                     "u_por_caja": p.unidades_por_caja,
                     "linea_preferida": p.linea_preferida,
+                    "factor_velocidad": _factor_pref.get(p.sku, 1.0),
                 }
                 for p in sku_params.values()
             ],

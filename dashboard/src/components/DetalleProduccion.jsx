@@ -258,9 +258,14 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
     if(mapa[fechaIni]===undefined) return;
 
     const upj=params[o.sku]?.upj??1;
+    // factor_velocidad del par SKU-linea (1.0 si no hay dato). El consumo de
+    // capacidad de una caja es upj/factor: un SKU lento (factor<1) consume MAS.
+    // Debe replicar la formula del backend (optimizer: costo = upj/factor_sl).
+    const fv=params[o.sku]?.factor_velocidad??1;
     const cajasReales=Number(aprobacion?.cantidad_real_cj??o.cantidad_cajas);
-    const uProd=Math.round(cajasReales*upj);
-    const usoPctReal=uProd/capDia;
+    const uProd=Math.round(cajasReales*upj);            // unidades fisicas (para mostrar)
+    const uCapacidad=uProd/(fv||1);                     // unidades equivalentes de capacidad
+    const usoPctReal=uCapacidad/capDia;
 
     mapa[fechaIni].push({
       ...o,
@@ -287,8 +292,10 @@ export default function DetalleProduccion({
   onAprobacionRetirada,
   planLoading=false,
   onSolicitarPlan=null,
+  onIrAStock=null,          // navegar a pestana Stock por SKU
 }){
   const [semanaBase,setSemanaBase]=useState(getDomingoActual());
+  const [lineaFiltro,setLineaFiltro]=useState('');   // '' = todas las lineas
   const [lineas,setLineas]=useState([]);
   const [params,setParams]=useState({});
   const [ordenes,setOrdenes]=useState([]);
@@ -302,7 +309,7 @@ export default function DetalleProduccion({
     axios.get(`${API}/plan/params`)
       .then(p=>{
         setLineas(p.data.lineas??[]);
-        const map={};(p.data.skus??[]).forEach(s=>{map[s.sku]={upj:s.u_por_caja,linea:s.linea_preferida,ss_dias:s.ss_dias,lead_time_sem:s.lead_time_sem??1};});
+        const map={};(p.data.skus??[]).forEach(s=>{map[s.sku]={upj:s.u_por_caja,linea:s.linea_preferida,ss_dias:s.ss_dias,lead_time_sem:s.lead_time_sem??1,factor_velocidad:s.factor_velocidad??1};});
         setParams(map);
       }).catch(e=>setError("Error cargando parámetros: "+(e.response?.data?.detail||e.message)));
   },[]);
@@ -413,9 +420,15 @@ export default function DetalleProduccion({
                   background:C.tealLt,color:C.tealMid,cursor:"pointer"}}>Hoy</button>
         {loading&&<span style={{fontSize:12,color:C.textMuted}}>⏳ Cargando...</span>}
         {error&&<span style={{fontSize:12,color:C.red,maxWidth:300}}>{error}</span>}
+        <span style={{fontSize:12,fontWeight:600,color:C.textMuted,marginLeft:"auto"}}>Línea:</span>
+        <select value={lineaFiltro} onChange={e=>setLineaFiltro(e.target.value)}
+          style={{fontSize:13,padding:"5px 10px",borderRadius:6,border:`0.5px solid ${C.border}`,background:"#fff",cursor:"pointer"}}>
+          <option value="">Todas las líneas</option>
+          {lineas.map(l=><option key={l.codigo} value={l.codigo}>{l.codigo} — {l.nombre}</option>)}
+        </select>
       </div>
 
-      {lineas.map(linea=>{
+      {lineas.filter(linea=>!lineaFiltro||linea.codigo===lineaFiltro).map(linea=>{
         const ordenesLinea=getOrdenesLinea(linea);
         const{mapa:ordenesXDia,capUsada}=distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea);
         const pendientes=ordenesLinea.filter(o=>!aprobMap[o.numero_of]);
@@ -555,7 +568,13 @@ export default function DetalleProduccion({
                       return(
                         <tr key={i} style={{background:rowBg}}>
                           <td style={{...s.tblCell,fontWeight:700,color:o.numero_of?.startsWith("OFT")?"#854F0B":C.tealMid,whiteSpace:"nowrap"}}>{o.numero_of}</td>
-                          <td style={{...s.tblCell,fontWeight:700,color:C.teal}}>{o.sku}</td>
+                          <td style={{...s.tblCell,fontWeight:700,color:C.teal}}>
+                            {onIrAStock
+                              ? <span onClick={(e)=>{e.stopPropagation();onIrAStock(o.sku);}}
+                                  title="Ver proyección de stock de este SKU"
+                                  style={{cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{o.sku}</span>
+                              : o.sku}
+                          </td>
                           <td style={{...s.tblCell,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.descripcion}</td>
                           <td style={{...s.tblCell,whiteSpace:"nowrap"}}>
                             {(() => {
