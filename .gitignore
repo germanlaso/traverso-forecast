@@ -80,3 +80,7 @@ diag_quiebres_stock.py
 patch_cps.py
 forecast/plan_*.json
 forecast/ventas_descensurada.csv
+
+# Dry-runs de validacion (scratchpads)
+_dryrun_*
+forecast/_dryrun_*
