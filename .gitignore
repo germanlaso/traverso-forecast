@@ -84,3 +84,11 @@ forecast/ventas_descensurada.csv
 # Dry-runs de validacion (scratchpads)
 _dryrun_*
 forecast/_dryrun_*
+
+# Backups y scripts de prueba/inspeccion (scratchpads de sesion)
+*.bak_*
+forecast/*.bak_*
+test_*.py
+forecast/test_*.py
+inspect_*.py
+forecast/inspect_*.py

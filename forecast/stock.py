@@ -94,10 +94,11 @@ def fetch_and_save_stock() -> dict:
         .str.replace(",", ".", regex=False)               # coma → punto decimal
     )
     df["stock_unidades"] = pd.to_numeric(df["stock_unidades"], errors="coerce").fillna(0)
-    # TODO(v1.4): fijar dayfirst=True o format="%d/%m/%Y" según convención
-    # de SQL Server. Hoy genera UserWarning pero no rompe el parsing.
-    df["fecha_vcto"] = pd.to_datetime(df["fecha_vcto"], errors="coerce")
-    df["fecha_descarga"] = pd.to_datetime(df["fecha_descarga"], errors="coerce")
+    # dayfirst=True: SQL Server entrega estas fechas en formato dd/mm/yyyy
+    # (la query filtra con TRY_CONVERT estilo 105 = dia primero). Sin dayfirst,
+    # pandas asume mes primero y cruza dia/mes cuando dia<=12 (ej. 08/07 -> 07/ago).
+    df["fecha_vcto"] = pd.to_datetime(df["fecha_vcto"], errors="coerce", dayfirst=True)
+    df["fecha_descarga"] = pd.to_datetime(df["fecha_descarga"], errors="coerce", dayfirst=True)
 
     # Filtro de bodegas (si está configurado)
     if BODEGAS_INCLUIDAS:

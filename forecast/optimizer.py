@@ -853,6 +853,22 @@ def _resultado_vacio(mensaje: str, status: str = "EMPTY",
 # Post-procesamiento
 # =============================================================================
 
+def _calcular_gap(solver, objective_value, status_name):
+    """Gap de optimalidad CP-SAT en %, consistente con _n2_gap_1800.py:
+        gap% = (objective - best_bound) / |objective| * 100
+    Devuelve None si no aplica (INFEASIBLE / sin objetivo / |obj| ~ 0).
+    """
+    if status_name in ("INFEASIBLE", "MODEL_INVALID", "TIMEOUT_SIN_SOLUCION"):
+        return None
+    try:
+        bound = solver.BestObjectiveBound()
+    except Exception:
+        return None
+    if abs(objective_value) <= 1e-9:
+        return None
+    return (objective_value - bound) / abs(objective_value) * 100.0
+
+
 def _post_procesar(
     m: _ModeloCPSAT,
     solver: cp_model.CpSolver,
@@ -866,6 +882,8 @@ def _post_procesar(
     objective_value: float,
 ) -> dict[str, Any]:
     """Convierte la solución del solver en OFTs, stock visible y alertas."""
+
+    gap = _calcular_gap(solver, objective_value, status_name)
 
     ofts: list[dict] = []
     stock_diario: dict[str, dict[str, int]] = {}
@@ -997,6 +1015,7 @@ def _post_procesar(
         "alertas": alertas,
         "uso_linea": uso_linea,
         "resumen": resumen,
+        "gap": gap,
         "sobrecargas_aprobadas": getattr(m, "sobrecargas_aprobadas", []),  # V6.37
     }
 
@@ -1335,6 +1354,7 @@ def optimizar_plan(
         "status": resultado["status"],
         "tiempo_ms": int((resultado.get("solver_time_sec") or 0) * 1000),
         "objective_value": resultado.get("objective_value"),
+        "gap": resultado.get("gap"),
         "ofts_generadas": len(ordenes_produccion),
         "ordenes_importacion_preservadas": len(ordenes_importacion),
         "alertas": {
