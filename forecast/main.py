@@ -98,6 +98,7 @@ class PlanRequest(BaseModel):
     canal: Optional[str] = None
     horizonte_semanas: int = 13
     optimizar: bool = False
+    incluir_pedidos: bool = True    # V-OV: netear OV abiertas de HANA al plan
 
 
 # ── Cache en memoria ──────────────────────────────────────────────────────────
@@ -333,6 +334,73 @@ def get_metrics(
 
 # ── Endpoints: Plan de Producción ─────────────────────────────────────────────
 
+def _fetch_pedidos_abiertos(skus_validos: set) -> dict:
+    """V-OV: lee pedidos abiertos (OV) desde SAP HANA para netearlos al plan.
+
+    FAIL-SAFE: ante cualquier error (HANA caído, credencial, driver ausente)
+    devuelve {} y loguea — un problema de HANA NUNCA debe romper el plan diario.
+    Kill-switch de ops: env OV_NETTING_ENABLED=0 lo desactiva sin redeploy.
+    Devuelve {sku: {fecha: cajas}} filtrado a skus_validos (SKU de producción).
+    """
+    import os
+    if os.environ.get("OV_NETTING_ENABLED", "1") not in ("1", "true", "True", "yes"):
+        logger.info("[Plan] Neteo de OV desactivado por OV_NETTING_ENABLED.")
+        return {}
+    try:
+        from datetime import date
+        import hana_pedidos
+        conn = hana_pedidos.conectar()
+        try:
+            pedidos = hana_pedidos.obtener_pedidos_abiertos(
+                conn, hoy=date.today(), skus_validos=skus_validos,
+            )
+        finally:
+            conn.close()
+        n_cj = sum(c for fechas in pedidos.values() for c in fechas.values())
+        logger.info(f"[Plan] OV neteadas: {len(pedidos)} SKU, {n_cj:.0f} cajas comprometidas.")
+        return pedidos
+    except Exception as e:
+        logger.warning(f"[Plan] No pude leer OV de HANA; se planifica SIN pedidos: {e}")
+        return {}
+
+
+def _fetch_ov_split(skus_validos: set) -> tuple[dict, dict]:
+    """V-OV2 (10-07): OV separada en (futuras, comprometido).
+
+        futuras      {sku: {fecha: cajas}}  fecha >= hoy -> DEMANDA en su fecha.
+        comprometido {sku: cajas}           fecha < hoy  -> se RESTA del stock_inicial
+                     (stock ya apartado por notas de venta vencidas, no despachadas;
+                     no es demanda a producir).
+
+    Mismo FAIL-SAFE y kill-switch que _fetch_pedidos_abiertos: ante cualquier error
+    devuelve ({}, {}) y el plan sigue sin OV.
+    """
+    import os
+    if os.environ.get("OV_NETTING_ENABLED", "1") not in ("1", "true", "True", "yes"):
+        logger.info("[Plan] Neteo de OV desactivado por OV_NETTING_ENABLED.")
+        return {}, {}
+    try:
+        from datetime import date
+        import hana_pedidos
+        conn = hana_pedidos.conectar()
+        try:
+            futuras, comprometido = hana_pedidos.obtener_ov_split(
+                conn, hoy=date.today(), skus_validos=skus_validos,
+            )
+        finally:
+            conn.close()
+        cj_fut = sum(c for fechas in futuras.values() for c in fechas.values())
+        cj_comp = sum(comprometido.values())
+        logger.info(
+            f"[Plan] OV split: futuras(demanda) {len(futuras)} SKU / {cj_fut:.0f} cj | "
+            f"comprometido(rebaja stock) {len(comprometido)} SKU / {cj_comp:.0f} cj."
+        )
+        return futuras, comprometido
+    except Exception as e:
+        logger.warning(f"[Plan] No pude leer OV de HANA; se planifica SIN pedidos: {e}")
+        return {}, {}
+
+
 @app.post("/plan", tags=["Plan de Produccion"])
 def generar_plan(req: PlanRequest = None):
     """
@@ -457,6 +525,28 @@ def generar_plan(req: PlanRequest = None):
             try:
                 from optimizer import optimizar_plan
                 logger.info("[Plan] Iniciando optimizador OR-Tools...")
+                # V-OV2 (10-07): OV separada. Futuras = demanda en su fecha. Vencidas
+                # (comprometido) = stock ya apartado -> se RESTA del stock_inicial (no
+                # se produce demanda inexistente). skus_validos = SKU de PRODUCCIÓN.
+                pedidos_abiertos = {}
+                comprometido = {}
+                if getattr(req, "incluir_pedidos", True):
+                    skus_prod = {s for s, p in sku_params.items()
+                                 if str(getattr(p, "tipo", "")).upper() == "PRODUCCION"}
+                    pedidos_abiertos, comprometido = _fetch_ov_split(skus_prod)
+                    # Rebaja del stock por OV vencida (permite negativo = quiebre real
+                    # ya ocurrido -> el modelo produce para cubrir lo comprometido).
+                    if comprometido:
+                        n_neg = 0
+                        for s, cj in comprometido.items():
+                            nuevo = stocks_actuales.get(s, 0.0) - cj
+                            stocks_actuales[s] = nuevo
+                            if nuevo < 0:
+                                n_neg += 1
+                        logger.info(
+                            f"[Plan] Stock rebajado por OV vencida: {len(comprometido)} SKU "
+                            f"({sum(comprometido.values()):.0f} cj); {n_neg} quedan en disponible < 0."
+                        )
                 ordenes, diag_opt = optimizar_plan(
                     ordenes_mrp=ordenes,
                     sku_params=sku_params,
@@ -464,6 +554,7 @@ def generar_plan(req: PlanRequest = None):
                     forecasts=forecasts,
                     stocks_actuales=stocks_actuales,
                     entradas_fijas=entradas_fijas,
+                    pedidos_abiertos=pedidos_abiertos,
                     horizonte_semanas=req.horizonte_semanas,
                 )
                 logger.info(f"[Plan] OR-Tools: {diag_opt.get('status')} "
@@ -672,6 +763,111 @@ def get_plan_vigente():
         "ordenes": vista.get("ordenes", []),
         "resumen_semanal": vista.get("resumen_semanal"),
         "proyeccion_por_sku": vista.get("proyeccion_por_sku", {}),
+    }
+
+
+@app.get("/plan/proyeccion_diaria/{sku}", tags=["Plan de Produccion"])
+def get_proyeccion_diaria(sku: str):
+    """Serie DIARIA para la pestaña Stock Diario. LECTOR DELGADO.
+
+    (11-07) Lee TODO del snapshot del plan vigente (detalle_diario + encabezado_sku),
+    calculado por el optimizer con fuente única (calcular_ss_diario, split OV,
+    stock real sin clamp). NO recalcula forecast/SS/pedidos — así el dashboard
+    muestra EXACTAMENTE lo que el modelo optimizó (fin del 'vemos datos distintos').
+
+    Fallback: para planes viejos (sin detalle_diario en el snapshot) devuelve
+    disponible=False con motivo, para que el frontend muestre 'regenerar plan'.
+    """
+    from sqlalchemy import text as _sql
+    from db_mrp import SessionLocal
+    import mrp as _mrp
+
+    # 1) plan vigente
+    with SessionLocal() as s:
+        row = s.execute(_sql(
+            "SELECT id, horizonte_sem, created_at, snapshot "
+            "FROM mrp_planes WHERE vigente LIMIT 1"
+        )).mappings().first()
+    if row is None:
+        return {"disponible": False,
+                "mensaje": "No hay plan vigente. El cron aún no generó uno."}
+    snap = row["snapshot"] or {}
+
+    detalle = (snap.get("detalle_diario") or {}).get(sku)
+    encab = (snap.get("encabezado_sku") or {}).get(sku)
+
+    # Fallback: plan viejo sin los campos nuevos (generado antes del 11-07)
+    if detalle is None or encab is None:
+        return {
+            "disponible": False,
+            "plan_viejo": True,
+            "mensaje": ("El plan vigente (id={}) es anterior al detalle diario. "
+                        "Regenerá el plan para ver la vista corregida."
+                        ).format(row["id"]),
+            "plan_id": row["id"],
+        }
+
+    # 2) descripción del SKU (cosmético; no recalcula nada del plan)
+    try:
+        sku_params, _l, _sl = _mrp.load_params_from_db()
+        sp = sku_params.get(sku)
+        descripcion = getattr(sp, "descripcion", "") if sp else ""
+    except Exception:
+        descripcion = ""
+
+    upc = int(encab.get("u_por_caja", 1) or 1)
+
+    def _cj(u):
+        return round(u / upc, 1) if (u is not None and upc) else (None if u is None else 0.0)
+
+    # 3) serie diaria: leer del snapshot, exponer en unidades Y cajas
+    dias = []
+    for fecha_iso in sorted(detalle.keys()):
+        c = detalle[fecha_iso]
+        dias.append({
+            "fecha": fecha_iso,
+            "oft_cajas": c.get("oft_cajas"),
+            "stock_ini_disp_u": c.get("stock_ini_disp_u"),
+            "stock_ini_disp_cj": _cj(c.get("stock_ini_disp_u")),
+            "pedidos_u": c.get("pedidos_u"),
+            "pedidos_cj": _cj(c.get("pedidos_u")),
+            "demanda_corr_u": c.get("demanda_corr_u"),
+            "demanda_corr_cj": _cj(c.get("demanda_corr_u")),
+            "forecast_u": c.get("forecast_u"),
+            "forecast_cj": _cj(c.get("forecast_u")),
+            "stock_fin_u": c.get("stock_fin_u"),
+            "stock_fin_cj": _cj(c.get("stock_fin_u")),
+            "ss_u": c.get("ss_u"),
+            "ss_cj": _cj(c.get("ss_u")),
+            "estado": c.get("estado"),
+        })
+
+    # 4) encabezado (todo en unidades + cajas)
+    encabezado = {
+        "stock_fisico_u": encab.get("stock_fisico_u"),
+        "stock_fisico_cj": _cj(encab.get("stock_fisico_u")),
+        "comprometido_u": encab.get("comprometido_u"),
+        "comprometido_cj": _cj(encab.get("comprometido_u")),
+        "disponible_inicial_u": encab.get("disponible_inicial_u"),
+        "disponible_inicial_cj": _cj(encab.get("disponible_inicial_u")),
+        "stock_final_u": encab.get("stock_final_u"),
+        "stock_final_cj": _cj(encab.get("stock_final_u")),
+        "stock_min_u": encab.get("stock_min_u"),
+        "stock_min_cj": _cj(encab.get("stock_min_u")),
+        "ss_dias": encab.get("ss_dias"),
+    }
+
+    return {
+        "disponible": True,
+        "sku": sku,
+        "descripcion": descripcion,
+        "upc": upc,
+        "ss_dias": encab.get("ss_dias"),
+        "plan_id": row["id"],
+        "fecha_inicio": row["created_at"].date().isoformat() if row["created_at"] else None,
+        "horizonte_dias": int(row["horizonte_sem"] or 4) * 7,
+        "encabezado": encabezado,
+        "dias": dias,
     }
 
 

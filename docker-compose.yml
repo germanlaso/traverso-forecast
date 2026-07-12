@@ -38,6 +38,8 @@ services:
       - SQL_PASSWORD=${SQL_PASSWORD}
       - SQL_DRIVER=ODBC Driver 18 for SQL Server
       - MRP_DB_URL=postgresql://mrp_user:${MRP_DB_PASSWORD:-mrp_traverso_2026}@mrp_db:5432/mrp
+      - HANA_PWD=${HANA_PWD}
+      - OV_NETTING_ENABLED=${OV_NETTING_ENABLED:-1}
     depends_on:
       mrp_db:
         condition: service_healthy

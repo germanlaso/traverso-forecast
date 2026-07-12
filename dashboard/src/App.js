@@ -4,6 +4,7 @@ import axios from 'axios';
 import StockProyeccion from './components/StockProyeccion';
 import DetalleProduccion from './components/DetalleProduccion';
 import ProgramacionDiaria from './components/ProgramacionDiaria';
+import StockDiario from './components/StockDiario';
 
 const API = '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -620,7 +621,7 @@ export default function App() {
 
       {/* Tabs */}
       <div className="no-print" style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
-        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria']].map(([tab,label]) => (
+        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU'],['stockdiario','📊 Stock Diario'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria']].map(([tab,label]) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:500,background:'transparent',color:activeTab===tab?C.teal:C.textMuted,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
             {label}
@@ -1140,6 +1141,10 @@ export default function App() {
           planExterno={plan}
           planLoading={planLoading}
           onSolicitarPlan={() => runPlan()}
+        />}
+        {activeTab === 'stockdiario' && <StockDiario
+          key={`stockdiario-${stockSku}-${stockNav}`}
+          initialSku={stockSku}
         />}
         {activeTab === 'detalle' && <DetalleProduccion
           ordenesPlan={plan?.ordenes ?? []}

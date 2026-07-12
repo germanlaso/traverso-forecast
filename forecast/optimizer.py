@@ -36,6 +36,7 @@ from calendario import (
     es_habil,
     capacidad_dia_unidades,
     distribuir_forecast_a_diario,
+    calcular_ss_diario,
     generar_horizonte_diario,
     semana_iso_inicio,
 )
@@ -89,6 +90,11 @@ W_EXC_LEVE   = 0    # N1-min 07-07: era 3  (exceso 0..+100% SS -> N2)
 W_DEF_LEVE   = 0    # N1-min 07-07: era 20 (deficit 0..-50% SS -> N2)
 W_DEF_GRAVE  = 0    # N1-min 07-07: era 60 (deficit -50..-100% SS -> N2)
 W_QBR_MAG    = 200  # quiebre  < -100% (magnitud, creciente)  -> castigo doble (1/2)
+# V-OV (09-07): quiebre ABSOLUTO por unidad para SKU sin SS (ss_dias=0, MTO).
+# El objetivo %-del-SS gatea el quiebre en ss_d>0 (coef = W·100·ESCALA/ss_d,
+# indefinido en 0); sin esto un pedido de un MTO entra al balance pero N1 no lo
+# produce (quiebre gratis). Peso por unidad, no %-relativo. Calibrable (A/B 5b).
+W_QBR_ABS    = 200
 # Evento de quiebre: término binario por (SKU, semana), UNIFORME entre SKU.
 # Es lo que rompe el sesgo: evitar el quiebre de cualquier SKU pesa igual, sin
 # importar factor ni volumen. Castigo doble (2/2). En "puntos de penalización".
@@ -108,6 +114,19 @@ ESCALA_OBJ = 1_000
 FRAC_DEF_LEVE  = 0.5   # hasta -50% del SS
 FRAC_DEF_GRAVE = 1.0   # hasta -100% del SS (stock = 0)
 FRAC_EXC_LEVE  = 1.0   # hasta +100% del SS
+
+# ─── Flag SS_COBERTURA (11-07) ───────────────────────────────────────────────
+# OFF (default): comportamiento idéntico a hoy. El evento_qbr se crea SOLO en la
+#   rama ss_d>0 -> en findes/feriados (ss_d=0 con fórmula vieja) el quiebre NO
+#   dispara el evento semanal -> quiebre de finde GRATIS (agujero detectado 11-07).
+# ON: (1) ss_d se calcula con calcular_ss_diario (cobertura de próximos ss_dias
+#   hábiles) -> NO colapsa en findes; (2) el evento_qbr uniforme por (SKU,semana)
+#   se crea y liga SIEMPRE (todos los días, findes incluidos), fuera de la
+#   bifurcación de SS. Sigue siendo UN binario por SKU-semana (guard `not in`),
+#   así que NO infla el conteo de binarios ni el gap. Castigo por EVENTO uniforme
+#   (no magnitud) -> sin sesgo por velocidad/factor de línea.
+import os as _os
+SS_COBERTURA = _os.environ.get("SS_COBERTURA", "0") == "1"
 
 # v1.3 — Restricción de Nivel 1 (lot sizing).
 # Acota cuántos SKUs distintos puede asignar el optimizador a una misma
@@ -231,6 +250,7 @@ def optimizar_plan_v12_rich(
     forecast_semanal: dict[str, dict[date, float]],
     stock_inicial: dict[str, float],
     entradas_aprobadas: dict[str, list[dict]],
+    pedidos_abiertos: dict[str, dict[date, float]] | None = None,
     fecha_inicio: date | None = None,
     horizonte_dias: int = HORIZONTE_DIAS_DEFAULT,
     time_limit_sec: int | None = None,
@@ -266,11 +286,14 @@ def optimizar_plan_v12_rich(
     ]
 
     # Excluir SKUs sin demanda en el horizonte (decisión 9)
+    # V-OV: un SKU con pedido abierto (OV) entra aunque su forecast sea 0
+    # (MTO / esporádicos). Si no, su demanda comprometida se caería del modelo.
+    skus_con_pedido = set(pedidos_abiertos or {})
     skus_activos = []
     for sku in skus_produccion:
         forecast_sku = forecast_semanal.get(sku, {})
         total_demanda = sum(forecast_sku.values())
-        if total_demanda > 0:
+        if total_demanda > 0 or sku in skus_con_pedido:
             skus_activos.append(sku)
 
     if not skus_activos:
@@ -293,13 +316,35 @@ def optimizar_plan_v12_rich(
     if not skus_modelo:
         return _resultado_vacio("Ningún SKU activo tiene línea asignada en mrp_sku_lineas")
 
-    # ─── 3. Demanda diaria (forecast distribuido) ────────────────────────────
-    demanda_diaria: dict[str, dict[date, float]] = {}
+    # ─── 3. Demanda diaria: base-SS (forecast) y consumo (forecast ⊕ pedidos) ─
+    # V-OV (Manual §3, snapshot 09-07): se desdobla la demanda en dos vectores.
+    #   demanda_ss_base -> forecast solo    -> target SS (N2): ss_d = base×ss_dias
+    #   demanda_consumo -> max(fc, pedidos) -> balance/quiebre (piso N1)
+    # Netear en un solo vector inflaría el SS de un pedidón. Aguas arriba del
+    # split N1/N2 -> ambas capas heredan el desdoblamiento.
+    demanda_ss_base: dict[str, dict[date, float]] = {}
     for sku in skus_modelo:
-        demanda_diaria[sku] = distribuir_forecast_a_diario(
+        demanda_ss_base[sku] = distribuir_forecast_a_diario(
             forecast_semanal.get(sku, {}),
             fecha_inicio=fecha_inicio,
             fecha_fin=fecha_fin,
+        )
+    demanda_consumo = netear_pedidos_a_diario(
+        demanda_ss_base, pedidos_abiertos, sku_params, fecha_inicio, fecha_fin,
+    )
+
+    # (11-07) Forecast diario EXTENDIDO para el SS de cobertura. El SS del día d
+    # suma los próximos ss_dias hábiles; para los últimos días del horizonte esa
+    # ventana se sale de fecha_fin. Extendemos ~5 semanas (cubre 15 hábiles + margen
+    # de feriados) usando el MISMO forecast_semanal (que trae +4 períodos del
+    # pipeline). Sólo para calcular SS en el post-proceso; NO entra al modelo.
+    _fecha_fin_ext = fecha_fin + timedelta(days=35)
+    ss_forecast_ext: dict[str, dict[date, float]] = {}
+    for sku in skus_modelo:
+        ss_forecast_ext[sku] = distribuir_forecast_a_diario(
+            forecast_semanal.get(sku, {}),
+            fecha_inicio=fecha_inicio,
+            fecha_fin=_fecha_fin_ext,
         )
 
     # ─── 4. Capacidad por línea-día ──────────────────────────────────────────
@@ -320,10 +365,12 @@ def optimizar_plan_v12_rich(
         sku_params=sku_params,
         lineas_params=lineas_params,
         sku_a_lineas=sku_a_lineas,
-        demanda_diaria=demanda_diaria,
+        demanda_consumo=demanda_consumo,
+        demanda_ss_base=demanda_ss_base,
         cap_dia=cap_dia,
         stock_inicial=stock_inicial,
         entradas_aprobadas=entradas_aprobadas,
+        ss_forecast_ext=ss_forecast_ext,
     )
 
     # ─── 6. Función objetivo ─────────────────────────────────────────────────
@@ -391,6 +438,10 @@ def optimizar_plan_v12_rich(
         sku_a_lineas=sku_a_lineas, cap_dia=cap_dia,
         status_name=status_name, solver_time_sec=solver_time,
         objective_value=solver.ObjectiveValue(),
+        demanda_ss_base=demanda_ss_base,
+        demanda_consumo=demanda_consumo,
+        stock_inicial=stock_inicial,
+        ss_forecast_ext=ss_forecast_ext,
     )
 
     # Si la solucion es suboptima por timeout, dejar constancia para el usuario
@@ -412,16 +463,63 @@ def optimizar_plan_v12_rich(
 # Construcción del modelo
 # =============================================================================
 
+def netear_pedidos_a_diario(
+    demanda_fc: dict[str, dict[date, float]],
+    pedidos_abiertos: dict[str, dict[date, float]] | None,
+    sku_params: dict[str, dict],
+    fecha_inicio: date,
+    fecha_fin: date,
+) -> dict[str, dict[date, float]]:
+    """Consumo de forecast: consumo[d] = max(forecast[d], pedidos_u[d]) por día.
+
+    Regla confirmada (09-07): el pedido consume el forecast del día (max, no suma):
+    donde el pedido supera al forecast, manda el pedido; donde el forecast supera,
+    se conserva (no se pierde lo no pedido, no hay doble conteo).
+
+    - Pedidos entran en CAJAS -> se convierten a unidades (× u_por_caja) acá.
+    - fecha None o < fecha_inicio -> se arrastra a fecha_inicio (día 0). Idempotente
+      con el arrastre del conector; defensivo si se invoca sin él.
+    - fecha > fecha_fin -> fuera del horizonte de planificación, se descarta (log).
+
+    demanda_fc NO se muta: se devuelve una copia (el vector de SS queda intacto).
+    """
+    consumo: dict[str, dict[date, float]] = {s: dict(f) for s, f in demanda_fc.items()}
+    if not pedidos_abiertos:
+        return consumo
+
+    n_fuera = 0
+    for sku, por_fecha in pedidos_abiertos.items():
+        upc = int((sku_params.get(sku) or {}).get("u_por_caja", 1) or 1)
+        dia_ped: dict[date, float] = {}
+        for f, cajas in por_fecha.items():
+            fe = fecha_inicio if (f is None or f < fecha_inicio) else f
+            if fe > fecha_fin:
+                n_fuera += 1
+                continue
+            dia_ped[fe] = dia_ped.get(fe, 0.0) + float(cajas) * upc
+        if not dia_ped:
+            continue
+        d_sku = consumo.setdefault(sku, {})
+        for fe, ped_u in dia_ped.items():
+            d_sku[fe] = max(d_sku.get(fe, 0.0), ped_u)
+    if n_fuera:
+        logger.info("[neteo OV] %d pedido(s) fuera del horizonte (> %s) descartado(s).",
+                    n_fuera, fecha_fin.isoformat())
+    return consumo
+
+
 def _construir_modelo(
     horizonte: list[date],
     skus: list[str],
     sku_params: dict[str, dict],
     lineas_params: dict[str, dict],
     sku_a_lineas: dict[str, list[dict]],
-    demanda_diaria: dict[str, dict[date, float]],
+    demanda_consumo: dict[str, dict[date, float]],
+    demanda_ss_base: dict[str, dict[date, float]],
     cap_dia: dict[tuple[date, str], int],
     stock_inicial: dict[str, float],
     entradas_aprobadas: dict[str, list[dict]],
+    ss_forecast_ext: dict[str, dict[date, float]] | None = None,
 ) -> _ModeloCPSAT:
     """Construye variables y restricciones del modelo CP-SAT con variables en cajas."""
 
@@ -670,7 +768,8 @@ def _construir_modelo(
 
             # Balance de stock (en unidades)
             entrada_d = _entradas_del_dia(s, d, entradas_aprobadas)
-            demanda_d = int(round(demanda_diaria[s].get(d, 0.0)))
+            demanda_consumo_d = int(round(demanda_consumo[s].get(d, 0.0)))   # piso N1 (balance/quiebre)
+            demanda_ss_base_d = int(round(demanda_ss_base[s].get(d, 0.0)))   # target SS (N2)
             prod_u_total_d = sum(
                 upc * m.cajas[(d, s, l)] for l in m.pares_sku_linea[s]
             )
@@ -678,16 +777,24 @@ def _construir_modelo(
             if d_idx == 0:
                 stock_prev_val = int(round(stock_inicial.get(s, 0)))
                 m.model.Add(
-                    m.stock_u[(d, s)] == stock_prev_val + prod_u_total_d + entrada_d - demanda_d
+                    m.stock_u[(d, s)] == stock_prev_val + prod_u_total_d + entrada_d - demanda_consumo_d
                 )
             else:
                 stock_prev = m.stock_u[(horizonte[d_idx - 1], s)]
                 m.model.Add(
-                    m.stock_u[(d, s)] == stock_prev + prod_u_total_d + entrada_d - demanda_d
+                    m.stock_u[(d, s)] == stock_prev + prod_u_total_d + entrada_d - demanda_consumo_d
                 )
 
-            # Déficit bajo SS (SS dinámico = demanda_diaria × ss_dias, en unidades)
-            ss_d = demanda_d * ss_dias
+            # Déficit bajo SS (SS dinámico, en unidades)
+            # V-OV: base = forecast SOLO (los pedidos NO inflan el SS; van al balance).
+            if SS_COBERTURA:
+                # Fórmula de cobertura: suma del forecast de los próximos ss_dias
+                # días hábiles desde d (inclusive). NO colapsa en findes/feriados.
+                _fc_ext_s = (ss_forecast_ext or {}).get(s) or demanda_ss_base.get(s) or {}
+                ss_d = int(round(calcular_ss_diario(_fc_ext_s, d, ss_dias)))
+            else:
+                # Fórmula legacy: forecast del día × ss_dias (colapsa a 0 en findes).
+                ss_d = demanda_ss_base_d * ss_dias
 
             # Compatibilidad: mantenemos deficit/exceso/quiebre ligados (post-proceso
             # y otras lecturas). El OBJETIVO usa los tramos en % del SS (abajo).
@@ -696,6 +803,20 @@ def _construir_modelo(
             m.model.Add(m.quiebre[(d, s)] >= -m.stock_u[(d, s)])  # V6.18: >0 solo si stock<0
 
             big_ub_s = 100 * cap_bodega
+
+            # ── Evento de quiebre por (SKU, semana ISO): binaria UNIFORME entre SKU ──
+            # (11-07, SS_COBERTURA) Se crea/liga SIEMPRE, fuera de la bifurcación de
+            # SS, para que un quiebre de CUALQUIER día (findes/feriados incluidos)
+            # dispare el evento de su semana. Sigue siendo UN binario por (SKU,semana)
+            # gracias al guard `not in` -> NO infla el conteo de binarios ni el gap.
+            # Castigo por EVENTO uniforme (no magnitud) -> sin sesgo por velocidad.
+            # Con el flag OFF, esto NO corre (el evento se crea solo en rama ss_d>0,
+            # como el comportamiento legacy).
+            if SS_COBERTURA:
+                w = semana_iso_inicio(d).isoformat()
+                if (s, w) not in m.evento_qbr:
+                    m.evento_qbr[(s, w)] = m.model.NewBoolVar(f"evq_{s}_{w}")
+                m.model.Add(m.evento_qbr[(s, w)] * big_ub_s >= m.quiebre[(d, s)])
 
             if ss_d > 0:
                 # ── Curva convexa en % del SS ─────────────────────────────────
@@ -728,16 +849,29 @@ def _construir_modelo(
                 m.coef_exc_leve[(d, s)] = int(round(W_EXC_LEVE * 100 * ESCALA_OBJ / ss_d))
                 m.coef_exc_alto[(d, s)] = int(round(W_EXC_ALTO * 100 * ESCALA_OBJ / ss_d))
 
-                # Evento de quiebre por (SKU, semana ISO): binaria uniforme.
-                w = semana_iso_inicio(d).isoformat()
-                if (s, w) not in m.evento_qbr:
-                    m.evento_qbr[(s, w)] = m.model.NewBoolVar(f"evq_{s}_{w}")
-                # Si hay quiebre este día (>0), forzar evento_qbr=1 de la semana.
-                m.model.Add(m.evento_qbr[(s, w)] * big_ub_s >= m.quiebre[(d, s)])
+                if not SS_COBERTURA:
+                    # LEGACY: evento_qbr solo en rama ss_d>0 (agujero de finde).
+                    w = semana_iso_inicio(d).isoformat()
+                    if (s, w) not in m.evento_qbr:
+                        m.evento_qbr[(s, w)] = m.model.NewBoolVar(f"evq_{s}_{w}")
+                    m.model.Add(m.evento_qbr[(s, w)] * big_ub_s >= m.quiebre[(d, s)])
             else:
-                # SS = 0: déficit/quiebre APAGADOS. Solo freno a llenar bodega.
+                # SS = 0: no hay banda %-del-SS que medir. Freno a llenar bodega
+                # (siempre) y, SOLO si hay demanda ese día (MTO/pedido), quiebre
+                # ABSOLUTO por unidad para que N1 no lo deje quebrar.
+                # V-OV-fix (10-07): SIN evento_qbr (bool) y gateado por demanda. El
+                # binario se creaba en CADA celda ss_d==0 (findes/feriados de TODOS
+                # los SKU) -> cientos de booleanos inútiles que inflaban el espacio
+                # de búsqueda y degradaban el gap (37% a 1800s el 10-07). El castigo
+                # por unidad (IntVar) alcanza para forzar producción del MTO.
+                # (11-07 SS_COBERTURA ON: el evento_qbr ya se creó arriba, uniforme,
+                # así que un MTO en quiebre también dispara su evento semanal.)
                 m.exc_bodega[(d, s)] = m.model.NewIntVar(0, big_ub_s, f"exb_{d_idx}_{s}")
                 m.model.Add(m.exc_bodega[(d, s)] >= m.stock_u[(d, s)] - cap_bodega)
+                if demanda_consumo_d > 0:
+                    m.qbr_mag[(d, s)] = m.model.NewIntVar(0, big_ub_s, f"qmg0_{d_idx}_{s}")
+                    m.model.Add(m.qbr_mag[(d, s)] >= -m.stock_u[(d, s)])
+                    m.coef_qbr_mag[(d, s)] = int(W_QBR_ABS * ESCALA_OBJ)
 
             # Una línea por SKU por día
             asigs_s_d = [m.asig[(d, s, l)] for l in m.pares_sku_linea[s]]
@@ -880,8 +1014,21 @@ def _post_procesar(
     status_name: str,
     solver_time_sec: float,
     objective_value: float,
+    demanda_ss_base: dict[str, dict[date, float]] | None = None,
+    demanda_consumo: dict[str, dict[date, float]] | None = None,
+    stock_inicial: dict[str, float] | None = None,
+    ss_forecast_ext: dict[str, dict[date, float]] | None = None,
 ) -> dict[str, Any]:
-    """Convierte la solución del solver en OFTs, stock visible y alertas."""
+    """Convierte la solución del solver en OFTs, stock visible y alertas.
+
+    Params nuevos (11-07, dashboard diario plan-consistente):
+      demanda_ss_base : forecast diario por SKU (para SS y display de forecast)
+      demanda_consumo : max(forecast, pedidos) por SKU (demanda corregida)
+      stock_inicial   : stock disponible inicial por SKU (ya rebajado por OV, sin clamp)
+      ss_forecast_ext : forecast diario EXTENDIDO ~ss_dias hábiles más allá del
+                        horizonte, para que el SS de los últimos días no se
+                        subestime (ventana de cobertura completa).
+    """
 
     gap = _calcular_gap(solver, objective_value, status_name)
 
@@ -891,6 +1038,10 @@ def _post_procesar(
     uso_linea: dict[str, dict[str, float]] = {l: {} for l in m.lineas}
 
     # ─── OFTs (una por día con producción) ──────────────────────────────────
+    # oft_por_dia: índice (sku, fecha_iso) -> lista de cantidades, para poblar
+    # el detalle_diario del dashboard sin re-recorrer. numero_of se asigna
+    # después (en cron/main), acá guardamos la cantidad como referencia.
+    oft_por_dia: dict[tuple[str, str], list[int]] = {}
     for d in horizonte:
         for s in m.skus:
             sp = sku_params[s]
@@ -919,6 +1070,7 @@ def _post_procesar(
                     "numero_of": None,
                     "motivo": "OFT",
                 })
+                oft_por_dia.setdefault((s, d.isoformat()), []).append(cajas_v)
 
     # ─── Stock visible y alertas ─────────────────────────────────────────────
     for s in m.skus:
@@ -961,6 +1113,76 @@ def _post_procesar(
                     "mensaje": f"Stock {stock_real} u excede cap. bodega ({exceso_v} u sobre cap)",
                     "deficit_u": exceso_v,
                 })
+
+    # ─── Detalle diario y encabezado por SKU (dashboard plan-consistente) ─────
+    # (11-07) Fuente ÚNICA para la pestaña Stock Diario. Todo en UNIDADES, sin
+    # clamp (el stock_diario de arriba SÍ clampea a 0 para gráficos legacy; acá
+    # guardamos el real para ver quiebres y disponibles negativos). El SS usa la
+    # fórmula de cobertura (calcular_ss_diario) sobre forecast extendido.
+    detalle_diario: dict[str, dict[str, dict]] = {}
+    encabezado_sku: dict[str, dict] = {}
+    _dss = demanda_ss_base or {}
+    _dco = demanda_consumo or {}
+    _sti = stock_inicial or {}
+    _ssext = ss_forecast_ext or {}
+
+    for s in m.skus:
+        sp = sku_params[s]
+        upc = m.u_por_caja[s]
+        ss_dias = int(sp.get("ss_dias", 0) or 0)
+        fc_ext_s = _ssext.get(s) or _dss.get(s) or {}   # extendido si está, si no el del horizonte
+        fc_base_s = _dss.get(s) or {}
+        consumo_s = _dco.get(s) or {}
+
+        serie = {}
+        stock_prev_disp = float(_sti.get(s, 0.0))   # disponible inicial (sin clamp)
+        stock_min = None
+        stock_final = 0
+
+        for d in horizonte:
+            d_iso = d.isoformat()
+            stock_real = solver.Value(m.stock_u[(d, s)])       # cierre del día (sin clamp)
+            fc_d = fc_base_s.get(d, 0.0)                        # forecast del día
+            consumo_d = consumo_s.get(d, 0.0)                  # max(fc, pedidos)
+            pedidos_d = max(0.0, consumo_d - fc_d)             # OV del día = consumo - forecast (si >0)
+            ss_d = calcular_ss_diario(fc_ext_s, d, ss_dias)    # SS cobertura (fórmula nueva)
+
+            # estado contra SS nuevo y quiebre real
+            if stock_real < 0:
+                estado = "QUIEBRE"
+            elif ss_d > 0 and stock_real < ss_d:
+                estado = "BAJO_SS"
+            else:
+                estado = "OK"
+
+            oft_cajas = oft_por_dia.get((s, d_iso))
+            serie[d_iso] = {
+                "stock_ini_disp_u": int(round(stock_prev_disp)),
+                "pedidos_u": int(round(pedidos_d)),
+                "demanda_corr_u": int(round(consumo_d)),
+                "forecast_u": int(round(fc_d)),
+                "stock_fin_u": int(stock_real),
+                "ss_u": int(round(ss_d)),
+                "oft_cajas": int(sum(oft_cajas)) if oft_cajas else None,
+                "estado": estado,
+            }
+
+            stock_min = stock_real if stock_min is None else min(stock_min, stock_real)
+            stock_final = stock_real
+            stock_prev_disp = stock_real   # el cierre de hoy es el inicio de mañana
+
+        detalle_diario[s] = serie
+        encabezado_sku[s] = {
+            "disponible_inicial_u": int(round(float(_sti.get(s, 0.0)))),
+            "stock_final_u": int(stock_final),
+            "stock_min_u": int(stock_min) if stock_min is not None else 0,
+            "ss_dias": ss_dias,
+            "u_por_caja": upc,
+            # stock_fisico_u y comprometido_u se inyectan en cron/main (viven allí,
+            # antes de la rebaja). Placeholder para que la clave exista siempre.
+            "stock_fisico_u": None,
+            "comprometido_u": None,
+        }
 
     # ─── Uso de líneas ───────────────────────────────────────────────────────
     for d in horizonte:
@@ -1012,6 +1234,8 @@ def _post_procesar(
         "solver_time_sec": solver_time_sec,
         "ofts": ofts,
         "stock_diario": stock_diario,
+        "detalle_diario": detalle_diario,     # (11-07) dashboard plan-consistente
+        "encabezado_sku": encabezado_sku,     # (11-07) fis/comp se inyectan en cron/main
         "alertas": alertas,
         "uso_linea": uso_linea,
         "resumen": resumen,
@@ -1031,6 +1255,7 @@ def optimizar_plan(
     forecasts: dict,
     stocks_actuales: dict,
     entradas_fijas: dict | None = None,
+    pedidos_abiertos: dict | None = None,
     horizonte_semanas: int = 13,
 ) -> tuple[list[dict], dict]:
     """
@@ -1263,6 +1488,7 @@ def optimizar_plan(
         forecast_semanal=forecast_rich,
         stock_inicial=stock_inicial_rich,
         entradas_aprobadas=entradas_aprobadas_rich,
+        pedidos_abiertos=pedidos_abiertos,
         fecha_inicio=fecha_inicio,
         horizonte_dias=horizonte_dias,
         time_limit_sec=time_limit_sec,

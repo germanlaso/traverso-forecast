@@ -43,6 +43,8 @@ def main():
     ap.add_argument("--horizonte", type=int, default=8, help="horizonte en semanas")
     ap.add_argument("--time-limit", type=int, default=1800, help="time_limit del solver en seg")
     ap.add_argument("--skip-refresh", action="store_true", help="no refrescar stock (test)")
+    ap.add_argument("--no-pedidos", action="store_true", help="no netear OV de HANA (test/A-B)")
+    ap.add_argument("--no-promote", action="store_true", help="persistir sin promover (test: no pisa el vigente)")
     args = ap.parse_args()
 
     hoy = dt.date.today()
@@ -168,11 +170,43 @@ def main():
         lineas=lineas, horizonte_semanas=args.horizonte,
         alertas_stock=alertas_vcto, entradas_fijas=entradas_fijas,
     )
-    log.info("[6/8] optimizando (OR-Tools)...")
+    # V-OV: netear pedidos abiertos (OV) de HANA. Reusa el helper de main
+    # (fail-safe + kill-switch OV_NETTING_ENABLED en un solo lugar). skus_validos
+    # = SKU de PRODUCCIÓN (el conector clasifica importado/maquila y planta-sin-
+    # planificar). --no-pedidos lo omite para comparar A/B en la validación.
+    pedidos_abiertos = {}
+    # (11-07) desglose OV por SKU (en unidades) para el encabezado del dashboard:
+    #   fisico   = stock ANTES de rebajar OV vencida
+    #   comprom  = OV vencida (lo que se resta)
+    #   disp     = fisico - comprom  (puede ser < 0 = quiebre real de arranque)
+    ov_encabezado: dict[str, dict] = {}
+    if not args.no_pedidos:
+        from main import _fetch_ov_split
+        skus_prod = {s for s, p in sku_params.items()
+                     if str(getattr(p, "tipo", "")).upper() == "PRODUCCION"}
+        # V-OV2 (10-07): OV vencida = stock comprometido (rebaja stock), NO demanda.
+        pedidos_abiertos, comprometido = _fetch_ov_split(skus_prod)
+        if comprometido:
+            n_neg = 0
+            for s, cj in comprometido.items():
+                upc_s = int(unidades_por_caja.get(s, 1) or 1)
+                fisico_u = float(stocks_actuales.get(s, 0.0)) * upc_s   # ANTES de rebajar
+                comprom_u = float(cj) * upc_s
+                ov_encabezado[s] = {
+                    "stock_fisico_u": int(round(fisico_u)),
+                    "comprometido_u": int(round(comprom_u)),
+                }
+                stocks_actuales[s] = stocks_actuales.get(s, 0.0) - cj
+                if stocks_actuales[s] < 0:
+                    n_neg += 1
+            log.info(f"[6/8] stock rebajado por OV vencida: {len(comprometido)} SKU "
+                     f"({sum(comprometido.values()):.0f} cj); {n_neg} en disponible < 0.")
+    log.info(f"[6/8] optimizando (OR-Tools)... | OV futuras(demanda): {len(pedidos_abiertos)} SKU con pedido")
     ordenes_opt, diag = optimizar_plan(
         ordenes_mrp=ordenes, sku_params=sku_params, lineas=lineas,
         forecasts=forecasts, stocks_actuales=stocks_actuales,
-        entradas_fijas=entradas_fijas, horizonte_semanas=args.horizonte,
+        entradas_fijas=entradas_fijas, pedidos_abiertos=pedidos_abiertos,
+        horizonte_semanas=args.horizonte,
     )
     log.info(f"[6/8] solver: status={diag.get('status')} gap={diag.get('gap')} "
              f"t={diag.get('tiempo_ms')}ms")
@@ -248,6 +282,23 @@ def main():
         log.warning(f'[6/8] no se pudo armar vista_dashboard: {e}')
         rich['vista_dashboard'] = None
 
+    # (11-07) completar encabezado_sku con físico/comprometido (viven acá, antes
+    # de la rebaja). El optimizer dejó esas claves en None; las poblamos ahora.
+    try:
+        enc = rich.get('encabezado_sku') or {}
+        for s, ov in ov_encabezado.items():
+            if s in enc:
+                enc[s]['stock_fisico_u'] = ov['stock_fisico_u']
+                enc[s]['comprometido_u'] = ov['comprometido_u']
+        # SKU sin OV vencida: físico = disponible_inicial, comprometido = 0
+        for s, e in enc.items():
+            if e.get('stock_fisico_u') is None:
+                e['stock_fisico_u'] = e.get('disponible_inicial_u', 0)
+                e['comprometido_u'] = 0
+        rich['encabezado_sku'] = enc
+    except Exception as e:
+        log.warning(f'[6/8] no se pudo completar encabezado_sku fis/comp: {e}')
+
     # ── 7. GATE ──────────────────────────────────────────────────────────────
     from persistencia import evaluar_gate_n1, persistir_plan, promover_plan
     aceptable, det = evaluar_gate_n1(rich)
@@ -257,7 +308,9 @@ def main():
              f"sobrecargas={det['n_lineas_sobrecargadas']}")
 
     # solo promovemos si el gate pasa Y la frescura del stock es OK
-    promover = aceptable and frescura_ok
+    promover = aceptable and frescura_ok and not args.no_promote
+    if args.no_promote:
+        log.info("[7/8] --no-promote: se persiste para inspección pero NO se promueve (vigente intacto)")
     if aceptable and not frescura_ok:
         log.warning("[7/8] plan ACEPTABLE pero stock no fresco -> persisto SIN promover")
 

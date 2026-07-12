@@ -176,22 +176,97 @@ def distribuir_forecast_a_diario(
         if not dias_en_horizonte:
             continue
 
-        habiles = [d for d in dias_en_horizonte if es_habil(d)]
+        # FIX semana parcial (10-07-2026): el tasa-diaria se calcula sobre los días
+        # hábiles de la SEMANA ISO COMPLETA, no solo sobre los que caen en el
+        # horizonte. Si el horizonte arranca a mitad de semana (p.ej. hoy viernes),
+        # los días hábiles ya transcurridos (lun-jue) quedan fuera del rango y su
+        # demanda se DESCARTA — no se re-concentra en el día 0.
+        #   Antes: horizonte arranca viernes -> habiles={vie} -> por_dia = sem/1
+        #          => TODO el semanal caía en el viernes (día 0), pico ~5x que
+        #          generaba tensión estructural y disparaba el gap del solver.
+        #   Ahora: por_dia = sem / (hábiles de lun-vie) -> el viernes recibe su 1/5.
+        # Decisión de negocio (Germán, 10-07): la demanda esperada de días ya
+        # transcurridos caducó (no se produce hoy para un martes que ya fue); lo
+        # que efectivamente se comprometió entra por las OV (demanda comprometida).
+        habiles_semana = [d for d in dias_semana if es_habil(d)]
 
-        if habiles:
-            # Caso normal: repartir entre días hábiles dentro del horizonte
-            por_dia = yhat_sem / len(habiles)
-            for d in habiles:
-                demanda_diaria[d] += por_dia
+        if habiles_semana:
+            # Tasa diaria = semanal / hábiles de la semana ISO completa.
+            por_dia = yhat_sem / len(habiles_semana)
+            # Asignar SOLO a los hábiles que caen dentro del horizonte
+            # (los transcurridos se descartan; los futuros reciben su porción).
+            for d in habiles_semana:
+                if fecha_inicio <= d <= fecha_fin:
+                    demanda_diaria[d] += por_dia
         else:
-            # Caso raro: ningún día hábil de esa semana cae dentro del horizonte
-            # (por ej. semana entera de feriados, o semana parcialmente fuera del rango)
-            # → distribuir uniforme entre los días disponibles para no perder demanda
+            # Caso raro: la semana ISO no tiene NINGÚN día hábil (semana entera de
+            # feriados). Distribuir uniforme entre los días disponibles del
+            # horizonte para no perder la demanda total.
             por_dia = yhat_sem / len(dias_en_horizonte)
             for d in dias_en_horizonte:
                 demanda_diaria[d] += por_dia
 
     return demanda_diaria
+
+
+# =============================================================================
+# Stock de seguridad diario — fórmula de cobertura (fuente única)
+# =============================================================================
+
+def calcular_ss_diario(
+    forecast_diario_u: dict[date, float],
+    dia: date,
+    ss_dias: int,
+) -> float:
+    """
+    Stock de seguridad del día `dia`, en unidades.
+
+    Definición (Germán, 11-07-2026): el SS de un día es la SUMA del forecast
+    diario de los próximos `ss_dias` días HÁBILES, siendo `dia` el primero de
+    la ventana (inclusive). Representa la demanda que el stock debe aguantar
+    durante la ventana de cobertura.
+
+    Reemplaza la fórmula anterior `forecast_diario_del_dia × ss_dias`, que:
+      - colapsaba a 0 en días no hábiles (sáb/dom/feriado: forecast_dia=0),
+      - sobre-dimensionaba en días de forecast alto (multiplicaba un puntual
+        por 15 en vez de sumar 15 días reales).
+
+    Args:
+        forecast_diario_u: dict {fecha: forecast_unidades} ya distribuido sobre
+                           días hábiles (salida de distribuir_forecast_a_diario).
+                           Idealmente cubre hasta ~ss_dias hábiles más allá del
+                           horizonte del plan; los días sin entrada aportan 0.
+        dia:      día para el cual se calcula el SS.
+        ss_dias:  cantidad de días hábiles de cobertura (0 => SS=0, p.ej. MTO).
+
+    Returns:
+        SS en unidades (float). 0.0 si ss_dias <= 0.
+
+    Nota sobre el borde del horizonte: si la ventana de `ss_dias` hábiles se
+    extiende más allá del rango con forecast disponible, los días faltantes
+    aportan 0 y el SS queda subestimado para los últimos días del horizonte.
+    Es un efecto conocido y acotado (días finales, menos accionables); para
+    evitarlo, el caller debe proveer forecast_diario_u extendido.
+    """
+    if ss_dias <= 0:
+        return 0.0
+
+    total = 0.0
+    habiles_contados = 0
+    d = dia
+    # Límite de seguridad: 15 hábiles ≈ 21 días naturales; cortamos holgado
+    # para no iterar infinito si el forecast se agota antes de juntar ss_dias.
+    limite_natural = ss_dias * 3 + 15
+
+    while habiles_contados < ss_dias:
+        if es_habil(d):
+            total += forecast_diario_u.get(d, 0.0)
+            habiles_contados += 1
+        d += timedelta(days=1)
+        if (d - dia).days > limite_natural:
+            break
+
+    return total
 
 
 # =============================================================================
@@ -282,6 +357,40 @@ if __name__ == "__main__":
     assert cap_fer == 0, f"Feriado debe ser 0, obtuve {cap_fer}"
     assert cap_dom == 0, f"Domingo debe ser 0, obtuve {cap_dom}"
     print(f"✓ Capacidad: hábil={cap_lab}, feriado={cap_fer}, domingo={cap_dom}")
+
+    # Test 7: SS diario (suma de próximos ss_dias hábiles desde d inclusive)
+    from calendario import calcular_ss_diario
+    # Forecast diario: 100 u cada día hábil de una ventana larga, 0 en findes.
+    # Construimos 6 semanas desde lunes 4-may (con feriados reales de mayo).
+    fc_dia = {}
+    d0 = date(2026, 5, 4)
+    for i in range(60):
+        dd = d0 + timedelta(days=i)
+        fc_dia[dd] = 100.0 if es_habil(dd) else 0.0
+
+    # SS de 5 días hábiles desde lunes 4-may: 4,5,6,7,8 mayo (todos hábiles) = 500
+    ss5 = calcular_ss_diario(fc_dia, date(2026, 5, 4), 5)
+    assert ss5 == 500.0, f"SS 5 hábiles desde lun 4-may: esperaba 500, obtuve {ss5}"
+
+    # SS calculado en SÁBADO (9-may): la ventana arranca en sábado (no hábil,
+    # no cuenta) y toma los próximos 5 hábiles: lun11,mar12,mié13,jue14,vie15 = 500.
+    # Clave: NO colapsa a 0 aunque el día base sea no hábil.
+    ss_sab = calcular_ss_diario(fc_dia, date(2026, 5, 9), 5)
+    assert ss_sab == 500.0, f"SS en sábado: esperaba 500 (no 0), obtuve {ss_sab}"
+
+    # SS que cruza el feriado 21-may (Glorias Navales): la ventana salta el feriado
+    # y toma 5 hábiles reales. Desde lun 18-may: 18,19,20,(21 feriado salta),22,25 = 500
+    ss_fer = calcular_ss_diario(fc_dia, date(2026, 5, 18), 5)
+    assert ss_fer == 500.0, f"SS cruzando feriado: esperaba 500, obtuve {ss_fer}"
+
+    # SS con ss_dias=0 (MTO) => 0
+    assert calcular_ss_diario(fc_dia, date(2026, 5, 4), 0) == 0.0, "ss_dias=0 => 0"
+
+    # Borde: forecast se agota -> ventana corta -> subestima (no rompe)
+    fc_corto = {date(2026, 5, 4): 100.0, date(2026, 5, 5): 100.0}
+    ss_corto = calcular_ss_diario(fc_corto, date(2026, 5, 4), 15)
+    assert ss_corto == 200.0, f"forecast corto: esperaba 200 (2 días con dato), obtuve {ss_corto}"
+    print(f"✓ SS diario: lun={ss5}, sábado={ss_sab} (no colapsa), feriado={ss_fer}, corto={ss_corto}")
 
     print()
     print("=" * 60)

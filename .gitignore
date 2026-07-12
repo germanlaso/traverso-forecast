@@ -92,3 +92,16 @@ test_*.py
 forecast/test_*.py
 inspect_*.py
 forecast/inspect_*.py
+
+# Scratchpads de sesion (jul 2026): OV, dashboard, varianza, diagnostico
+_ov_*
+forecast/_ov_*
+_dash_*
+forecast/_dash_*
+_var*
+forecast/_var*
+_diag_*
+forecast/_diag_*
+# Carpetas de trabajo/logs de sesion
+forecast/_ayer/
+forecast/_ovtest/
