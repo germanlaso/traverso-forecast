@@ -318,9 +318,24 @@ export default function DetalleProduccion({
   // fuente de verdad de /plan: garantiza correlativos OFT consistentes entre
   // pestañas). Sin fallback de fetch propio.
   useEffect(()=>{
-    setOrdenes(ordenesPlan ?? []);
+    const plan = ordenesPlan ?? [];
+    const enPlan = new Set(plan.map(o=>o.numero_of));
+    // Las OF aprobadas son entradas_fijas: el optimizer NO las re-emite como OFT,
+    // asi que no vienen en plan.ordenes. Inyectar las que no esten ya en el plan
+    // para que la grilla las dibuje (aca el equipo aprueba/modifica el plan).
+    const huerfanas = (ordenesAprobadas ?? [])
+      .filter(a => a.numero_of && !enPlan.has(a.numero_of))
+      .map(a => ({
+        numero_of: a.numero_of, sku: a.sku, descripcion: a.descripcion,
+        tipo: "PRODUCCION", linea: a.linea,
+        cantidad_cajas: Number(a.cantidad_real_cj ?? 0),
+        fecha_lanzamiento: String(a.fecha_lanzamiento_real||"").slice(0,10),
+        fecha_entrada_real: String(a.fecha_entrada_real||"").slice(0,10),
+        aprobada: true,
+      }));
+    setOrdenes([...plan, ...huerfanas]);
     setLoading(false);
-  },[ordenesPlan]);
+  },[ordenesPlan, ordenesAprobadas]);
 
   const recargar=useCallback(()=>{
     // ordenesAprobadas se actualiza desde App.js. Solo regeneramos el plan.
