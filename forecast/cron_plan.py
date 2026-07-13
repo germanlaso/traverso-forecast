@@ -216,6 +216,55 @@ def main():
         sys.exit(5)
     rich = _RICH[-1]
 
+    # Inyectar OF aprobadas como filas de orden (PARIDAD con main.py /plan L572+).
+    # El optimizer consumio las aprobadas como entradas_fijas internas y NO las
+    # re-emite como ordenes. Sin esto, vista_dashboard.ordenes NO contiene las
+    # aprobadas -> el frontend las parcha como 'huerfanas' y desaparecen al
+    # desaprobar. Las agregamos aca para que el snapshot del cron las incluya
+    # igual que el endpoint /plan. (fix 13-07-26)
+    from datetime import date as _date_helper, timedelta as _td_helper
+    _ya_en_ordenes = {o.get('numero_of') for o in ordenes_opt if o.get('numero_of')}
+    for sku_ap, lst in entradas_fijas.items():
+        sp_ap = sku_params.get(sku_ap)
+        upc_ap = getattr(sp_ap, 'unidades_por_caja', 1) if sp_ap else 1
+        lt_ap = getattr(sp_ap, 'lead_time_semanas', 1) if sp_ap else 1
+        desc_ap = getattr(sp_ap, 'descripcion', '') if sp_ap else ''
+        tipo_ap = getattr(sp_ap, 'tipo', 'PRODUCCION') if sp_ap else 'PRODUCCION'
+        linea_pref = getattr(sp_ap, 'linea_preferida', None) if sp_ap else None
+        for ent in lst:
+            if not ent.get('aprobada'):
+                continue
+            nof_ap = ent.get('numero_of', '')
+            if nof_ap and nof_ap in _ya_en_ordenes:
+                continue  # el optimizer ya la emitio; no duplicar
+            fer_iso = str(ent.get('fecha_entrada', ''))[:10]
+            if not fer_iso:
+                continue
+            try:
+                f_ent = _date_helper.fromisoformat(fer_iso)
+            except ValueError:
+                continue
+            fl_iso = str(ent.get('fecha_lanzamiento', '') or '')[:10]
+            if fl_iso:
+                f_lan_iso = fl_iso
+            else:
+                f_lan_iso = (f_ent - _td_helper(days=int(round(lt_ap * 7)))).isoformat()
+            linea_ap = ent.get('linea', '') or linea_pref
+            cj_ap = int(round(float(ent.get('cantidad_cajas', 0) or 0)))
+            ordenes_opt.append({
+                'sku': sku_ap, 'descripcion': desc_ap, 'tipo': tipo_ap,
+                'semana_necesidad': ent.get('semana_necesidad', '') or fer_iso,
+                'semana_emision': f_lan_iso, 'fecha_lanzamiento': f_lan_iso,
+                'fecha_entrada_real': fer_iso,
+                'cantidad_cajas': cj_ap, 'cantidad_unidades': cj_ap * upc_ap,
+                'linea': linea_ap, 'motivo': 'OF aprobada',
+                'alerta': None, 'tiene_alerta': False,
+                'stock_inicial_cajas': 0, 'stock_final_cajas': 0,
+                'forecast_cajas': 0, 'ss_cajas': 0,
+                'lead_time_sem': lt_ap, 'u_por_caja': upc_ap,
+                'aprobada': True, 'numero_of': nof_ap,
+            })
+
     # Asignar numero_of a cada orden (copia literal de /plan L537-566).
     # Sin esto las ordenes salen con numero_of=null y el frontend no las
     # identifica (columna N Orden vacia, no se pueden aprobar).
