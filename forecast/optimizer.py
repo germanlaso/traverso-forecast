@@ -163,7 +163,7 @@ SOLVER_RANDOM_SEED = None  # (N2) si != None se fija en el solver (reproducibili
 N2_ENABLED = _os.environ.get("N2_ENABLED", "0") == "1"
 N2_PESOS_C = {"W_DEF_LEVE": 20, "W_DEF_GRAVE": 60, "W_EXC_LEVE": 3, "W_EXC_ALTO": 8}
 N2_WORKERS_A = 8
-N2_WORKERS_C = 1
+N2_WORKERS_C = 2 # H=8: C@1w no converge (TIMEOUT_SIN_SOLUCION); 2w a costa de determinismo
 N2_SEED_C = 42
 N2_TL_A = int(_os.environ.get("N2_TL_A", "1800"))
 N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
