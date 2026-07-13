@@ -107,7 +107,7 @@ def train_model(prophet_df: pd.DataFrame,
         changepoint_prior_scale: Flexibilidad de tendencia (0.01=rígida, 0.5=flexible)
     """
     model = Prophet(
-        yearly_seasonality=True,
+        yearly_seasonality="auto", # <2 años de historia -> Prophet desactiva anual (evita onda espuria en SKU nuevos). Estacionalidad de negocio via regresores.
         weekly_seasonality=True,
         daily_seasonality=False,
         changepoint_prior_scale=changepoint_prior_scale,
