@@ -155,6 +155,18 @@ SOLVER_TIME_LIMIT_POR_HORIZONTE = {
 # no debe romper el plan, solo usar un limite prudente.
 SOLVER_TIME_LIMIT_DEFAULT = 300
 SOLVER_NUM_WORKERS = 8   # subido de 4: mas workers ayuda en modelos grandes (h>=13)
+SOLVER_RANDOM_SEED = None  # (N2) si != None se fija en el solver (reproducibilidad pasada C)
+
+# ─── N2 (13-07): flag y parametros de la orquestacion de dos pasadas ─────────
+# OFF (default): single-pass N1-min, identico al cron actual. ON: optimizar_plan
+# corre A (N1-min, define Q*) -> C (SS-target, barrera Q*). Ver DEFINICION_N2_v2.
+N2_ENABLED = _os.environ.get("N2_ENABLED", "0") == "1"
+N2_PESOS_C = {"W_DEF_LEVE": 20, "W_DEF_GRAVE": 60, "W_EXC_LEVE": 3, "W_EXC_ALTO": 8}
+N2_WORKERS_A = 8
+N2_WORKERS_C = 1
+N2_SEED_C = 42
+N2_TL_A = int(_os.environ.get("N2_TL_A", "1800"))
+N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 
 
 def _time_limit_para(horizonte_semanas: int) -> int:
@@ -254,6 +266,7 @@ def optimizar_plan_v12_rich(
     fecha_inicio: date | None = None,
     horizonte_dias: int = HORIZONTE_DIAS_DEFAULT,
     time_limit_sec: int | None = None,
+    cotas_qstar: dict[tuple[str, str], int] | None = None,
 ) -> dict[str, Any]:
     """
     [API rica v1.2 — uso interno y testing]
@@ -377,10 +390,24 @@ def optimizar_plan_v12_rich(
     _agregar_objetivo(m, sku_params=sku_params, lineas_params=lineas_params,
                       cap_dia=cap_dia, sku_a_lineas=sku_a_lineas)
 
+    # ─── 6b. (N2) Barrera dura Q*: stock_u[(d,s)] >= Q*[(s, d_iso)] ───────────
+    # Cota inferior por celda tomada del stock SIN clamp de la pasada N1
+    # (DEFINICION_N2_v2 §1.2): N2 no puede empeorar ningun quiebre que N1 evito.
+    if cotas_qstar:
+        _n_barrera = 0
+        for (d, s), var in m.stock_u.items():
+            q = cotas_qstar.get((s, d.isoformat()))
+            if q is not None:
+                m.model.Add(var >= q)
+                _n_barrera += 1
+        logger.info(f"[N2] barrera Q*: {_n_barrera} cotas agregadas")
+
     # ─── 7. Resolver ─────────────────────────────────────────────────────────
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_sec
     solver.parameters.num_search_workers = SOLVER_NUM_WORKERS
+    if SOLVER_RANDOM_SEED is not None:
+        solver.parameters.random_seed = SOLVER_RANDOM_SEED
     status = solver.Solve(m.model)
     status_name = solver.StatusName(status)
     solver_time = solver.WallTime()
@@ -1248,6 +1275,106 @@ def _post_procesar(
 # Wrapper LEGACY — firma compatible con v1.1 / main.py
 # =============================================================================
 
+# =============================================================================
+# N2 — Orquestacion de dos pasadas con barrera Q* (13-07). Ver DEFINICION_N2_v2.
+# =============================================================================
+# A: N1-minimo (W_DEF=W_EXC=0) @ 8 workers -> define Q* (stock SIN clamp).
+# C: SS-target (20/60/3/8) @ 1 worker + seed=42, sujeto a stock_u >= Q*.
+# NO toca el termino de quiebre viejo (fidelidad con la validacion en scratchpad:
+# A=C=280 dias-SKU, -641 colchon). Salva/restaura los globals del modulo.
+
+def _build_qstar(resultado: dict) -> tuple[dict, int]:
+    """Q*[(sku, dia_iso)] = stock_fin_u (crudo, sin clamp, ya int en detalle_diario)."""
+    det = (resultado or {}).get("detalle_diario") or {}
+    q, n_neg = {}, 0
+    for s, celdas in det.items():
+        for d_iso, c in celdas.items():
+            v = c.get("stock_fin_u")
+            if v is not None:
+                q[(s, d_iso)] = int(v)
+                if v < 0:
+                    n_neg += 1
+    return q, n_neg
+
+
+def _desglose_n2(resultado: dict) -> dict:
+    """Bucket dias-SKU en quiebre/bajo_ss/exc_ss/ok, global y por linea. Replica
+    el desglose del scratchpad _n2_ac_workers_asim.py (comparabilidad 280/-641)."""
+    from collections import defaultdict
+    det = (resultado or {}).get("detalle_diario") or {}
+    ofts = (resultado or {}).get("ofts") or []
+    cajas = defaultdict(lambda: defaultdict(float))
+    for o in ofts:
+        cj = float(o.get("cantidad_cajas", 0) or 0)
+        if cj > 0:
+            cajas[o.get("sku")][o.get("linea")] += cj
+    mapa = {s: max(porl, key=porl.get) for s, porl in cajas.items()}
+    g = dict(quiebre=0, bajo_ss=0, exc_ss=0, ok=0)
+    por_linea = defaultdict(lambda: dict(quiebre=0, bajo_ss=0, exc_ss=0, ok=0))
+    for s, celdas in det.items():
+        ln = mapa.get(s) or "(sin linea)"
+        for _d, c in celdas.items():
+            sf = c.get("stock_fin_u")
+            ss = c.get("ss_u") or 0
+            if sf is None:
+                continue
+            k = ("quiebre" if sf < 0 else "bajo_ss" if (ss > 0 and sf < ss)
+                 else "exc_ss" if (ss > 0 and sf > ss) else "ok")
+            g[k] += 1
+            por_linea[ln][k] += 1
+    uso = ((resultado or {}).get("resumen") or {}).get("uso_promedio_lineas_pct") or {}
+    return {"global": g, "por_linea": dict(por_linea), "uso": uso}
+
+
+def _correr_dos_pasadas(**rich_kwargs) -> dict:
+    """A (N1-min) -> captura Q* -> C (SS-target, barrera Q*) sobre inputs ricos ya
+    preparados. Devuelve el resultado rico de C con resultado['n2_diag'] adjunto.
+    Salva/restaura globals del modulo."""
+    global W_DEF_LEVE, W_DEF_GRAVE, W_EXC_LEVE, W_EXC_ALTO
+    global SOLVER_NUM_WORKERS, SOLVER_RANDOM_SEED, SS_COBERTURA
+
+    _save = (W_DEF_LEVE, W_DEF_GRAVE, W_EXC_LEVE, W_EXC_ALTO,
+             SOLVER_NUM_WORKERS, SOLVER_RANDOM_SEED, SS_COBERTURA)
+    kwargs_A = dict(rich_kwargs, cotas_qstar=None, time_limit_sec=N2_TL_A)
+    kwargs_C = dict(rich_kwargs, time_limit_sec=N2_TL_C)
+    try:
+        SS_COBERTURA = True  # N2 requiere cobertura ON (no colapsa en finde)
+
+        # ── Pasada A: N1-minimo @ 8 workers -> define Q* ──
+        W_DEF_LEVE = W_DEF_GRAVE = W_EXC_LEVE = W_EXC_ALTO = 0
+        SOLVER_NUM_WORKERS = N2_WORKERS_A
+        SOLVER_RANDOM_SEED = None
+        logger.info(f"[N2] Pasada A (N1-min) @ {N2_WORKERS_A}w TL={N2_TL_A}s")
+        resA = optimizar_plan_v12_rich(**kwargs_A)
+        qstar, n_neg = _build_qstar(resA)
+        logger.info(f"[N2] Q*: {len(qstar)} celdas, {n_neg} quiebre inevitables | "
+                    f"A status={resA.get('status')} gap={resA.get('gap')}")
+
+        # ── Pasada C: SS-target @ 1 worker + seed, barrera Q* ──
+        W_DEF_LEVE = N2_PESOS_C["W_DEF_LEVE"]
+        W_DEF_GRAVE = N2_PESOS_C["W_DEF_GRAVE"]
+        W_EXC_LEVE = N2_PESOS_C["W_EXC_LEVE"]
+        W_EXC_ALTO = N2_PESOS_C["W_EXC_ALTO"]
+        SOLVER_NUM_WORKERS = N2_WORKERS_C
+        SOLVER_RANDOM_SEED = N2_SEED_C
+        kwargs_C["cotas_qstar"] = qstar
+        logger.info(f"[N2] Pasada C (SS-target) @ {N2_WORKERS_C}w seed={N2_SEED_C} TL={N2_TL_C}s")
+        resC = optimizar_plan_v12_rich(**kwargs_C)
+        logger.info(f"[N2] C status={resC.get('status')} gap={resC.get('gap')}")
+    finally:
+        (W_DEF_LEVE, W_DEF_GRAVE, W_EXC_LEVE, W_EXC_ALTO,
+         SOLVER_NUM_WORKERS, SOLVER_RANDOM_SEED, SS_COBERTURA) = _save
+
+    dA = _desglose_n2(resA)
+    dC = _desglose_n2(resC)
+    resC["n2_diag"] = {
+        "A": {**dA, "gap": resA.get("gap"), "status": resA.get("status")},
+        "C": {**dC, "gap": resC.get("gap"), "status": resC.get("status")},
+        "qstar_celdas": len(qstar), "qstar_neg": n_neg,
+    }
+    return resC
+
+
 def optimizar_plan(
     ordenes_mrp: list,
     sku_params: dict,
@@ -1480,7 +1607,7 @@ def optimizar_plan(
     time_limit_sec = _time_limit_para(horizonte_semanas)
     logger.info(f"[optimizer] horizonte={horizonte_semanas} sem -> time_limit={time_limit_sec}s, workers={SOLVER_NUM_WORKERS}")
 
-    resultado = optimizar_plan_v12_rich(
+    _rich_kwargs = dict(
         plan_mrp={"ordenes": ordenes_mrp},
         sku_params=sku_params_rich,
         lineas_params=lineas_params_rich,
@@ -1493,6 +1620,11 @@ def optimizar_plan(
         horizonte_dias=horizonte_dias,
         time_limit_sec=time_limit_sec,
     )
+    if N2_ENABLED:
+        logger.info("[N2] N2_ENABLED=1 -> dos pasadas (A -> Q* -> C)")
+        resultado = _correr_dos_pasadas(**_rich_kwargs)
+    else:
+        resultado = optimizar_plan_v12_rich(**_rich_kwargs)
 
     # ─── 8. Convertir OFTs ricas → órdenes legacy ────────────────────────────
     from calendario import semana_viz_inicio
@@ -1591,6 +1723,7 @@ def optimizar_plan(
         "uso_promedio_lineas_pct": resultado["resumen"].get("uso_promedio_lineas_pct", {}),
         "horizonte_dias": resultado["resumen"].get("horizonte_dias", horizonte_dias),
         "sobrecargas_aprobadas": resultado.get("sobrecargas_aprobadas", []),  # V6.37
+        "n2": resultado.get("n2_diag"),  # (N2) desglose A/C si corrio dos pasadas
     }
 
     return ordenes_finales, diag
