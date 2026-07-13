@@ -308,6 +308,11 @@ export default function DetalleProduccion({
   const toggleLinea=(cod)=>setLineasExpandidas(prev=>{
     const n=new Set(prev); if(n.has(cod))n.delete(cod); else n.add(cod); return n;
   });
+  // OF desaprobadas en esta sesion que NO estaban en plan.ordenes (huerfanas):
+  // al desaprobar caerian de ordenesAprobadas y desaparecerian. Las guardamos
+  // para reinyectarlas como OFT pendientes al instante (sin regenerar el plan).
+  // Se limpian solas cuando el plan se regenera y las repropone.
+  const [desaprobadasLocal,setDesaprobadasLocal]=useState([]);
 
   useEffect(()=>{
     // ordenesAprobadas viene por prop desde App.js (single source of truth).
@@ -339,9 +344,14 @@ export default function DetalleProduccion({
         fecha_entrada_real: String(a.fecha_entrada_real||"").slice(0,10),
         aprobada: true,
       }));
-    setOrdenes([...plan, ...huerfanas]);
+    // Reinyectar OF desaprobadas huerfanas como pendientes (si no volvieron al plan
+    // ni reaparecieron en aprobadas). Se limpian cuando el plan las repropone.
+    const enPlanSet=new Set(plan.map(o=>o.numero_of));
+    const enAprob=new Set((ordenesAprobadas??[]).map(a=>a.numero_of));
+    const desaprob=(desaprobadasLocal??[]).filter(o=>!enPlanSet.has(o.numero_of)&&!enAprob.has(o.numero_of));
+    setOrdenes([...plan, ...huerfanas, ...desaprob]);
     setLoading(false);
-  },[ordenesPlan, ordenesAprobadas]);
+  },[ordenesPlan, ordenesAprobadas, desaprobadasLocal]);
 
   const recargar=useCallback(()=>{
     // ordenesAprobadas se actualiza desde App.js. Solo regeneramos el plan.
@@ -396,7 +406,17 @@ export default function DetalleProduccion({
           recargar();
         }}
         onCancelarAprobacion={(numero_of)=>{
+          const ord=modalEditar?.orden;
           setModalEditar(null);
+          // Si la OF desaprobada NO esta en plan.ordenes (huerfana), reinyectarla
+          // como pendiente para que no desaparezca de la grilla al instante.
+          const enPlan=new Set((ordenesPlan??[]).map(o=>o.numero_of));
+          if(ord && numero_of && !enPlan.has(numero_of)){
+            setDesaprobadasLocal(prev=>{
+              if(prev.some(o=>o.numero_of===numero_of)) return prev;
+              return [...prev, {...ord, aprobada:false, tipo:'PRODUCCION'}];
+            });
+          }
           // V6.44: quitar de la lista local + marcar stale
           if(onAprobacionRetirada && numero_of) onAprobacionRetirada(numero_of);
           recargar();
