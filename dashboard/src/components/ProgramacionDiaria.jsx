@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+const API = "";
 
 // Paleta minima (importar la global hubiera requerido cambios estructurales)
 const C = {
@@ -30,12 +31,21 @@ export default function ProgramacionDiaria({ ordenesAprobadas = [] }) {
     return hoy.toISOString().slice(0, 10);
   });
 
-  // Lineas disponibles: derivadas de ordenes aprobadas (todas las que existen en BD)
+  // Lineas del maestro (todas las lineas activas), no solo las que tienen OF
+  // aprobadas. Fetch a /plan/params (misma fuente que StockDiario/Detalle).
+  const [lineasMaestro, setLineasMaestro] = useState([]);
+  useEffect(() => {
+    fetch(`${API}/plan/params`).then(r => r.json()).then(p => {
+      if (p.lineas) setLineasMaestro(p.lineas.map(l => l.codigo));
+    }).catch(() => {});
+  }, []);
+  // Fallback: si el maestro aun no cargo, derivar de las OF aprobadas.
   const lineasDisponibles = useMemo(() => {
+    if (lineasMaestro.length > 0) return [...lineasMaestro].sort();
     const set = new Set();
     ordenesAprobadas.forEach(o => o.linea && set.add(o.linea));
     return Array.from(set).sort();
-  }, [ordenesAprobadas]);
+  }, [lineasMaestro, ordenesAprobadas]);
 
   // Filtro de lineas (multi-select). Default: todas seleccionadas
   const [lineasFiltro, setLineasFiltro] = useState(null);
