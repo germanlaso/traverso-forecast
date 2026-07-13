@@ -204,7 +204,7 @@ export default function App() {
   const irAStock = (sku) => {
     setStockSku(sku);
     setStockNav(n => n + 1);   // fuerza re-render aunque el SKU sea el mismo
-    setActiveTab('stock');
+    setActiveTab('stockdiario');   // navega a Stock Diario (antes: 'stock' / Stock por SKU)
   };
   // Plan persiste entre refreshes via localStorage. El usuario decide cuando
   // regenerarlo con el boton "Regenerar Plan" (cierra V6.36 — auto-trigger
