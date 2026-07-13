@@ -302,6 +302,12 @@ export default function DetalleProduccion({
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
   const [modalEditar,setModalEditar]=useState(null);
+  // Lineas expandidas (muestran la tabla de OFT). Por defecto TODAS colapsadas
+  // (Set vacio): se ve header + grid de dias; la tabla se abre al hacer clic.
+  const [lineasExpandidas,setLineasExpandidas]=useState(()=>new Set());
+  const toggleLinea=(cod)=>setLineasExpandidas(prev=>{
+    const n=new Set(prev); if(n.has(cod))n.delete(cod); else n.add(cod); return n;
+  });
 
   useEffect(()=>{
     // ordenesAprobadas viene por prop desde App.js (single source of truth).
@@ -482,8 +488,14 @@ export default function DetalleProduccion({
 
         return(
           <div key={linea.codigo} style={s.card}>
-            <div style={s.linHdr}>
+            <div style={{...s.linHdr, cursor: ordenesLinea.length>0?'pointer':'default'}}
+              onClick={()=>{ if(ordenesLinea.length>0) toggleLinea(linea.codigo); }}>
               <div>
+                {ordenesLinea.length>0 && (
+                  <span style={{marginRight:6,color:C.textMuted,fontSize:11}}>
+                    {lineasExpandidas.has(linea.codigo)?'▾':'▸'}
+                  </span>
+                )}
                 <span style={s.linTit}>{linea.codigo} — {linea.nombre}</span>
                 <span style={{...s.linSub,marginLeft:10}}>Cap. semanal: {fmtN(linea.cap_u_semana)} u. · {linea.horas_disp_sem}h/sem</span>
               </div>
@@ -556,7 +568,7 @@ export default function DetalleProduccion({
               })}
             </div>
 
-            {ordenesTabla.length>0&&(
+            {ordenesTabla.length>0 && lineasExpandidas.has(linea.codigo) && (
               <div style={{overflowX:"auto"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                   <thead><tr>
