@@ -1145,6 +1145,7 @@ export default function App() {
         {activeTab === 'stockdiario' && <StockDiario
           key={`stockdiario-${stockSku}-${stockNav}`}
           initialSku={stockSku}
+          ordenesAprobadas={ordenesAprobadas}
         />}
         {activeTab === 'detalle' && <DetalleProduccion
           ordenesPlan={plan?.ordenes ?? []}

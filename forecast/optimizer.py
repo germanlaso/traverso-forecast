@@ -1183,8 +1183,10 @@ def _post_procesar(
                 estado = "OK"
 
             oft_cajas = oft_por_dia.get((s, d_iso))
+            entrada_apr_d = _entradas_del_dia(s, d, entradas_aprobadas)  # (13-07) para recalculo live
             serie[d_iso] = {
                 "stock_ini_disp_u": int(round(stock_prev_disp)),
+                "entrada_aprobada_u": int(round(entrada_apr_d)),
                 "pedidos_u": int(round(pedidos_d)),
                 "demanda_corr_u": int(round(consumo_d)),
                 "forecast_u": int(round(fc_d)),

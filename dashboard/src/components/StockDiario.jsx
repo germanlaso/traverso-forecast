@@ -104,7 +104,7 @@ function SkuSearch({ skus, value, onChange }) {
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
-export default function StockDiario({ initialSku = "" }) {
+export default function StockDiario({ initialSku = "", ordenesAprobadas = [] }) {
   const [skuList, setSkuList] = useState([]);
   const [selSku,  setSelSku]  = useState(initialSku || "121010290");
   const [data,    setData]    = useState(null);
@@ -121,14 +121,19 @@ export default function StockDiario({ initialSku = "" }) {
   useEffect(() => { if (initialSku) setSelSku(initialSku); }, [initialSku]);
 
   // Serie diaria del backend
+  // (13-07) firma de las aprobadas: cambia si se edita/agrega/quita una OF -> re-fetch
+  const aprobFirma = useMemo(() => (ordenesAprobadas || [])
+    .map(a => `${a.numero_of}:${a.cantidad_real_cj}:${a.fecha_entrada_real}`).join("|"),
+    [ordenesAprobadas]);
   useEffect(() => {
     if (!selSku) return;
     setLoading(true); setError(null);
-    fetch(`${API}/plan/proyeccion_diaria/${selSku}`)
+    // (13-07) endpoint LIVE: recalcula el balance con las OF aprobadas vivas
+    fetch(`${API}/plan/proyeccion_diaria_live/${selSku}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setLoading(false); })
       .catch((e) => { setError(String(e)); setLoading(false); });
-  }, [selSku]);
+  }, [selSku, aprobFirma]);
 
   const dias = data?.dias ?? [];
   const enc  = data?.encabezado ?? null;

@@ -871,6 +871,118 @@ def get_proyeccion_diaria(sku: str):
     }
 
 
+@app.get("/plan/proyeccion_diaria_live/{sku}", tags=["Plan de Produccion"])
+def get_proyeccion_diaria_live(sku: str):
+    """
+    (13-07) Como /plan/proyeccion_diaria, pero RECALCULA el balance de stock
+    superponiendo las OF aprobadas VIVAS (cantidad/fecha actuales de
+    mrp_aprobaciones), SIN correr el optimizer. La curva refleja el cambio al
+    instante cuando el planificador modifica una OF.
+
+    Alcance (definido con German 13-07): solo mueve las entradas aprobadas y
+    recalcula el balance hacia adelante; NO re-optimiza produccion (eso es warm
+    start, tema aparte). Las OFT del optimizer quedan fijas.
+    """
+    from sqlalchemy import text as _sql
+    from db_mrp import SessionLocal, listar_aprobadas_db
+
+    with SessionLocal() as s:
+        row = s.execute(_sql(
+            "SELECT id, horizonte_sem, created_at, snapshot "
+            "FROM mrp_planes WHERE vigente LIMIT 1"
+        )).mappings().first()
+    if row is None:
+        return {"disponible": False,
+                "mensaje": "No hay plan vigente. El cron aun no genero uno."}
+    snap = row["snapshot"] or {}
+    detalle = (snap.get("detalle_diario") or {}).get(sku)
+    encab = (snap.get("encabezado_sku") or {}).get(sku)
+    if detalle is None or encab is None:
+        return {"disponible": False, "plan_viejo": True,
+                "mensaje": "El plan vigente es anterior al detalle diario. Regenera el plan.",
+                "plan_id": row["id"]}
+
+    upc = int(encab.get("u_por_caja", 1) or 1)
+    def _cj(u):
+        return round(u / upc, 1) if (u is not None and upc) else (None if u is None else 0.0)
+
+    # Entradas aprobadas VIVAS de este SKU: {fecha_iso: unidades}
+    entradas_vivas = {}
+    try:
+        for ap in listar_aprobadas_db():
+            if str(ap.get("sku", "")) != sku:
+                continue
+            fer = str(ap.get("fecha_entrada_real") or "")[:10]
+            if not fer:
+                continue
+            u = ap.get("cantidad_real_u")
+            if u is None:
+                u = float(ap.get("cantidad_real_cj") or 0) * upc
+            entradas_vivas[fer] = entradas_vivas.get(fer, 0.0) + float(u or 0)
+    except Exception:
+        entradas_vivas = {}
+
+    # Recalculo del balance hacia adelante.
+    # demanda_base[d] se despeja de la base congelada para NO recalcular forecast/OV:
+    #   demanda_base = stock_ini_base + oft_base + entrada_base - stock_fin_base
+    # El unico cambio es entrada_base -> entrada_viva; todo lo demas identico al optimizer.
+    fechas = sorted(detalle.keys())
+    plan_viejo_sin_campo = any("entrada_aprobada_u" not in detalle[f] for f in fechas)
+
+    dias = []
+    stock_prev = None
+    for fecha_iso in fechas:
+        c = detalle[fecha_iso]
+        oc = c.get("oft_cajas")
+        oft_u = int(oc) * upc if oc else 0
+        entrada_base = int(c.get("entrada_aprobada_u", 0) or 0)
+        stock_ini_base = int(c.get("stock_ini_disp_u", 0) or 0)
+        stock_fin_base = int(c.get("stock_fin_u", 0) or 0)
+        demanda_base = stock_ini_base + oft_u + entrada_base - stock_fin_base
+        entrada_viva = int(round(entradas_vivas.get(fecha_iso, 0.0)))
+        stock_ini = stock_ini_base if stock_prev is None else stock_prev
+        stock_fin = stock_ini + oft_u + entrada_viva - demanda_base
+        ss_u = int(c.get("ss_u", 0) or 0)
+        if stock_fin < 0:
+            estado = "QUIEBRE"
+        elif ss_u > 0 and stock_fin < ss_u:
+            estado = "BAJO_SS"
+        else:
+            estado = "OK"
+        dias.append({
+            "fecha": fecha_iso,
+            "oft_cajas": c.get("oft_cajas"),
+            "stock_ini_disp_u": int(round(stock_ini)),
+            "stock_ini_disp_cj": _cj(int(round(stock_ini))),
+            "pedidos_u": c.get("pedidos_u"),
+            "pedidos_cj": _cj(c.get("pedidos_u")),
+            "demanda_corr_u": c.get("demanda_corr_u"),
+            "demanda_corr_cj": _cj(c.get("demanda_corr_u")),
+            "forecast_u": c.get("forecast_u"),
+            "forecast_cj": _cj(c.get("forecast_u")),
+            "stock_fin_u": int(stock_fin),
+            "stock_fin_cj": _cj(int(stock_fin)),
+            "ss_u": c.get("ss_u"),
+            "ss_cj": _cj(c.get("ss_u")),
+            "entrada_aprobada_u": entrada_viva,
+            "estado": estado,
+        })
+        stock_prev = stock_fin
+
+    return {
+        "disponible": True,
+        "live": True,
+        "plan_viejo_sin_entrada": plan_viejo_sin_campo,
+        "sku": sku,
+        "upc": upc,
+        "ss_dias": encab.get("ss_dias"),
+        "plan_id": row["id"],
+        "fecha_inicio": row["created_at"].date().isoformat() if row["created_at"] else None,
+        "horizonte_dias": int(row["horizonte_sem"] or 4) * 7,
+        "dias": dias,
+    }
+
+
 @app.get("/plan/params", tags=["Plan de Produccion"])
 def get_mrp_params():
     """Lista los SKUs con parámetros MRP cargados desde PostgreSQL (fallback Excel)."""
