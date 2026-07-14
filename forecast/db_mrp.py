@@ -147,6 +147,23 @@ def numero_of_tentativo(sku: str, fecha_lanzamiento: str, linea: str, year: int 
     return f"OFT-{y}-{h:05d}"
 
 
+def next_numero_of_manual() -> str:
+    """
+    Correlativo para OF manuales: OFM-NNNNNN (6 dígitos, sin año).
+    Prefijo OFM- separado: no colisiona con OF-YYYY-NNNNN ni OFT-.
+    Calcula MAX+1 sobre mrp_ordenes. Suficiente para mono-usuario
+    (marcha blanca); para multi-usuario, migrar a contador con lock.
+    """
+    with get_session() as session:
+        row = session.execute(text("""
+            SELECT COALESCE(MAX(CAST(SUBSTRING(numero_of FROM 5) AS INTEGER)), 0)
+            FROM mrp_ordenes
+            WHERE numero_of LIKE 'OFM-%'
+        """)).fetchone()
+        n = (row[0] or 0) + 1
+    return f"OFM-{n:06d}"
+
+
 # ── CRUD Órdenes ───────────────────────────────────────────────────────────────
 
 def upsert_orden(data: dict) -> MrpOrden:

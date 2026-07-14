@@ -14,7 +14,7 @@ from reportlab.lib.units import cm
 from reportlab.lib.colors import HexColor, white
 from reportlab.pdfgen import canvas as rl_canvas
 from db_mrp import (
-    init_db, next_numero_of, numero_of_tentativo,
+    init_db, next_numero_of, next_numero_of_manual, numero_of_tentativo,
     upsert_orden, get_orden_by_key,
     aprobar_orden_db, cancelar_orden_db,
     listar_aprobadas_db, historial_aprobaciones_db,
@@ -183,6 +183,82 @@ def aprobar_orden(req: OrdenAprobar):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class OrdenManual(BaseModel):
+    sku:               str
+    descripcion:       str   = ""
+    linea:             str
+    cantidad_cj:       float
+    u_por_caja:        float = 1.0
+    fecha_lanzamiento: str            # día en la línea (grid Detalle Producción)
+    fecha_entrada:     str   = ""     # opcional; si vacío se calcula por lead time
+    responsable:       str   = ""
+    comentario:        str   = ""
+
+
+@router.post("/crear-manual")
+def crear_orden_manual(req: OrdenManual):
+    """
+    OF manual del planificador. Cae al MISMO circuito que /aprobar:
+    upsert en mrp_ordenes + inserción APROBADA en mrp_aprobaciones, de modo
+    que el optimizer la trata como entrada_fija y el Stock Diario live la
+    superpone. Se distingue por el prefijo OFM- en numero_of.
+    """
+    try:
+        fl = req.fecha_lanzamiento[:10]
+        fe = _calcular_fecha_entrada(
+            req.fecha_entrada or None, fl, req.cantidad_cj, req.sku, fl
+        )
+        numero_of = next_numero_of_manual()
+
+        upsert_orden({
+            "numero_of":            numero_of,
+            "sku":                  req.sku,
+            "descripcion":          req.descripcion,
+            "tipo":                 "PRODUCCION",
+            "semana_emision":       _parse_date(fl),   # informativo
+            "semana_necesidad":     _parse_date(fe),   # informativo
+            "fecha_lanzamiento":    _parse_date(fl),   # clave lógica + capacidad
+            "cantidad_sugerida_cj": req.cantidad_cj,   # manual: sugerido = real
+            "cantidad_sugerida_u":  round(req.cantidad_cj * req.u_por_caja),
+            "u_por_caja":           req.u_por_caja,
+            "linea":                req.linea,
+            "motivo":               "MANUAL",
+        })
+
+        aprobacion = aprobar_orden_db(numero_of, {
+            "sku":                    req.sku,
+            "cantidad_real_cj":       req.cantidad_cj,
+            "cantidad_real_u":        round(req.cantidad_cj * req.u_por_caja),
+            "fecha_lanzamiento_real": _parse_date(fl),
+            "fecha_entrada_real":     _parse_date(fe),
+            "responsable":            req.responsable or "Manual",
+            "comentario":             req.comentario,
+        })
+
+        logger.info(f"[OFM] {numero_of} creada: {req.sku} · {req.linea} · {fl} · {req.cantidad_cj:.0f} cj")
+
+        return {
+            "ok":                     True,
+            "numero_of":              numero_of,
+            "manual":                 True,
+            "sku":                    req.sku,
+            "descripcion":            req.descripcion,
+            "tipo":                   "PRODUCCION",
+            "linea":                  req.linea,
+            "cantidad_real_cj":       req.cantidad_cj,
+            "cantidad_real_u":        round(req.cantidad_cj * req.u_por_caja),
+            "fecha_lanzamiento_real": fl,
+            "fecha_entrada_real":     fe,
+            "responsable":            req.responsable or "Manual",
+            "comentario":             req.comentario,
+            "version":                aprobacion["version"],
+            "timestamp":              aprobacion["created_at"],
+        }
+    except Exception as e:
+        logger.exception("Error creando OF manual")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/cancelar/{key:path}")
 def cancelar_orden(key: str):
     """
@@ -201,7 +277,7 @@ def cancelar_orden(key: str):
     """
     try:
         # V6.49: si el path es un numero_of (formato OF-YYYY-NNNNN), usar directo
-        if key.startswith("OF-") or key.startswith("OFT-"):
+        if key.startswith("OF-") or key.startswith("OFT-") or key.startswith("OFM-"):
             n_cancelados = cancelar_orden_db(key)
             if not n_cancelados:
                 return {"ok": False, "mensaje": f"No habia aprobacion activa para {key}"}
