@@ -218,6 +218,110 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
   );
 }
 
+function ModalCrearOF({linea,skusCandidatos,descBySku,params,capDiaU,capUsadaByFecha,diasHabiles,onCreada,onCerrar}){
+  const [verTodos,setVerTodos]=useState(false);
+  const listaSkus=useMemo(()=>{
+    const base=verTodos?Object.keys(params):skusCandidatos;
+    return Array.from(new Set(base)).sort();
+  },[verTodos,skusCandidatos,params]);
+  const [sku,setSku]=useState(skusCandidatos[0]||"");
+  const [cantidad,setCantidad]=useState("");
+  const [fecha,setFecha]=useState(diasHabiles[0]||new Date().toISOString().slice(0,10));
+  const [creando,setCreando]=useState(false);
+
+  const upj=params[sku]?.upj??1;
+  const fv=params[sku]?.factor_velocidad??1;
+  const ofU=Math.round(Number(cantidad||0)*upj);
+  const ofCapU=fv>0?ofU/fv:ofU;
+  const usadaFrac=capUsadaByFecha?.[fecha]??0;
+  const libreU=Math.max(0,capDiaU*(1-usadaFrac));
+  const excede=ofCapU>libreU && ofU>0;
+
+  const handleCrear=async()=>{
+    if(!sku||!fecha||!(Number(cantidad)>0)){alert("Completá SKU, cantidad (>0) y fecha.");return;}
+    setCreando(true);
+    try{
+      const {data}=await axios.post(`${API}/ordenes/crear-manual`,{
+        sku,descripcion:descBySku[sku]||"",linea:linea.codigo,
+        cantidad_cj:Number(cantidad),u_por_caja:upj,
+        fecha_lanzamiento:fecha,responsable:"Manual",
+      });
+      onCreada(data);
+    }catch(e){alert("Error: "+(e.response?.data?.detail||e.message));}
+    finally{setCreando(false);}
+  };
+
+  const inp={width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"};
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,
+                 display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{background:"#fff",borderRadius:12,padding:24,width:440,
+                   boxShadow:"0 8px 32px rgba(0,0,0,.18)"}}>
+        <div style={{fontSize:14,fontWeight:700,color:C.tealMid,marginBottom:4}}>Crear OF manual</div>
+        <div style={{fontSize:11,color:C.textMuted,marginBottom:16}}>
+          Línea {linea.codigo} — {linea.nombre} · queda aprobada al crearse
+        </div>
+
+        <div style={{marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+            <label style={{fontSize:11,fontWeight:600}}>SKU</label>
+            <label style={{fontSize:10,color:C.textMuted,cursor:"pointer"}}>
+              <input type="checkbox" checked={verTodos} onChange={e=>setVerTodos(e.target.checked)}
+                style={{marginRight:4,verticalAlign:"middle"}}/>
+              ver todos los SKU
+            </label>
+          </div>
+          <select value={sku} onChange={e=>setSku(e.target.value)} style={inp}>
+            {listaSkus.length===0&&<option value="">(sin SKU para esta línea)</option>}
+            {listaSkus.map(sk=>(
+              <option key={sk} value={sk}>{sk}{descBySku[sk]?` — ${descBySku[sk].slice(0,40)}`:""}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{marginBottom:10}}>
+          <label style={{fontSize:11,fontWeight:600,display:"block",marginBottom:3}}>Cantidad (cajas)</label>
+          <input type="number" min="0" value={cantidad} onChange={e=>setCantidad(e.target.value)}
+            style={{...inp,border:`1.5px solid ${C.teal}`}}/>
+          {ofU>0&&<div style={{fontSize:10,color:C.textMuted,marginTop:2}}>≈ {fmtN(ofU)} u físicas</div>}
+        </div>
+
+        <div style={{marginBottom:10}}>
+          <label style={{fontSize:11,fontWeight:600,display:"block",marginBottom:3}}>Fecha de lanzamiento (día en la línea)</label>
+          <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={inp}/>
+        </div>
+
+        <div style={{background:excede?C.redLt:C.grayLt,border:`0.5px solid ${excede?C.red:C.border}`,
+                     borderRadius:7,padding:"8px 10px",marginBottom:16,fontSize:11}}>
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <span style={{color:C.textMuted}}>Capacidad libre del día</span>
+            <span style={{fontWeight:700}}>{fmtN(libreU)} u</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:2}}>
+            <span style={{color:C.textMuted}}>Consume esta OF</span>
+            <span style={{fontWeight:700,color:excede?C.red:C.text}}>{fmtN(ofCapU)} u</span>
+          </div>
+          {excede&&<div style={{color:C.red,marginTop:4,fontWeight:600}}>
+            ⚠ Excede la capacidad disponible del día. Podés crearla igual (turno extra / criterio del planificador).
+          </div>}
+        </div>
+
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button onClick={onCerrar}
+            style={{padding:"7px 14px",borderRadius:7,border:`0.5px solid ${C.border}`,
+                    background:"#fff",cursor:"pointer",fontSize:12}}>Cancelar</button>
+          <button onClick={handleCrear} disabled={creando||!sku}
+            style={{padding:"7px 14px",borderRadius:7,border:"none",
+                    background:C.teal,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:700,
+                    opacity:(creando||!sku)?.6:1}}>
+            {creando?"Creando...":"Crear OF"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Genera días globales desde una fecha de inicio para N semanas hacia atrás y adelante
 function diasGlobalesDesde(fechaIni,nSemanas){
   const dias=[];
@@ -302,6 +406,7 @@ export default function DetalleProduccion({
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
   const [modalEditar,setModalEditar]=useState(null);
+  const [modalCrear,setModalCrear]=useState(null);
   // Lineas expandidas (muestran la tabla de OFT). Por defecto TODAS colapsadas
   // (Set vacio): se ve header + grid de dias; la tabla se abre al hacer clic.
   const [lineasExpandidas,setLineasExpandidas]=useState(()=>new Set());
@@ -313,6 +418,9 @@ export default function DetalleProduccion({
   // para reinyectarlas como OFT pendientes al instante (sin regenerar el plan).
   // Se limpian solas cuando el plan se regenera y las repropone.
   const [desaprobadasLocal,setDesaprobadasLocal]=useState([]);
+  // OFM creadas en esta sesión: se muestran al instante en el grid. Se depuran
+  // cuando App.js las incorpora a ordenesAprobadas (o el plan las trae).
+  const [creadasLocal,setCreadasLocal]=useState([]);
 
   useEffect(()=>{
     // ordenesAprobadas viene por prop desde App.js (single source of truth).
@@ -349,9 +457,10 @@ export default function DetalleProduccion({
     const enPlanSet=new Set(plan.map(o=>o.numero_of));
     const enAprob=new Set((ordenesAprobadas??[]).map(a=>a.numero_of));
     const desaprob=(desaprobadasLocal??[]).filter(o=>!enPlanSet.has(o.numero_of)&&!enAprob.has(o.numero_of));
-    setOrdenes([...plan, ...huerfanas, ...desaprob]);
+    const creadas=(creadasLocal??[]).filter(o=>!enPlanSet.has(o.numero_of)&&!enAprob.has(o.numero_of));
+    setOrdenes([...plan, ...huerfanas, ...desaprob, ...creadas]);
     setLoading(false);
-  },[ordenesPlan, ordenesAprobadas, desaprobadasLocal]);
+  },[ordenesPlan, ordenesAprobadas, desaprobadasLocal, creadasLocal]);
 
   const recargar=useCallback(()=>{
     // ordenesAprobadas se actualiza desde App.js. Solo regeneramos el plan.
@@ -363,8 +472,11 @@ export default function DetalleProduccion({
   const aprobMap=useMemo(()=>{
     // F3 (12/05/2026): indexar por numero_of. Datos vienen del prop ordenesAprobadas
     // (single source of truth en App.js). Antes era state local con su propio fetch.
-    const m={};ordenesAprobadas.forEach(a=>{m[a.numero_of]=a;});return m;
-  },[ordenesAprobadas]);
+    const m={};ordenesAprobadas.forEach(a=>{m[a.numero_of]=a;});
+    // Reflejo local de OFM recién creadas: que se dibujen como aprobadas al instante.
+    (creadasLocal??[]).forEach(cx=>{ if(!m[cx.numero_of]) m[cx.numero_of]=cx; });
+    return m;
+  },[ordenesAprobadas,creadasLocal]);
   const hoy=new Date().toISOString().slice(0,10);
   const ordenesProd=useMemo(()=>ordenes.filter(o=>o.tipo==="PRODUCCION"),[ordenes]);
   function getOrdenesLinea(linea){
@@ -422,6 +534,31 @@ export default function DetalleProduccion({
           recargar();
         }}
         onCerrar={()=>setModalEditar(null)}/>}
+
+      {modalCrear&&(()=>{
+        const ln=modalCrear.linea;
+        const ordLn=getOrdenesLinea(ln);
+        const {capUsada}=distribuirOrdenes(ordLn,diasExt,aprobMap,params,ln);
+        const capDiaU=ln.cap_u_semana/5;
+        const skusCand=Array.from(new Set([
+          ...Object.keys(params).filter(sk=>params[sk]?.linea===ln.codigo),
+          ...ordLn.map(o=>o.sku),
+        ])).sort();
+        const descBySku={};ordenes.forEach(o=>{if(o.sku&&o.descripcion)descBySku[o.sku]=o.descripcion;});
+        const diasHabiles=dias.filter(d=>d.habil).map(d=>d.fecha);
+        return <ModalCrearOF linea={ln} skusCandidatos={skusCand} descBySku={descBySku}
+          params={params} capDiaU={capDiaU} capUsadaByFecha={capUsada} diasHabiles={diasHabiles}
+          onCreada={(data)=>{
+            setModalCrear(null);
+            const upj=params[data.sku]?.upj??1;
+            const ofm={...data,tipo:"PRODUCCION",cantidad_cajas:Number(data.cantidad_real_cj),
+              fecha_lanzamiento:String(data.fecha_lanzamiento_real||"").slice(0,10),aprobada:true,u_por_caja:upj};
+            setCreadasLocal(prev=>prev.some(o=>o.numero_of===ofm.numero_of)?prev:[...prev,ofm]);
+            if(onAprobacionEditada) onAprobacionEditada(data);
+            recargar();
+          }}
+          onCerrar={()=>setModalCrear(null)}/>;
+      })()}
 
       {/* Banner: plan no generado — red de seguridad */}
       {(!ordenesPlan || ordenesPlan.length===0) && (
@@ -519,7 +656,13 @@ export default function DetalleProduccion({
                 <span style={s.linTit}>{linea.codigo} — {linea.nombre}</span>
                 <span style={{...s.linSub,marginLeft:10}}>Cap. semanal: {fmtN(linea.cap_u_semana)} u. · {linea.horas_disp_sem}h/sem</span>
               </div>
-              <div style={{display:"flex",gap:8,fontSize:11}}>
+              <div style={{display:"flex",gap:8,fontSize:11,alignItems:"center"}}>
+                <button onClick={(e)=>{e.stopPropagation();setModalCrear({linea});}}
+                  title="Crear OF manual en esta línea"
+                  style={{padding:"2px 10px",borderRadius:10,border:`0.5px solid ${C.teal}`,
+                          background:C.tealLt,color:C.tealMid,fontWeight:700,cursor:"pointer"}}>
+                  ＋ Crear OF
+                </button>
                 {(() => {
                   // Setup total de la semana visible (suma de setup_unidades de OFTs en días visibles)
                   const setupSem = dias.reduce((s, d) => {
