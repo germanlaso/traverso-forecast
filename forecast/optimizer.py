@@ -469,6 +469,7 @@ def optimizar_plan_v12_rich(
         demanda_consumo=demanda_consumo,
         stock_inicial=stock_inicial,
         ss_forecast_ext=ss_forecast_ext,
+        entradas_aprobadas=entradas_aprobadas,
     )
 
     # Si la solucion es suboptima por timeout, dejar constancia para el usuario
@@ -1045,6 +1046,7 @@ def _post_procesar(
     demanda_consumo: dict[str, dict[date, float]] | None = None,
     stock_inicial: dict[str, float] | None = None,
     ss_forecast_ext: dict[str, dict[date, float]] | None = None,
+    entradas_aprobadas: dict[str, list[dict]] | None = None,
 ) -> dict[str, Any]:
     """Convierte la solución del solver en OFTs, stock visible y alertas.
 
@@ -1152,6 +1154,7 @@ def _post_procesar(
     _dco = demanda_consumo or {}
     _sti = stock_inicial or {}
     _ssext = ss_forecast_ext or {}
+    _ea = entradas_aprobadas or {}
 
     for s in m.skus:
         sp = sku_params[s]
@@ -1183,7 +1186,7 @@ def _post_procesar(
                 estado = "OK"
 
             oft_cajas = oft_por_dia.get((s, d_iso))
-            entrada_apr_d = _entradas_del_dia(s, d, entradas_aprobadas)  # (13-07) para recalculo live
+            entrada_apr_d = _entradas_del_dia(s, d, _ea)  # (13-07) para recalculo live
             serie[d_iso] = {
                 "stock_ini_disp_u": int(round(stock_prev_disp)),
                 "entrada_aprobada_u": int(round(entrada_apr_d)),
