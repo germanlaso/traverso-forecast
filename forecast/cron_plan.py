@@ -133,14 +133,23 @@ def main():
     from main import get_sales_df
     df_sales = get_sales_df()
     forecasts = {}
+    n_mto = 0
     for sku in sku_params:
+        # MTO (a pedido): sin forecast. Se OMITE del dict (mismo estado que
+        # "forecast no disponible", ya manejado aguas abajo). La demanda queda
+        # solo OV (se netea aparte) y SS=0 viene de params. -> demanda = OV.
+        if getattr(sku_params[sku], "mto", False):
+            n_mto += 1
+            continue
         try:
             r = run_sku_pipeline(df=df_sales, sku=sku, canal=None,
                                  forecast_periods=args.horizonte + 4)
             forecasts[sku] = r.get("forecast", [])
         except Exception as e:
             log.warning(f"[4/8] forecast no disponible para {sku}: {e}")
-    log.info(f"[4/8] forecasts: {sum(1 for v in forecasts.values() if v)}/{len(sku_params)}")
+    if n_mto:
+        log.info(f"[4/8] MTO: {n_mto} SKU sin forecast (demanda solo OV)")
+    log.info(f"[4/8] forecasts: {sum(1 for v in forecasts.values() if v)}/{len(sku_params)} (MTO {n_mto} omitidos)")
     if not forecasts:
         log.error("[4/8] sin forecasts -> abortar")
         sys.exit(4)

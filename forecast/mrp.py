@@ -27,6 +27,8 @@ class SKUParams:
     activo: bool = True
     t_cambio_hrs: float = 0.0
     pct_dia_max: float = 1.0
+    mto: bool = False          # a pedido: sin forecast, SS 0, demanda solo OV
+    formato: str = ""          # gramaje/envase (para regla de cambio de formato)
 
 
 @dataclass
@@ -90,13 +92,13 @@ def _normalize(s):
 def _int(val, default=0):
     try:
         if val is None or (isinstance(val, float) and __import__("math").isnan(val)): return default
-        return int(val) if val else default
+        return int(val)  # val ya validado no-None/no-nan arriba; preserva el 0 legítimo
     except: return default
 
 def _float(val, default=0.0):
     try:
         if val is None or (isinstance(val, float) and __import__("math").isnan(val)): return default
-        return float(val) if val else default
+        return float(val)  # preserva el 0 legítimo (no coalescer con default)
     except: return default
 
 def load_params_from_db():
@@ -136,6 +138,8 @@ def load_params_from_db():
             activo              = bool(row.get("activo", True)),
             t_cambio_hrs        = float(row.get("t_cambio_hrs", 0) or 0),
             pct_dia_max         = float(row.get("pct_dia_max", 1.0) or 1.0),
+            mto                 = bool(row.get("mto", False)),
+            formato             = str(row.get("formato", "") or ""),
         )
         if linea_pref and linea_pref in lineas:
             sku_params[sku].linea_preferida = linea_pref

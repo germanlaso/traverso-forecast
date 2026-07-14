@@ -120,6 +120,11 @@ def migrar():
         # L1Pet A). IMPORTACION viene vacía → linea_cod queda en "".
         linea_cod = _str(row[10])
 
+        # V5 (14-07): Formato (col 15) y MTO (col 16). Guard por si el Excel es
+        # anterior y no trae esas columnas (len(row) < 17). MTO="SI" -> True.
+        formato = _str(row[15]) if len(row) > 15 else ""
+        mto     = (_str(row[16]).upper() == "SI") if len(row) > 16 else False
+
         params = {
             "sku":             sku,
             "descripcion":     _str(row[1]),
@@ -134,9 +139,11 @@ def migrar():
             "t_cambio_hrs":    _float(row[11], 0),
             "linea_preferida": linea_cod,
             "activo":          activo,
+            "mto":             mto,
+            "formato":         formato,
         }
         upsert_sku_params(params)
-        print(f"  SKU {sku}: {params['descripcion'][:35]} | linea={linea_cod} | cap_bod={params['cap_bodega_u']:,}")
+        print(f"  SKU {sku}: {params['descripcion'][:35]} | linea={linea_cod} | cap_bod={params['cap_bodega_u']:,}" + (" | MTO" if mto else ""))
         n_skus += 1
 
     print(f"→ {n_skus} SKUs migrados")

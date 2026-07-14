@@ -336,6 +336,8 @@ def crear_tablas_params():
                 t_cambio_hrs    FLOAT       DEFAULT 0,
                 linea_preferida VARCHAR(20) DEFAULT '',
                 activo          BOOLEAN     DEFAULT TRUE,
+                mto             BOOLEAN     DEFAULT FALSE,
+                formato         VARCHAR(30) DEFAULT '',
                 updated_at      TIMESTAMP   DEFAULT NOW()
             );
 
@@ -348,6 +350,9 @@ def crear_tablas_params():
                 factor_velocidad FLOAT       NOT NULL DEFAULT 1.0,
                 UNIQUE(sku, linea)
             );
+            -- Columnas agregadas post-creación (idempotente para BD existentes)
+            ALTER TABLE mrp_sku_params ADD COLUMN IF NOT EXISTS mto     BOOLEAN     DEFAULT FALSE;
+            ALTER TABLE mrp_sku_params ADD COLUMN IF NOT EXISTS formato VARCHAR(30) DEFAULT '';
         """))
         session.commit()
 
@@ -415,10 +420,10 @@ def upsert_sku_params(p: dict):
         session.execute(text("""
             INSERT INTO mrp_sku_params
                 (sku, descripcion, categoria, tipo, u_por_caja, lead_time_sem, ss_dias,
-                 batch_min_u, batch_mult_u, cap_bodega_u, t_cambio_hrs, linea_preferida, activo, updated_at)
+                 batch_min_u, batch_mult_u, cap_bodega_u, t_cambio_hrs, linea_preferida, activo, mto, formato, updated_at)
             VALUES
                 (:sku, :descripcion, :categoria, :tipo, :u_por_caja, :lead_time_sem, :ss_dias,
-                 :batch_min_u, :batch_mult_u, :cap_bodega_u, :t_cambio_hrs, :linea_preferida, :activo, NOW())
+                 :batch_min_u, :batch_mult_u, :cap_bodega_u, :t_cambio_hrs, :linea_preferida, :activo, :mto, :formato, NOW())
             ON CONFLICT (sku) DO UPDATE SET
                 descripcion     = EXCLUDED.descripcion,
                 categoria       = EXCLUDED.categoria,
@@ -432,6 +437,8 @@ def upsert_sku_params(p: dict):
                 t_cambio_hrs    = EXCLUDED.t_cambio_hrs,
                 linea_preferida = EXCLUDED.linea_preferida,
                 activo          = EXCLUDED.activo,
+                mto             = EXCLUDED.mto,
+                formato         = EXCLUDED.formato,
                 updated_at      = NOW()
         """), p)
         session.commit()

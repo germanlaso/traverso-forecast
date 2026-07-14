@@ -231,13 +231,18 @@ def obtener_pedidos_abiertos(
         conteo_fuente[etiqueta] = len(f)
         filas.extend(f)
 
-    # 2. Agrupar por clave sintética (BD, Doc, SKU): Σ saldo, fecha = mínima
-    #    (fecha única por doc verificada; min queda como salvaguarda defensiva).
+    # 2. Agrupar por clave sintética (BD, Doc, SKU): MAX saldo, fecha = mínima.
+    #    MAX (no Σ) dentro de la misma OV: la query fuente duplica líneas del
+    #    mismo SKU en una OV (bug en revisión con TI); las líneas debieran ser
+    #    iguales -> tomar la mayor. El sumado entre OV distintas se preserva en
+    #    el paso 3. (fecha única por doc verificada; min = salvaguarda defensiva).
     saldo_grupo: dict[tuple, Decimal] = defaultdict(Decimal)
     fecha_grupo: dict[tuple, date | None] = {}
     for r in filas:
         clave = (r["bd"], r["doc"], r["sku"])
-        saldo_grupo[clave] += r["cantidad"]
+        # dedup por máximo dentro de (bd, doc, sku): no sumar líneas repetidas
+        if r["cantidad"] > saldo_grupo.get(clave, Decimal(0)):
+            saldo_grupo[clave] = r["cantidad"]
         f_actual = fecha_grupo.get(clave, "NA")
         if r["fecha"] is not None:
             if f_actual == "NA" or f_actual is None or r["fecha"] < f_actual:
@@ -353,12 +358,16 @@ def obtener_ov_split(
         conteo_fuente[etiqueta] = len(f)
         filas.extend(f)
 
-    # 2. Agrupar por (BD, Doc, SKU): Σ saldo, fecha mínima
+    # 2. Agrupar por (BD, Doc, SKU): MAX saldo (dedup dentro de la misma OV,
+    #    bug de duplicación de la query fuente), fecha mínima. Ver paso 2 de
+    #    obtener_pedidos_abiertos. Sumado entre OV distintas se preserva en paso 3.
     saldo_grupo: dict[tuple, Decimal] = defaultdict(Decimal)
     fecha_grupo: dict[tuple, date | None] = {}
     for r in filas:
         clave = (r["bd"], r["doc"], r["sku"])
-        saldo_grupo[clave] += r["cantidad"]
+        # dedup por máximo dentro de (bd, doc, sku): no sumar líneas repetidas
+        if r["cantidad"] > saldo_grupo.get(clave, Decimal(0)):
+            saldo_grupo[clave] = r["cantidad"]
         f_actual = fecha_grupo.get(clave, "NA")
         if r["fecha"] is not None:
             if f_actual == "NA" or f_actual is None or r["fecha"] < f_actual:
