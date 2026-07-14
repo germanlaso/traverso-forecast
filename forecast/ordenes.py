@@ -208,7 +208,14 @@ def crear_orden_manual(req: OrdenManual):
         fe = _calcular_fecha_entrada(
             req.fecha_entrada or None, fl, req.cantidad_cj, req.sku, fl
         )
-        numero_of = next_numero_of_manual()
+        # Clave natural del modelo: (sku, fecha_lanzamiento, linea) es UNICA.
+        # Si ya existe una orden en ese slot (p.ej. una OFM cancelada, cuya fila
+        # en mrp_ordenes persiste), reutilizamos su numero_of y re-aprobamos
+        # (misma logica que /aprobar). Evita la violacion de uq_orden_sku_fecha_linea
+        # y no prolifera numeros. Slot libre -> nueva OFM-NNNNNN.
+        existente = get_orden_by_key(req.sku, fl, req.linea)
+        reutilizada = bool(existente and existente.get("numero_of"))
+        numero_of = existente["numero_of"] if reutilizada else next_numero_of_manual()
 
         upsert_orden({
             "numero_of":            numero_of,
@@ -241,6 +248,7 @@ def crear_orden_manual(req: OrdenManual):
             "ok":                     True,
             "numero_of":              numero_of,
             "manual":                 True,
+            "reutilizada":            reutilizada,
             "sku":                    req.sku,
             "descripcion":            req.descripcion,
             "tipo":                   "PRODUCCION",

@@ -231,11 +231,16 @@ function ModalCrearOF({linea,skusCandidatos,descBySku,params,capDiaU,capUsadaByF
 
   const upj=params[sku]?.upj??1;
   const fv=params[sku]?.factor_velocidad??1;
-  const ofU=Math.round(Number(cantidad||0)*upj);
-  const ofCapU=fv>0?ofU/fv:ofU;
   const usadaFrac=capUsadaByFecha?.[fecha]??0;
-  const libreU=Math.max(0,capDiaU*(1-usadaFrac));
-  const excede=ofCapU>libreU && ofU>0;
+  // Capacidad libre del día en unidades "de capacidad" (equivalente a fv=1).
+  const libreCapU=Math.max(0,capDiaU*(1-usadaFrac));
+  // Expresada para el SKU elegido: u físicas = capacidad × fv (un SKU lento,
+  // fv<1, rinde MENOS u físicas por unidad de capacidad). Cajas = u / u_por_caja.
+  const libreFisU=Math.round(libreCapU*fv);
+  const libreCj=upj>0?Math.floor(libreFisU/upj):0;
+  const ofFisU=Math.round(Number(cantidad||0)*upj);
+  const ofCj=Number(cantidad||0);
+  const excede=ofFisU>libreFisU && ofFisU>0;
 
   const handleCrear=async()=>{
     if(!sku||!fecha||!(Number(cantidad)>0)){alert("Completá SKU, cantidad (>0) y fecha.");return;}
@@ -283,7 +288,7 @@ function ModalCrearOF({linea,skusCandidatos,descBySku,params,capDiaU,capUsadaByF
           <label style={{fontSize:11,fontWeight:600,display:"block",marginBottom:3}}>Cantidad (cajas)</label>
           <input type="number" min="0" value={cantidad} onChange={e=>setCantidad(e.target.value)}
             style={{...inp,border:`1.5px solid ${C.teal}`}}/>
-          {ofU>0&&<div style={{fontSize:10,color:C.textMuted,marginTop:2}}>≈ {fmtN(ofU)} u físicas</div>}
+          {ofFisU>0&&<div style={{fontSize:10,color:C.textMuted,marginTop:2}}>≈ {fmtN(ofFisU)} u físicas</div>}
         </div>
 
         <div style={{marginBottom:10}}>
@@ -293,13 +298,16 @@ function ModalCrearOF({linea,skusCandidatos,descBySku,params,capDiaU,capUsadaByF
 
         <div style={{background:excede?C.redLt:C.grayLt,border:`0.5px solid ${excede?C.red:C.border}`,
                      borderRadius:7,padding:"8px 10px",marginBottom:16,fontSize:11}}>
+          <div style={{fontSize:10,color:C.textMuted,marginBottom:5}}>
+            Capacidad del día para {sku} (ajustada por factor velocidad {Math.round(fv*100)/100}×)
+          </div>
           <div style={{display:"flex",justifyContent:"space-between"}}>
-            <span style={{color:C.textMuted}}>Capacidad libre del día</span>
-            <span style={{fontWeight:700}}>{fmtN(libreU)} u</span>
+            <span style={{color:C.textMuted}}>Libre</span>
+            <span style={{fontWeight:700}}>{fmtN(libreFisU)} u · {fmtN(libreCj)} cj</span>
           </div>
           <div style={{display:"flex",justifyContent:"space-between",marginTop:2}}>
             <span style={{color:C.textMuted}}>Consume esta OF</span>
-            <span style={{fontWeight:700,color:excede?C.red:C.text}}>{fmtN(ofCapU)} u</span>
+            <span style={{fontWeight:700,color:excede?C.red:C.text}}>{fmtN(ofFisU)} u · {fmtN(ofCj)} cj</span>
           </div>
           {excede&&<div style={{color:C.red,marginTop:4,fontWeight:600}}>
             ⚠ Excede la capacidad disponible del día. Podés crearla igual (turno extra / criterio del planificador).
@@ -394,6 +402,7 @@ export default function DetalleProduccion({
   // de onPlanChanged que solo marca el plan como stale.
   onAprobacionEditada,
   onAprobacionRetirada,
+  onOFMCreada=null,
   planLoading=false,
   onSolicitarPlan=null,
   onIrAStock=null,          // navegar a pestana Stock por SKU
@@ -513,6 +522,19 @@ export default function DetalleProduccion({
       {modalEditar&&<ModalEditar orden={modalEditar.orden} aprobacion={modalEditar.aprobacion}
         onGuardar={(aprobUpdated)=>{
           setModalEditar(null);
+          // Si es una OFM que aún vive en creadasLocal, reflejar la edición ahí
+          // también (evita mostrar valores viejos si App.js no hace upsert).
+          if(aprobUpdated && aprobUpdated.numero_of){
+            setCreadasLocal(prev=>prev.map(o=>o.numero_of===aprobUpdated.numero_of
+              ?{...o,
+                cantidad_real_cj:aprobUpdated.cantidad_real_cj,
+                cantidad_cajas:Number(aprobUpdated.cantidad_real_cj),
+                fecha_lanzamiento_real:aprobUpdated.fecha_lanzamiento_real,
+                fecha_lanzamiento:String(aprobUpdated.fecha_lanzamiento_real||"").slice(0,10),
+                fecha_entrada_real:aprobUpdated.fecha_entrada_real,
+                comentario:aprobUpdated.comentario}
+              :o));
+          }
           // V6.44: reflejo local instantaneo + marcar stale
           if(onAprobacionEditada && aprobUpdated) onAprobacionEditada(aprobUpdated);
           recargar();
@@ -520,14 +542,23 @@ export default function DetalleProduccion({
         onCancelarAprobacion={(numero_of)=>{
           const ord=modalEditar?.orden;
           setModalEditar(null);
-          // Si la OF desaprobada NO esta en plan.ordenes (huerfana), reinyectarla
-          // como pendiente para que no desaparezca de la grilla al instante.
-          const enPlan=new Set((ordenesPlan??[]).map(o=>o.numero_of));
-          if(ord && numero_of && !enPlan.has(numero_of)){
-            setDesaprobadasLocal(prev=>{
-              if(prev.some(o=>o.numero_of===numero_of)) return prev;
-              return [...prev, {...ord, aprobada:false, tipo:'PRODUCCION'}];
-            });
+          const esOFM=String(numero_of||"").startsWith("OFM-");
+          if(esOFM){
+            // OFM creada localmente: al cancelar se ELIMINA de creadasLocal para
+            // que no reaparezca al caer de ordenesAprobadas (bug del duplicado).
+            // No se reinyecta como pendiente: una OFM cancelada desaparece (no
+            // tiene origen en el plan que la vuelva a proponer).
+            setCreadasLocal(prev=>prev.filter(o=>o.numero_of!==numero_of));
+          } else {
+            // Si la OF desaprobada NO esta en plan.ordenes (huerfana), reinyectarla
+            // como pendiente para que no desaparezca de la grilla al instante.
+            const enPlan=new Set((ordenesPlan??[]).map(o=>o.numero_of));
+            if(ord && numero_of && !enPlan.has(numero_of)){
+              setDesaprobadasLocal(prev=>{
+                if(prev.some(o=>o.numero_of===numero_of)) return prev;
+                return [...prev, {...ord, aprobada:false, tipo:'PRODUCCION'}];
+              });
+            }
           }
           // V6.44: quitar de la lista local + marcar stale
           if(onAprobacionRetirada && numero_of) onAprobacionRetirada(numero_of);
@@ -554,8 +585,11 @@ export default function DetalleProduccion({
             const ofm={...data,tipo:"PRODUCCION",cantidad_cajas:Number(data.cantidad_real_cj),
               fecha_lanzamiento:String(data.fecha_lanzamiento_real||"").slice(0,10),aprobada:true,u_por_caja:upj};
             setCreadasLocal(prev=>prev.some(o=>o.numero_of===ofm.numero_of)?prev:[...prev,ofm]);
-            if(onAprobacionEditada) onAprobacionEditada(data);
-            recargar();
+            // Persistencia real: el padre refetchea /ordenes/aprobadas (fuente de
+            // verdad) para que la OFM sobreviva al cambio de pestaña y Stock Diario
+            // la vea. Fallback al reflejo local previo si no se provee el callback.
+            if(onOFMCreada) onOFMCreada();
+            else { if(onAprobacionEditada) onAprobacionEditada(data); recargar(); }
           }}
           onCerrar={()=>setModalCrear(null)}/>;
       })()}

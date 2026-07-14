@@ -1175,6 +1175,16 @@ export default function App() {
               };
             });
           }}
+          onOFMCreada={async () => {
+            // OFM creada/reactivada: refetch autoritativo de aprobadas para que
+            // la OFM entre a ordenesAprobadas (unica fuente de verdad). Asi persiste
+            // al cambiar de pestana y Stock Diario reacciona (aprobFirma cambia).
+            try {
+              const aps = await axios.get(`${API}/ordenes/aprobadas`);
+              setOrdenesAprobadas(aps.data || []);
+            } catch (e) { console.warn('No se pudieron refetchear aprobadas (OFM):', e); }
+            marcarPlanStale();
+          }}
           planLoading={planLoading}
           onIrAStock={irAStock}
           onSolicitarPlan={() => runPlan()}
