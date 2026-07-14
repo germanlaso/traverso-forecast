@@ -969,6 +969,23 @@ def get_proyeccion_diaria_live(sku: str):
         })
         stock_prev = stock_fin
 
+    # encabezado: valores del snapshot (fisico/comprometido/disponible no cambian);
+    # stock_final y stock_min recalculados desde la serie live para consistencia con la curva.
+    _sf_live = [d["stock_fin_u"] for d in dias] if dias else [0]
+    encabezado = {
+        "stock_fisico_u": encab.get("stock_fisico_u"),
+        "stock_fisico_cj": _cj(encab.get("stock_fisico_u")),
+        "comprometido_u": encab.get("comprometido_u"),
+        "comprometido_cj": _cj(encab.get("comprometido_u")),
+        "disponible_inicial_u": encab.get("disponible_inicial_u"),
+        "disponible_inicial_cj": _cj(encab.get("disponible_inicial_u")),
+        "stock_final_u": int(_sf_live[-1]),
+        "stock_final_cj": _cj(int(_sf_live[-1])),
+        "stock_min_u": int(min(_sf_live)),
+        "stock_min_cj": _cj(int(min(_sf_live))),
+        "ss_dias": encab.get("ss_dias"),
+    }
+
     return {
         "disponible": True,
         "live": True,
@@ -979,6 +996,7 @@ def get_proyeccion_diaria_live(sku: str):
         "plan_id": row["id"],
         "fecha_inicio": row["created_at"].date().isoformat() if row["created_at"] else None,
         "horizonte_dias": int(row["horizonte_sem"] or 4) * 7,
+        "encabezado": encabezado,
         "dias": dias,
     }
 
