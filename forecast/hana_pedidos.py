@@ -62,7 +62,7 @@ HANA_PWD_ENV = "HANA_PWD"
 HANA_CONNECT_TIMEOUT_MS = 10000    # apertura de conexión
 HANA_COMM_TIMEOUT_MS    = 30000    # espera de respuesta del SP (CALL)
 
-SP_NOMBRE = "EPV_Notas_de_ventas_abiertas_V2"
+SP_NOMBRE = "EPV_Faltantes_NV_FC_V4"
 
 # (schema, etiqueta BD). Añadir una 3ª empresa aquí no requiere más cambios.
 FUENTES: list[tuple[str, str]] = [
@@ -70,15 +70,21 @@ FUENTES: list[tuple[str, str]] = [
     ("SBO_MONTANER", "MO"),
 ]
 
-# Columnas del SP que SÍ usamos. El resto se descarta (PII).
-COL_NUMERO_DOC    = "Numero Doc"
-COL_ARTICULO      = "Codigo Articulo"
-COL_FECHA_ENTREGA = "Fecha Entrega"
-COL_CANTIDAD      = "Cantidad"
-COLUMNAS_REQUERIDAS = [COL_NUMERO_DOC, COL_ARTICULO, COL_FECHA_ENTREGA, COL_CANTIDAD]
+# Columnas del SP EPV_Faltantes_NV_FC_V4 que SÍ usamos. El resto se descarta (PII).
+# El SP entrega 1 fila por ENTREGA de cada línea de NV; el saldo pendiente se
+# calcula por (NV, SKU) como Cant NV - Σ Cant Ent (ver _leer_fuente).
+COL_NUMERO_DOC    = "Num NV"           # N° Nota de Venta (= la OV)
+COL_ARTICULO      = "Codigo SAP"       # SKU (SIEMPRE Codigo SAP, no Codigo Flex)
+COL_FECHA_ENTREGA = "Fecha Entrega NV" # fecha comprometida de entrega
+COL_CANT_NV       = "Cant NV"          # cantidad pedida (bruto, se repite por fila)
+COL_CANT_ENT      = "Cant Ent"         # cantidad entregada (parcial, 1 por entrega)
+COL_ESTADO        = "Estado NV"        # solo se consideran las "Abierto"
+ESTADO_ABIERTO    = "Abierto"
+COLUMNAS_REQUERIDAS = [COL_NUMERO_DOC, COL_ARTICULO, COL_FECHA_ENTREGA,
+                       COL_CANT_NV, COL_CANT_ENT, COL_ESTADO]
 
 # Verificaciones defensivas de esquema (§4.6: confirmar, no asumir en runtime).
-N_COLUMNAS_ESPERADO = 22       # ambos schemas verificados con 22 columnas idénticas
+N_COLUMNAS_ESPERADO = 39       # TR y MO verificados con 39 columnas idénticas
 DIAS_VENCIDA_ALERTA = 15       # log de alerta si una vencida supera este umbral
 
 
@@ -175,25 +181,59 @@ def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str) -> list[
                 f"Columnas recibidas: {cols}"
             )
 
-        # Índices por NOMBRE (robusto a reordenamientos de columnas)
-        i_doc   = cols.index(COL_NUMERO_DOC)
-        i_sku   = cols.index(COL_ARTICULO)
-        i_fecha = cols.index(COL_FECHA_ENTREGA)
-        i_cant  = cols.index(COL_CANTIDAD)
+        # Índices por NOMBRE (robusto a reordenamientos). "Estado NV" aparece 2
+        # veces en el SP (NV y línea); cols.index toma el 1º (nivel NV), correcto
+        # para filtrar abiertas.
+        i_doc     = cols.index(COL_NUMERO_DOC)
+        i_sku     = cols.index(COL_ARTICULO)
+        i_fecha   = cols.index(COL_FECHA_ENTREGA)
+        i_cant_nv = cols.index(COL_CANT_NV)
+        i_cant_e  = cols.index(COL_CANT_ENT)
+        i_estado  = cols.index(COL_ESTADO)
 
-        filas = []
+        # El SP da 1 fila por entrega de cada línea de NV. Agregamos por (NV, SKU):
+        #   Cant NV  -> una vez (se repite idéntico; max defensivo)
+        #   Cant Ent -> se SUMAN todas las entregas (cada fila = 1 entrega real,
+        #               verificado por Numero Ent distinto)
+        #   saldo = Cant NV - Σ Cant Ent, clamp a 0 (sobre-entrega no es demanda neg.)
+        # Solo Estado NV = "Abierto"; devoluciones/NC NO se consideran (decisión negocio).
+        grupos: dict[tuple, dict] = {}
+        n_raw = 0
         for r in cur.fetchall():
+            if str(r[i_estado]).strip() != ESTADO_ABIERTO:
+                continue
+            n_raw += 1
             fecha = r[i_fecha]
             if isinstance(fecha, datetime):
                 fecha = fecha.date()
+            sku = str(r[i_sku]).strip()
+            cant_nv = Decimal(str(r[i_cant_nv] or 0))
+            cant_e  = Decimal(str(r[i_cant_e]  or 0))
+            clave = (r[i_doc], sku)
+            g = grupos.get(clave)
+            if g is None:
+                grupos[clave] = {"cant_nv": cant_nv, "ent": cant_e, "fecha": fecha}
+            else:
+                if cant_nv > g["cant_nv"]:
+                    g["cant_nv"] = cant_nv          # idénticos; max defensivo
+                g["ent"] += cant_e                  # suma de entregas parciales
+                if fecha is not None and (g["fecha"] is None or fecha < g["fecha"]):
+                    g["fecha"] = fecha              # fecha de entrega mínima
+
+        filas = []
+        for (doc, sku), g in grupos.items():
+            saldo = g["cant_nv"] - g["ent"]
+            if saldo <= 0:
+                continue                            # entregado completo -> sin pendiente
             filas.append({
                 "bd":       etiqueta_bd,
-                "doc":      r[i_doc],
-                "sku":      str(r[i_sku]).strip(),
-                "fecha":    fecha,                       # date | None
-                "cantidad": Decimal(str(r[i_cant] or 0)),
+                "doc":      doc,
+                "sku":      sku,
+                "fecha":    g["fecha"],             # date | None
+                "cantidad": saldo,
             })
-        logger.info("Fuente %s (%s): %d líneas leídas.", etiqueta_bd, schema, len(filas))
+        logger.info("Fuente %s (%s): %d filas Abierto -> %d líneas con saldo pendiente.",
+                    etiqueta_bd, schema, n_raw, len(filas))
         return filas
     finally:
         cur.close()
@@ -231,11 +271,10 @@ def obtener_pedidos_abiertos(
         conteo_fuente[etiqueta] = len(f)
         filas.extend(f)
 
-    # 2. Agrupar por clave sintética (BD, Doc, SKU): MAX saldo, fecha = mínima.
-    #    MAX (no Σ) dentro de la misma OV: la query fuente duplica líneas del
-    #    mismo SKU en una OV (bug en revisión con TI); las líneas debieran ser
-    #    iguales -> tomar la mayor. El sumado entre OV distintas se preserva en
-    #    el paso 3. (fecha única por doc verificada; min = salvaguarda defensiva).
+    # 2. Agrupar por clave sintética (BD, Doc=NV, SKU): MAX saldo, fecha = mínima.
+    #    _leer_fuente ya entrega saldo NETO (Cant NV - Σ Cant Ent) por (NV, SKU),
+    #    una fila por clave -> el MAX es defensivo (no debería fusionar nada aquí).
+    #    El sumado entre NV distintas se preserva en el paso 3.
     saldo_grupo: dict[tuple, Decimal] = defaultdict(Decimal)
     fecha_grupo: dict[tuple, date | None] = {}
     for r in filas:
@@ -358,9 +397,9 @@ def obtener_ov_split(
         conteo_fuente[etiqueta] = len(f)
         filas.extend(f)
 
-    # 2. Agrupar por (BD, Doc, SKU): MAX saldo (dedup dentro de la misma OV,
-    #    bug de duplicación de la query fuente), fecha mínima. Ver paso 2 de
-    #    obtener_pedidos_abiertos. Sumado entre OV distintas se preserva en paso 3.
+    # 2. Agrupar por (BD, Doc=NV, SKU): MAX saldo, fecha mínima. _leer_fuente ya
+    #    entrega saldo NETO por (NV, SKU), una fila por clave -> MAX defensivo.
+    #    Ver paso 2 de obtener_pedidos_abiertos. Sumado entre NV distintas en paso 3.
     saldo_grupo: dict[tuple, Decimal] = defaultdict(Decimal)
     fecha_grupo: dict[tuple, date | None] = {}
     for r in filas:
