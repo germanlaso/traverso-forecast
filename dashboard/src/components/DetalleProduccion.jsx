@@ -108,25 +108,25 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
     || orden?.semana_necesidad
     || ""
   ).slice(0,10));
-  // V6.46: el usuario puede editar fecha_entrada manualmente; si lo hace,
-  // perdemos el auto-recalculo. Trackeamos esto para no sobreescribir su
-  // intencion al cambiar despues fecha_lanzamiento.
-  const [fechaEntEditada,setFechaEntEditada]=useState(false);
-  // V6.46: lead_time del SKU (en semanas). Esta en el plan: orden.lead_time_sem.
-  // Fallback a 1 dia si no esta.
+  // V6.50: lead_time del SKU (semanas) -> días. Fallback 1 día si no viene.
   const leadTimeDias=Math.max(1,Math.round((orden?.lead_time_sem??(1/7))*7));
-  // V6.46: cuando cambia fecha_lanzamiento, recalcular fecha_entrada SOLO si
-  // el usuario no la edito manualmente. Ese es el comportamiento intuitivo:
-  // mover la produccion arrastra la entrada, salvo que el operador haya
-  // querido una entrada especifica.
-  useEffect(()=>{
-    if(fechaEntEditada || !fechaLanz) return;
-    try{
-      const d=new Date(fechaLanz+"T00:00:00");
-      d.setDate(d.getDate()+leadTimeDias);
-      setFechaEnt(d.toISOString().slice(0,10));
-    }catch{}
-  },[fechaLanz,leadTimeDias,fechaEntEditada]);
+  // V6.50: recálculo DIRECTO (sin useEffect, que no disparaba de forma fiable).
+  // Suma leadTimeDias a la fecha de lanzamiento usando aritmética local (sin
+  // toISOString, que mete corrimientos por zona horaria). Devuelve "YYYY-MM-DD".
+  const calcEntrada=(lanz)=>{
+    if(!lanz) return "";
+    const [y,m,dd]=lanz.split("-").map(Number);
+    const d=new Date(y,m-1,dd);            // fecha local, sin hora
+    d.setDate(d.getDate()+leadTimeDias);
+    const p=n=>String(n).padStart(2,"0");
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+  };
+  // Handler del cambio de fecha de lanzamiento: setea el lanzamiento y
+  // recalcula SIEMPRE la entrada (mover la producción reposiciona la entrada).
+  const onCambiaLanzamiento=(nuevaLanz)=>{
+    setFechaLanz(nuevaLanz);
+    setFechaEnt(calcEntrada(nuevaLanz));
+  };
   const [comentario,setComentario]=useState(aprobacion?.comentario||"");
   const [guardando,setGuardando]=useState(false);
   const [cancelando,setCancelando]=useState(false);
@@ -183,10 +183,10 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
         {[
           ["Cantidad real (cj)",<input type="number" value={cantReal} onChange={e=>setCantReal(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`1.5px solid ${C.teal}`,outline:"none"}}/>],
-          ["Fecha lanzamiento real",<input type="date" value={fechaLanz} onChange={e=>setFechaLanz(e.target.value)}
+          ["Fecha lanzamiento real",<input type="date" value={fechaLanz} onChange={e=>onCambiaLanzamiento(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],
           ["Fecha entrada stock real",<input type="date" value={fechaEnt}
-            onChange={e=>{setFechaEnt(e.target.value);setFechaEntEditada(true);}}
+            onChange={e=>setFechaEnt(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],
           ["Comentario",<input type="text" value={comentario} onChange={e=>setComentario(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`0.5px solid ${C.border}`,outline:"none"}}/>],
@@ -575,7 +575,12 @@ export default function DetalleProduccion({
           ...Object.keys(params).filter(sk=>params[sk]?.linea===ln.codigo),
           ...ordLn.map(o=>o.sku),
         ])).sort();
-        const descBySku={};ordenes.forEach(o=>{if(o.sku&&o.descripcion)descBySku[o.sku]=o.descripcion;});
+        // Descripciones desde params (250 SKU de BD, incluye los recién asignados a
+        // una línea que aún no tienen órdenes en el plan, p.ej. Jugo Piña). Fallback a
+        // las órdenes del plan por si algún SKU no estuviera en params.
+        const descBySku={};
+        ordenes.forEach(o=>{if(o.sku&&o.descripcion)descBySku[o.sku]=o.descripcion;});
+        Object.keys(params||{}).forEach(sk=>{if(params[sk]?.descripcion)descBySku[sk]=params[sk].descripcion;});
         const diasHabiles=dias.filter(d=>d.habil).map(d=>d.fecha);
         return <ModalCrearOF linea={ln} skusCandidatos={skusCand} descBySku={descBySku}
           params={params} capDiaU={capDiaU} capUsadaByFecha={capUsada} diasHabiles={diasHabiles}
@@ -787,7 +792,13 @@ export default function DetalleProduccion({
                       // Antes parseaba regex 'Stock:N' del campo 'motivo', que solo
                       // existia para ordenes del MRP clasico (no para OFTs del optimizer).
                       const stockIni = o.stock_inicial_cajas ?? 0;
-                      const cobDias=o.forecast_cajas>0?Math.round((stockIni/o.forecast_cajas)*7):"—";
+                      // Cobertura = días que dura el stock a la demanda diaria promedio.
+                      // La demanda diaria se deriva del SS (ss_cajas = demanda_diaria * ss_dias),
+                      // NO del forecast del día de lanzamiento (que suele ser 0 en la semana en
+                      // curso y hacía dar "—" casi siempre). MTO/baja rotación (ss=0) -> "—".
+                      const ssDias = params[o.sku]?.ss_dias ?? 0;
+                      const demDiaria = (o.ss_cajas > 0 && ssDias > 0) ? (o.ss_cajas / ssDias) : 0;
+                      const cobDias = demDiaria > 0 ? Math.max(0, Math.round(stockIni / demDiaria)) : "—";
                       const rowBg=aprobada?"#F0FAF5":pasada?"#FFF5F5":i%2===0?"#fff":C.grayLt;
                       return(
                         <tr key={i} style={{background:rowBg}}>
