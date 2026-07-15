@@ -114,7 +114,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [] }) 
   // Lista de SKUs (para el buscador)
   useEffect(() => {
     fetch(`${API}/plan/params`).then((r) => r.json()).then((p) => {
-      if (p.skus) setSkuList(p.skus.map((sk) => ({ sku: sk.sku, descripcion: sk.descripcion })));
+      if (p.skus) setSkuList(p.skus.map((sk) => ({ sku: sk.sku, descripcion: sk.descripcion, u_por_caja: sk.u_por_caja })));
     }).catch(() => {});
   }, []);
 
@@ -137,6 +137,8 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [] }) 
 
   const dias = data?.dias ?? [];
   const enc  = data?.encabezado ?? null;
+  // u_por_caja del SKU seleccionado, para convertir entrada_aprobada_u (unidades) a cajas.
+  const upcSel = (skuList.find((x) => x.sku === selSku)?.u_por_caja) || 1;
   const chartData = useMemo(() => dias.map((r) => ({
     name: fmtDs(r.fecha), fecha: r.fecha,
     forecast_cj: r.forecast_cj, pedidos_cj: r.pedidos_cj,
@@ -271,11 +273,18 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [] }) 
                     const neg  = r.estado === "QUIEBRE";
                     const bajo = r.estado === "BAJO_SS";
                     const tieneOft = r.oft_cajas != null && r.oft_cajas > 0;
+                    // Entrada aprobada (OF/OFM): viene en unidades -> a cajas. Es producción
+                    // FIRME (aprobada), distinta de una OFT sugerida por el solver.
+                    const entApr = r.entrada_aprobada_u != null && r.entrada_aprobada_u > 0
+                      ? r.entrada_aprobada_u / upcSel : 0;
                     return (
                       <tr key={r.fecha} style={{ background: neg ? "#FFF0F0" : bajo ? "#FFFBF0" : i % 2 === 0 ? "#fff" : C.grayLt }}>
                         <td style={{ ...s.td, color: C.textMuted, textAlign: "left" }}>{r.fecha}</td>
-                        <td style={{ ...s.td, textAlign: "right", color: tieneOft ? C.teal : C.textMuted, fontWeight: tieneOft ? 700 : 400 }}>
-                          {tieneOft ? `${fmtN(r.oft_cajas)} cj` : "—"}</td>
+                        <td style={{ ...s.td, textAlign: "right" }}>
+                          {tieneOft && (<span style={{ color: C.teal, fontWeight: 700 }}>{fmtN(r.oft_cajas)} cj</span>)}
+                          {tieneOft && entApr > 0 && <span style={{ color: C.textMuted }}> + </span>}
+                          {entApr > 0 && (<span style={{ color: C.purple, fontWeight: 700 }} title="OF/OFM aprobada (producción firme)">{fmtN(entApr)} cj ✓</span>)}
+                          {!tieneOft && entApr === 0 && <span style={{ color: C.textMuted }}>—</span>}</td>
                         <td style={{ ...s.td, textAlign: "right",
                           color: (r.stock_ini_disp_cj != null && r.stock_ini_disp_cj < 0) ? C.red : C.text }}>
                           {r.stock_ini_disp_cj != null ? fmtN(r.stock_ini_disp_cj) : "—"}</td>
