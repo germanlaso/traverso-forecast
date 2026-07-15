@@ -1083,7 +1083,22 @@ export default function App() {
                   </label>
                   <input type="date"
                     value={aprobForm.fecha_lanzamiento_real}
-                    onChange={e => setAprobForm({...aprobForm, fecha_lanzamiento_real: e.target.value})}
+                    onChange={e => {
+                      // Al mover el lanzamiento, recalcular la entrada = lanz + lead_time.
+                      // lead_time_sem (semanas) -> días; fallback 1 día. Aritmética LOCAL
+                      // (sin toISOString, que corre días por zona horaria).
+                      const lanz = e.target.value;
+                      const leadDias = Math.max(1, Math.round((modalOrden.lead_time_sem ?? (1/7)) * 7));
+                      let entrada = aprobForm.fecha_entrada_real;
+                      if (lanz) {
+                        const [y,m,d] = lanz.split("-").map(Number);
+                        const dt = new Date(y, m-1, d);
+                        dt.setDate(dt.getDate() + leadDias);
+                        const p = n => String(n).padStart(2,"0");
+                        entrada = `${dt.getFullYear()}-${p(dt.getMonth()+1)}-${p(dt.getDate())}`;
+                      }
+                      setAprobForm({...aprobForm, fecha_lanzamiento_real: lanz, fecha_entrada_real: entrada});
+                    }}
                     style={{width:'100%',fontSize:13,padding:'6px 10px',borderRadius:7,border:`0.5px solid ${C.border}`,outline:'none'}}
                   />
                   {aprobForm.fecha_lanzamiento_real !== (modalOrden.fecha_lanzamiento || modalOrden.semana_emision) && (
