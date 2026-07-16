@@ -56,6 +56,7 @@ export default function Faltantes() {
   const [skuFiltro, setSkuFiltro] = useState("");    // filtro opcional por SKU (evolutivo)
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
+  const [expandido, setExpandido] = useState({});   // {sku: true} filas abiertas
 
   // 1. Rango disponible al montar; default: últimos 30 días hasta el último día
   useEffect(() => {
@@ -86,6 +87,7 @@ export default function Faltantes() {
   // 3. Detalle del día seleccionado
   useEffect(() => {
     if (!selFecha) return;
+    setExpandido({});   // al cambiar de día, todo colapsado
     fetch(`${API}/faltantes?fecha=${selFecha}`).then((r) => r.json()).then((d) => {
       setDetalle(d.filas || []);
     }).catch(() => setDetalle([]));
@@ -96,6 +98,22 @@ export default function Faltantes() {
   const skusDia    = useMemo(() => new Set(detalle.map((r) => r.sku)).size, [detalle]);
   const chartData  = useMemo(
     () => serie.map((r) => ({ ...r, name: fmtDs(r.fecha) })), [serie]);
+
+  // Agrupar el detalle por SKU: fila resumen (faltante total del SKU) + clientes.
+  const porSku = useMemo(() => {
+    const m = new Map();
+    for (const r of detalle) {
+      if (!m.has(r.sku)) {
+        m.set(r.sku, { sku: r.sku, descripcion: r.descripcion,
+          stock_ini_cj: r.stock_ini_cj, programado_cj: r.programado_cj,
+          stock_estimado: r.stock_estimado, faltante_cj: 0, clientes: [] });
+      }
+      const g = m.get(r.sku);
+      g.faltante_cj += (r.faltante_cj || 0);
+      g.clientes.push(r);
+    }
+    return Array.from(m.values()).sort((a, b) => b.faltante_cj - a.faltante_cj);
+  }, [detalle]);
 
   const s = {
     card:  { background: "#fff", border: `0.5px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 14 },
@@ -199,24 +217,49 @@ export default function Faltantes() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {["SKU", "Descripción", "Cliente", "Stock", "Programado", "Faltante"].map((h, i) => (
-                    <th key={h} style={{ ...s.th, textAlign: i >= 3 ? "right" : "left" }}>{h}</th>
+                  {["", "SKU", "Descripción", "Clientes", "Stock", "Programado", "Faltante"].map((h, i) => (
+                    <th key={h || i} style={{ ...s.th, textAlign: i >= 4 ? "right" : "left" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {detalle.map((r, i) => (
-                  <tr key={`${r.sku}-${r.cod_cliente}`} style={{ background: i % 2 === 0 ? "#fff" : C.grayLt }}>
-                    <td style={{ ...s.td, fontWeight: 700, color: C.teal }}>
-                      {r.sku}{r.stock_estimado && <span title="Stock estimado (día sin snapshot)" style={{ color: C.amber }}> *</span>}
-                    </td>
-                    <td style={{ ...s.td, color: C.textMuted }}>{r.descripcion}</td>
-                    <td style={s.td}>{r.nom_cliente}</td>
-                    <td style={{ ...s.td, textAlign: "right" }}>{fmtN(r.stock_ini_cj)}</td>
-                    <td style={{ ...s.td, textAlign: "right" }}>{fmtN(r.programado_cj)}</td>
-                    <td style={{ ...s.td, textAlign: "right", fontWeight: 700, color: C.red }}>{fmtN(r.faltante_cj)}</td>
-                  </tr>
-                ))}
+                {porSku.map((g, gi) => {
+                  const abierto = !!expandido[g.sku];
+                  return (
+                    <React.Fragment key={g.sku}>
+                      {/* Fila resumen del SKU (clickeable) */}
+                      <tr onClick={() => setExpandido((e) => ({ ...e, [g.sku]: !e[g.sku] }))}
+                          style={{ background: gi % 2 === 0 ? "#fff" : C.grayLt, cursor: "pointer" }}>
+                        <td style={{ ...s.td, textAlign: "center", color: C.textMuted, width: 26 }}>
+                          {abierto ? "▼" : "▶"}
+                        </td>
+                        <td style={{ ...s.td, fontWeight: 700, color: C.teal }}>
+                          {g.sku}{g.stock_estimado && <span title="Stock estimado (día sin snapshot)" style={{ color: C.amber }}> *</span>}
+                        </td>
+                        <td style={{ ...s.td, color: C.textMuted }}>{g.descripcion}</td>
+                        <td style={s.td}>{g.clientes.length}</td>
+                        <td style={{ ...s.td, textAlign: "right" }}>{fmtN(g.stock_ini_cj)}</td>
+                        <td style={{ ...s.td, textAlign: "right" }}>{fmtN(g.programado_cj)}</td>
+                        <td style={{ ...s.td, textAlign: "right", fontWeight: 700, color: C.red }}>{fmtN(g.faltante_cj)}</td>
+                      </tr>
+                      {/* Sub-filas por cliente (al expandir) */}
+                      {abierto && g.clientes
+                        .slice().sort((a, b) => b.faltante_cj - a.faltante_cj)
+                        .map((r) => (
+                        <tr key={`${g.sku}-${r.cod_cliente}`} style={{ background: C.tealLt }}>
+                          <td style={s.td}></td>
+                          <td style={s.td}></td>
+                          <td style={{ ...s.td, color: C.textMuted, paddingLeft: 20 }} colSpan={2}>
+                            ↳ {r.nom_cliente}
+                          </td>
+                          <td style={s.td}></td>
+                          <td style={s.td}></td>
+                          <td style={{ ...s.td, textAlign: "right", color: C.red }}>{fmtN(r.faltante_cj)}</td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
