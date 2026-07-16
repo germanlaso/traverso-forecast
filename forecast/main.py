@@ -1118,6 +1118,43 @@ def importar_excel_a_bd():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/faltantes", tags=["Faltantes"])
+def get_faltantes(fecha: str):
+    """Detalle de faltantes por quiebre de un día (YYYY-MM-DD): filas por SKU y
+    cliente. Solo lectura de mrp_faltantes (materializado por el cron)."""
+    try:
+        from db_mrp import get_faltantes_por_fecha
+        return {"fecha": fecha, "filas": get_faltantes_por_fecha(fecha)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/faltantes/rango", tags=["Faltantes"])
+def get_faltantes_rango_endpoint():
+    """Rango de fechas disponibles (min/max) para inicializar el selector."""
+    try:
+        from db_mrp import get_faltantes_rango
+        return get_faltantes_rango()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/faltantes/evolutivo", tags=["Faltantes"])
+def get_faltantes_evolutivo_endpoint(desde: str | None = None, hasta: str | None = None,
+                                     sku: str | None = None, cliente: str | None = None):
+    """Serie diaria de faltante total (cajas) en [desde, hasta], filtrable por SKU
+    y/o cliente. Para el gráfico evolutivo del dashboard."""
+    try:
+        from db_mrp import get_faltantes_evolutivo
+        serie = get_faltantes_evolutivo(sku=sku, cod_cliente=cliente, desde=desde, hasta=hasta)
+        # normalizar fecha a str y faltante a float
+        out = [{"fecha": (r["fecha"].isoformat() if hasattr(r["fecha"], "isoformat") else str(r["fecha"])),
+                "faltante_cj": float(r["faltante_cj"] or 0)} for r in serie]
+        return {"desde": desde, "hasta": hasta, "sku": sku, "cliente": cliente, "serie": out}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/regressors", tags=["Estacionalidad"])
 def get_regressors():
     """Retorna todos los regressores de estacionalidad definidos por categoría."""

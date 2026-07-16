@@ -486,15 +486,21 @@ def get_faltantes_por_fecha(fecha: str) -> list[dict]:
 
 
 def get_faltantes_evolutivo(sku: str | None = None,
-                            cod_cliente: str | None = None) -> list[dict]:
-    """Serie diaria de faltante total (cajas), opcionalmente filtrada por SKU y/o
-    cliente. Agrega por fecha."""
+                            cod_cliente: str | None = None,
+                            desde: str | None = None,
+                            hasta: str | None = None) -> list[dict]:
+    """Serie diaria de faltante total (cajas), filtrable por SKU, cliente y rango
+    de fechas [desde, hasta] (YYYY-MM-DD). Agrega por fecha."""
     cond = []
     params: dict = {}
     if sku:
         cond.append("sku = :sku"); params["sku"] = sku
     if cod_cliente:
         cond.append("cod_cliente = :cc"); params["cc"] = cod_cliente
+    if desde:
+        cond.append("fecha >= :d1"); params["d1"] = desde
+    if hasta:
+        cond.append("fecha <= :d2"); params["d2"] = hasta
     where = ("WHERE " + " AND ".join(cond)) if cond else ""
     with get_session() as session:
         rows = session.execute(text(f"""
@@ -503,6 +509,20 @@ def get_faltantes_evolutivo(sku: str | None = None,
             GROUP BY fecha ORDER BY fecha
         """), params).mappings().all()
     return [dict(r) for r in rows]
+
+
+def get_faltantes_rango() -> dict:
+    """Rango de fechas disponibles en mrp_faltantes (para el selector del dashboard)."""
+    with get_session() as session:
+        r = session.execute(text(
+            "SELECT MIN(fecha) AS min_fecha, MAX(fecha) AS max_fecha, "
+            "COUNT(DISTINCT fecha) AS dias FROM mrp_faltantes"
+        )).mappings().first()
+    return {
+        "min_fecha": r["min_fecha"].isoformat() if r and r["min_fecha"] else None,
+        "max_fecha": r["max_fecha"].isoformat() if r and r["max_fecha"] else None,
+        "dias":      (r["dias"] if r else 0),
+    }
 
 
 def upsert_sku_params(p: dict):
