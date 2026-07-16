@@ -353,6 +353,24 @@ def crear_tablas_params():
             -- Columnas agregadas post-creación (idempotente para BD existentes)
             ALTER TABLE mrp_sku_params ADD COLUMN IF NOT EXISTS mto     BOOLEAN     DEFAULT FALSE;
             ALTER TABLE mrp_sku_params ADD COLUMN IF NOT EXISTS formato VARCHAR(30) DEFAULT '';
+
+            -- Informe de faltantes por quiebre (por fecha, SKU y cliente).
+            CREATE TABLE IF NOT EXISTS mrp_faltantes (
+                fecha            DATE        NOT NULL,
+                sku              VARCHAR(30) NOT NULL,
+                descripcion      VARCHAR(120) DEFAULT '',
+                cod_cliente      VARCHAR(30) NOT NULL DEFAULT '',
+                nom_cliente      VARCHAR(120) DEFAULT '',
+                stock_ini_cj     NUMERIC(14,2) DEFAULT 0,
+                programado_cj    NUMERIC(14,2) DEFAULT 0,
+                no_entregado_cj  NUMERIC(14,2) DEFAULT 0,
+                faltante_cj      NUMERIC(14,2) DEFAULT 0,
+                stock_estimado   BOOLEAN     DEFAULT FALSE,
+                updated_at       TIMESTAMP   DEFAULT NOW(),
+                PRIMARY KEY (fecha, sku, cod_cliente)
+            );
+            CREATE INDEX IF NOT EXISTS ix_faltantes_fecha ON mrp_faltantes (fecha);
+            CREATE INDEX IF NOT EXISTS ix_faltantes_sku   ON mrp_faltantes (sku);
         """))
         session.commit()
 
@@ -412,6 +430,79 @@ def borrar_todas_lineas():
     with get_session() as session:
         session.execute(text("DELETE FROM mrp_lineas"))
         session.commit()
+
+
+# ── Faltantes por quiebre ─────────────────────────────────────────────────────
+
+def upsert_faltantes(filas: list[dict]):
+    """Inserta/actualiza filas de mrp_faltantes en batch. Idempotente por PK
+    (fecha, sku, cod_cliente): re-correr un día pisa sus filas sin duplicar.
+    Cada fila: fecha(str YYYY-MM-DD o date), sku, descripcion, cod_cliente,
+    nom_cliente, stock_ini_cj, programado_cj, no_entregado_cj, faltante_cj,
+    stock_estimado."""
+    if not filas:
+        return 0
+    with get_session() as session:
+        session.execute(text("""
+            INSERT INTO mrp_faltantes
+                (fecha, sku, descripcion, cod_cliente, nom_cliente, stock_ini_cj,
+                 programado_cj, no_entregado_cj, faltante_cj, stock_estimado, updated_at)
+            VALUES
+                (:fecha, :sku, :descripcion, :cod_cliente, :nom_cliente, :stock_ini_cj,
+                 :programado_cj, :no_entregado_cj, :faltante_cj, :stock_estimado, NOW())
+            ON CONFLICT (fecha, sku, cod_cliente) DO UPDATE SET
+                descripcion     = EXCLUDED.descripcion,
+                nom_cliente     = EXCLUDED.nom_cliente,
+                stock_ini_cj    = EXCLUDED.stock_ini_cj,
+                programado_cj   = EXCLUDED.programado_cj,
+                no_entregado_cj = EXCLUDED.no_entregado_cj,
+                faltante_cj     = EXCLUDED.faltante_cj,
+                stock_estimado  = EXCLUDED.stock_estimado,
+                updated_at      = NOW()
+        """), filas)
+        session.commit()
+    return len(filas)
+
+
+def borrar_faltantes_rango(desde: str, hasta: str):
+    """Borra faltantes en [desde, hasta] (fechas YYYY-MM-DD). Útil si se quiere
+    recalcular un rango desde cero en vez de upsert (p.ej. si cambió la lógica)."""
+    with get_session() as session:
+        session.execute(text("DELETE FROM mrp_faltantes WHERE fecha BETWEEN :d1 AND :d2"),
+                        {"d1": desde, "d2": hasta})
+        session.commit()
+
+
+def get_faltantes_por_fecha(fecha: str) -> list[dict]:
+    """Faltantes de un día (YYYY-MM-DD), ordenados por faltante desc."""
+    with get_session() as session:
+        rows = session.execute(text("""
+            SELECT fecha, sku, descripcion, cod_cliente, nom_cliente, stock_ini_cj,
+                   programado_cj, no_entregado_cj, faltante_cj, stock_estimado
+            FROM mrp_faltantes WHERE fecha = :f
+            ORDER BY faltante_cj DESC, sku
+        """), {"f": fecha}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_faltantes_evolutivo(sku: str | None = None,
+                            cod_cliente: str | None = None) -> list[dict]:
+    """Serie diaria de faltante total (cajas), opcionalmente filtrada por SKU y/o
+    cliente. Agrega por fecha."""
+    cond = []
+    params: dict = {}
+    if sku:
+        cond.append("sku = :sku"); params["sku"] = sku
+    if cod_cliente:
+        cond.append("cod_cliente = :cc"); params["cc"] = cod_cliente
+    where = ("WHERE " + " AND ".join(cond)) if cond else ""
+    with get_session() as session:
+        rows = session.execute(text(f"""
+            SELECT fecha, SUM(faltante_cj) AS faltante_cj
+            FROM mrp_faltantes {where}
+            GROUP BY fecha ORDER BY fecha
+        """), params).mappings().all()
+    return [dict(r) for r in rows]
 
 
 def upsert_sku_params(p: dict):

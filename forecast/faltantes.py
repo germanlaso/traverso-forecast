@@ -285,37 +285,89 @@ def calcular_faltantes(desde, hasta, conn, engine):
 
 # ── Prueba standalone (un día) ────────────────────────────────────────────────
 
-def _main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if len(sys.argv) > 1:
-        d = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
-    else:
-        d = date.today() - timedelta(days=1)   # ayer (día cerrado)
+def persistir(filas):
+    """Guarda las filas de faltantes en mrp_faltantes (upsert por PK). Import
+    diferido de db_mrp para no acoplar el motor de cálculo a la BD si solo se usa
+    en modo lectura/prueba."""
+    from db_mrp import upsert_faltantes
+    return upsert_faltantes(filas)
 
-    print("=" * 70)
-    print(f"Prueba faltantes por quiebre — día {d.isoformat()}  (read-only)")
-    print("=" * 70)
 
+def ejecutar(desde, hasta, persistir_bd=False):
+    """Calcula faltantes en [desde, hasta] y opcionalmente los persiste."""
     conn = conectar()
     try:
         engine = get_engine()
-        filas = calcular_faltantes(d, d, conn, engine)
+        filas = calcular_faltantes(desde, hasta, conn, engine)
     finally:
         conn.close()
+    if persistir_bd and filas:
+        n = persistir(filas)
+        logger.info("Persistidas %d filas en mrp_faltantes.", n)
+    return filas
+
+
+def _parse_args(argv):
+    """Args flexibles:
+       faltantes.py                       -> prueba de AYER, sin persistir
+       faltantes.py YYYY-MM-DD            -> prueba de ese día, sin persistir
+       faltantes.py --desde D1 --hasta D2 [--persistir]
+       faltantes.py --ventana 14 --persistir   -> últimos 14 días hasta ayer, persiste
+    """
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("fecha", nargs="?", default=None)
+    p.add_argument("--desde"); p.add_argument("--hasta")
+    p.add_argument("--ventana", type=int)
+    p.add_argument("--persistir", action="store_true")
+    a = p.parse_args(argv)
+    ayer = date.today() - timedelta(days=1)
+    if a.ventana:
+        return ayer - timedelta(days=a.ventana - 1), ayer, a.persistir
+    if a.desde or a.hasta:
+        d1 = datetime.strptime(a.desde, "%Y-%m-%d").date() if a.desde else ayer
+        d2 = datetime.strptime(a.hasta, "%Y-%m-%d").date() if a.hasta else ayer
+        return d1, d2, a.persistir
+    if a.fecha:
+        d = datetime.strptime(a.fecha, "%Y-%m-%d").date()
+        return d, d, a.persistir
+    return ayer, ayer, a.persistir
+
+
+def _main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    desde, hasta, persistir_bd = _parse_args(sys.argv[1:])
+
+    print("=" * 70)
+    modo = "PERSISTIENDO" if persistir_bd else "read-only (prueba)"
+    print(f"Faltantes por quiebre — {desde.isoformat()} a {hasta.isoformat()}  [{modo}]")
+    print("=" * 70)
+
+    filas = ejecutar(desde, hasta, persistir_bd=persistir_bd)
 
     if not filas:
-        print("Sin faltantes ese día (o sin entregas programadas).")
+        print("Sin faltantes en el rango (o sin entregas programadas).")
     else:
         tot = sum(f["faltante_cj"] for f in filas)
         n_sku = len(set(f["sku"] for f in filas))
-        print(f"Filas (sku x cliente): {len(filas)} | SKU distintos: {n_sku} | total faltante: {tot:,.0f} cj")
-        print(f"{'SKU':<12} {'stock':>7} {'prog':>7} {'falta':>7} est  {'cliente':<26} descripción")
-        for f in filas:
-            print(f"{f['sku']:<12} {f['stock_ini_cj']:>7.0f} {f['programado_cj']:>7.0f} "
-                  f"{f['faltante_cj']:>7.0f}  {'*' if f['stock_estimado'] else ' '}  "
-                  f"{f['nom_cliente'][:26]:<26} {f['descripcion'][:28]}")
+        n_dias = len(set(f["fecha"] for f in filas))
+        print(f"Filas: {len(filas)} | días con faltante: {n_dias} | SKU distintos: {n_sku} "
+              f"| total faltante: {tot:,.0f} cj")
+        # en modo 1 día, imprime el detalle; en rango largo, solo resumen por día
+        if desde == hasta:
+            print(f"{'SKU':<12} {'stock':>7} {'prog':>7} {'falta':>7} est  {'cliente':<26} descripción")
+            for f in filas:
+                print(f"{f['sku']:<12} {f['stock_ini_cj']:>7.0f} {f['programado_cj']:>7.0f} "
+                      f"{f['faltante_cj']:>7.0f}  {'*' if f['stock_estimado'] else ' '}  "
+                      f"{f['nom_cliente'][:26]:<26} {f['descripcion'][:28]}")
+        else:
+            from collections import defaultdict as _dd
+            por_dia = _dd(float)
+            for f in filas: por_dia[f["fecha"]] += f["faltante_cj"]
+            for fecha in sorted(por_dia):
+                print(f"  {fecha}: {por_dia[fecha]:,.0f} cj")
     print("=" * 70)
-    print("OK — lectura pura, nada persistido.")
+    print("Persistido en mrp_faltantes." if persistir_bd else "Lectura pura, nada persistido.")
     print("=" * 70)
 
 
