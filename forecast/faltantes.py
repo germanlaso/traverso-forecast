@@ -48,6 +48,17 @@ logger = logging.getLogger(__name__)
 # Bodegas del proyecto cuyo stock se suma como disponible para despacho.
 BODEGAS_PROYECTO = ["VESP01", "BSUR01", "VARA01"]
 
+# SKU no-producto (contables/administrativos) que no se despachan y deben
+# excluirse del informe (arriendo, venta de reciclaje, recuperación de gastos, ...).
+SKU_EXCLUIDOS = {"1000000000", "1061000000", "1061000001"}
+
+def _es_unitario(descripcion: str) -> bool:
+    """Un producto de despacho por caja lleva el multiplicador UPCxFORMATO en la
+    descripción (ej. "AJI CREMA 12x1000 DOYPACK"). El unitario NO tiene "x"
+    (ej. "AJI CREMA 1000 DOYPACK"). Se excluyen los unitarios: el informe es en cajas."""
+    d = (descripcion or "")
+    return ("x" not in d) and ("X" not in d)
+
 # Columnas del SP que usamos (por nombre, robusto a reordenamientos).
 _COL_BD          = "BD"
 _COL_NUM_NV      = "Num NV"
@@ -166,6 +177,9 @@ def _agregar_ov_por_sku_dia(grupos, desde, hasta):
     for (_bd, _nv, sku), g in grupos.items():
         fp = g["fecha_prog"]
         if fp is None or fp < desde or fp > hasta:
+            continue
+        # Excluir no-producto (contables) y unitarios (sin "x" en la descripción).
+        if sku in SKU_EXCLUIDOS or _es_unitario(g["descripcion"]):
             continue
         entregado_a_fp = sum(c for (fe, c) in g["entregas"] if fe is not None and fe <= fp)
         no_ent = g["programado"] - entregado_a_fp
