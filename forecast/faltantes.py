@@ -57,6 +57,8 @@ _COL_CANT_NV     = "Cant NV"
 _COL_CANT_ENT    = "Cant Ent"
 _COL_FECHA_PROG  = "Fecha Entrega NV"    # fecha comprometida de entrega
 _COL_FECHA_ENT   = "Fecha Ent"           # fecha de cada entrega (despacho)
+_COL_COD_CLI     = "Cod Cliente"
+_COL_NOM_CLI     = "Nom Cliente"
 _COLS_REQ = [_COL_BD, _COL_NUM_NV, _COL_SKU, _COL_CANT_NV, _COL_CANT_ENT,
              _COL_FECHA_PROG, _COL_FECHA_ENT]
 
@@ -114,6 +116,8 @@ def _leer_ov(conn):
                 raise RuntimeError(f"{schema}.{SP_NOMBRE}: faltan columnas {faltan}")
             ix = {c: cols.index(c) for c in _COLS_REQ}
             ix_desc = cols.index(_COL_DESC) if _COL_DESC in cols else None
+            ix_cod  = cols.index(_COL_COD_CLI) if _COL_COD_CLI in cols else None
+            ix_nom  = cols.index(_COL_NOM_CLI) if _COL_NOM_CLI in cols else None
             n = 0
             for r in cur.fetchall():
                 sku = str(r[ix[_COL_SKU]]).strip()
@@ -125,7 +129,9 @@ def _leer_ov(conn):
                     g = {"fecha_prog": _as_date(r[ix[_COL_FECHA_PROG]]),
                          "programado": _num(r[ix[_COL_CANT_NV]]),
                          "entregas": [],
-                         "descripcion": (str(r[ix_desc]).strip() if ix_desc is not None and r[ix_desc] else "")}
+                         "descripcion": (str(r[ix_desc]).strip() if ix_desc is not None and r[ix_desc] else ""),
+                         "cod_cli": (str(r[ix_cod]).strip() if ix_cod is not None and r[ix_cod] else ""),
+                         "nom_cli": (str(r[ix_nom]).strip() if ix_nom is not None and r[ix_nom] else "")}
                     grupos[clave] = g
                 else:
                     fp = _as_date(r[ix[_COL_FECHA_PROG]])
@@ -146,12 +152,16 @@ def _leer_ov(conn):
 
 def _agregar_ov_por_sku_dia(grupos, desde, hasta):
     """
-    Colapsa los grupos (bd,nv,sku) a (sku, fecha_prog) dentro de [desde, hasta]:
-      programado_total  = Σ programado
-      no_entregado_total= Σ max(0, programado − Σ ent con fecha_ent <= fecha_prog)
-    Devuelve: dict[(sku,fecha)] -> {programado, no_entregado}, dict[sku] -> descripcion
+    Colapsa los grupos (bd,nv,sku) dentro de [desde, hasta] a DOS niveles:
+      - tot[(sku,fecha)]              = {programado_total}  (para evaluar el quiebre,
+                                         que es a nivel SKU/día: stock es pool común)
+      - por_cli[(sku,fecha,cod_cli)]  = {no_entregado, nom_cli}  (desglose por cliente:
+                                         cada cliente aporta SU no-entregado)
+    Una NV es de un solo cliente → el cliente es constante dentro del grupo (bd,nv,sku).
+    Devuelve: tot, por_cli, desc[sku]
     """
-    agg = defaultdict(lambda: {"programado": 0.0, "no_entregado": 0.0})
+    tot     = defaultdict(lambda: {"programado": 0.0})
+    por_cli = defaultdict(lambda: {"no_entregado": 0.0, "nom_cli": ""})
     desc = {}
     for (_bd, _nv, sku), g in grupos.items():
         fp = g["fecha_prog"]
@@ -161,12 +171,13 @@ def _agregar_ov_por_sku_dia(grupos, desde, hasta):
         no_ent = g["programado"] - entregado_a_fp
         if no_ent < 0:
             no_ent = 0.0
-        a = agg[(sku, fp)]
-        a["programado"]  += g["programado"]
-        a["no_entregado"] += no_ent
+        tot[(sku, fp)]["programado"] += g["programado"]
+        pc = por_cli[(sku, fp, g["cod_cli"])]
+        pc["no_entregado"] += no_ent
+        pc["nom_cli"] = g["nom_cli"]
         if g["descripcion"]:
             desc[sku] = g["descripcion"]
-    return agg, desc
+    return tot, por_cli, desc
 
 
 # ── Stock desde SQL Server ────────────────────────────────────────────────────
@@ -231,31 +242,44 @@ def calcular_faltantes(desde, hasta, conn, engine):
        faltante_cj, stock_estimado}
     """
     grupos = _leer_ov(conn)
-    agg, desc = _agregar_ov_por_sku_dia(grupos, desde, hasta)
+    tot, por_cli, desc = _agregar_ov_por_sku_dia(grupos, desde, hasta)
 
     stock, dias_disp = _leer_stock(engine, desde, hasta)
     dias_ord = sorted(dias_disp)
 
-    filas = []
-    for (sku, fecha), a in agg.items():
+    # 1) evaluar quiebre a nivel SKU/día (stock es pool común, no por cliente)
+    quiebre = {}   # (sku,fecha) -> (hay_quiebre, stock_ini, estimado, programado)
+    for (sku, fecha), a in tot.items():
         programado = a["programado"]
         if programado <= 0:
             continue
         stock_ini, estimado = _stock_del_dia(stock, dias_disp, dias_ord, sku, fecha)
-        if stock_ini < programado:
-            faltante = a["no_entregado"]
-            if faltante > 0:
-                filas.append({
-                    "fecha":            fecha.isoformat(),
-                    "sku":              sku,
-                    "descripcion":      desc.get(sku, ""),
-                    "stock_ini_cj":     round(stock_ini, 2),
-                    "programado_cj":    round(programado, 2),
-                    "no_entregado_cj":  round(a["no_entregado"], 2),
-                    "faltante_cj":      round(faltante, 2),
-                    "stock_estimado":   estimado,
-                })
-    filas.sort(key=lambda x: (x["fecha"], x["sku"]))
+        quiebre[(sku, fecha)] = (stock_ini < programado, stock_ini, estimado, programado)
+
+    # 2) emitir una fila por (sku, fecha, cliente) cuando hay quiebre y ese cliente
+    #    tiene no-entregado > 0. stock/programado son del SKU/día (se repiten como contexto).
+    filas = []
+    for (sku, fecha, cod_cli), pc in por_cli.items():
+        q = quiebre.get((sku, fecha))
+        if not q or not q[0]:
+            continue
+        no_ent = pc["no_entregado"]
+        if no_ent <= 0:
+            continue
+        _, stock_ini, estimado, programado = q
+        filas.append({
+            "fecha":            fecha.isoformat(),
+            "sku":              sku,
+            "descripcion":      desc.get(sku, ""),
+            "cod_cliente":      cod_cli,
+            "nom_cliente":      pc["nom_cli"],
+            "stock_ini_cj":     round(stock_ini, 2),
+            "programado_cj":    round(programado, 2),
+            "no_entregado_cj":  round(no_ent, 2),
+            "faltante_cj":      round(no_ent, 2),
+            "stock_estimado":   estimado,
+        })
+    filas.sort(key=lambda x: (x["fecha"], x["sku"], -x["faltante_cj"]))
     return filas
 
 
@@ -283,12 +307,13 @@ def _main():
         print("Sin faltantes ese día (o sin entregas programadas).")
     else:
         tot = sum(f["faltante_cj"] for f in filas)
-        print(f"SKU con faltante: {len(filas)} | total faltante: {tot:,.0f} cj")
-        print(f"{'SKU':<12} {'stock':>9} {'prog':>9} {'noEnt':>9} {'falta':>9}  est  descripción")
+        n_sku = len(set(f["sku"] for f in filas))
+        print(f"Filas (sku x cliente): {len(filas)} | SKU distintos: {n_sku} | total faltante: {tot:,.0f} cj")
+        print(f"{'SKU':<12} {'stock':>7} {'prog':>7} {'falta':>7} est  {'cliente':<26} descripción")
         for f in filas:
-            print(f"{f['sku']:<12} {f['stock_ini_cj']:>9.0f} {f['programado_cj']:>9.0f} "
-                  f"{f['no_entregado_cj']:>9.0f} {f['faltante_cj']:>9.0f}  "
-                  f"{'*' if f['stock_estimado'] else ' '}   {f['descripcion'][:34]}")
+            print(f"{f['sku']:<12} {f['stock_ini_cj']:>7.0f} {f['programado_cj']:>7.0f} "
+                  f"{f['faltante_cj']:>7.0f}  {'*' if f['stock_estimado'] else ' '}  "
+                  f"{f['nom_cliente'][:26]:<26} {f['descripcion'][:28]}")
     print("=" * 70)
     print("OK — lectura pura, nada persistido.")
     print("=" * 70)
