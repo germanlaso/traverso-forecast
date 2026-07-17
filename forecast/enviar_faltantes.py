@@ -26,6 +26,8 @@ from datetime import date, datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
+from email.utils import formataddr
+from email.header import Header
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,6 +35,8 @@ logger = logging.getLogger(__name__)
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.office365.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "operaciones@traverso.cl")
+# Nombre visible del remitente (display name). Configurable por env.
+SMTP_FROM_NAME = os.environ.get("SMTP_FROM_NAME", "Operaciones Traverso - No Reply")
 
 CAUSA_LABEL = {"sin_stock": "Sin stock (producción)",
                "vu_insuficiente": "VU insuficiente (rotación)"}
@@ -115,7 +119,7 @@ def enviar(fecha=None, destinatarios=None):
 
     msg = MIMEMultipart("mixed")
     msg["Subject"] = f"Informe de Quiebres de Stock — {_fecha_txt(fecha)} — Traverso"
-    msg["From"] = SMTP_USER
+    msg["From"] = formataddr((str(Header(SMTP_FROM_NAME, "utf-8")), SMTP_USER))
     msg["To"] = ", ".join(dest_list)
     msg.attach(MIMEText(_cuerpo_html(fecha, filas), "html", "utf-8"))
 
