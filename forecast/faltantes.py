@@ -7,9 +7,10 @@ Definición (cerrada con negocio):
     - stock_ini_D  = Σ stock (cajas) de las bodegas del proyecto {VESP01,BSUR01,VARA01}
                      en el snapshot de stock de D (dbo.Stock_Lote_Fecha).
     - programado_D = Σ Cant NV de las líneas de OV con Fecha Entrega NV = D.
-    - entregado_a_D= Σ Cant Ent de esas líneas cuya Fecha Ent <= D  (entregas tardías
-                     NO cuentan como entregadas en D → cuentan como faltante en D).
-    - no_entregado_D = max(0, programado_D − entregado_a_D).
+    - entregado_D  = Σ Cant Ent de esas líneas (TODAS las entregas, incluidas las
+                     tardías → una entrega posterior reduce el faltante: mide el quiebre
+                     efectivo NO resuelto, no el incumplimiento de la fecha).
+    - no_entregado_D = max(0, programado_D − entregado_D).
   REGLA: si stock_ini_D < programado_D  →  faltante_D = no_entregado_D  (si no, 0).
 
 Fuentes:
@@ -51,6 +52,12 @@ BODEGAS_PROYECTO = ["VESP01", "BSUR01", "VARA01"]
 # SKU no-producto (contables/administrativos) que no se despachan y deben
 # excluirse del informe (arriendo, venta de reciclaje, recuperación de gastos, ...).
 SKU_EXCLUIDOS = {"1000000000", "1061000000", "1061000001"}
+
+# Días mínimos de vida útil restante para que un lote cuente como stock disponible.
+# Se descarta el stock vencido o por vencer en menos de este umbral.
+# PENDIENTE: reemplazar por regla basada en la VU total del maestro de artículos
+#            (ej. descartar si VU restante < 10% de la VU total en meses).
+MIN_DIAS_VU = 15
 
 def _es_unitario(descripcion: str) -> bool:
     """Un producto de despacho por caja lleva el multiplicador UPCxFORMATO en la
@@ -181,8 +188,14 @@ def _agregar_ov_por_sku_dia(grupos, desde, hasta):
         # Excluir no-producto (contables) y unitarios (sin "x" en la descripción).
         if sku in SKU_EXCLUIDOS or _es_unitario(g["descripcion"]):
             continue
-        entregado_a_fp = sum(c for (fe, c) in g["entregas"] if fe is not None and fe <= fp)
-        no_ent = g["programado"] - entregado_a_fp
+        # Opción 2 (quiebre efectivo NO resuelto): el faltante es lo que quedó sin
+        # entregar CONSIDERANDO todas las entregas, incluidas las tardías. Una entrega
+        # posterior a la fecha programada SÍ reduce el faltante (a diferencia de la
+        # opción 1, que contaba solo lo entregado hasta la fecha). Esto implica que el
+        # faltante de un día baja a medida que se completan entregas atrasadas → por eso
+        # el cron recalcula una ventana móvil de días recientes.
+        entregado_total = sum(c for (fe, c) in g["entregas"])
+        no_ent = g["programado"] - entregado_total
         if no_ent < 0:
             no_ent = 0.0
         tot[(sku, fp)]["programado"] += g["programado"]
@@ -203,6 +216,10 @@ def _leer_stock(engine, desde, hasta):
     FECHA DESCARGA INFO es texto DD-MM-YYYY → TRY_CONVERT(date, ..., 105).
     Devuelve: stock_por_dia[fecha][sku] = cajas, y set de días con snapshot.
     """
+    # Filtro de vida útil: un lote cuenta solo si su FECHA VCTO es >= (fecha snapshot
+    # + MIN_DIAS_VU). Los lotes sin FECHA VCTO (NULL) SÍ se cuentan (no se castiga por
+    # ausencia de dato). El descarte se evalúa contra la fecha del propio snapshot, no
+    # contra hoy, para que el backfill histórico sea coherente día a día.
     q = text("""
         SELECT
             TRY_CONVERT(date, LTRIM(RTRIM([FECHA DESCARGA INFO])), 105) AS f,
@@ -211,13 +228,19 @@ def _leer_stock(engine, desde, hasta):
         FROM dbo.Stock_Lote_Fecha
         WHERE [BODEGA] IN :bod
           AND TRY_CONVERT(date, LTRIM(RTRIM([FECHA DESCARGA INFO])), 105) BETWEEN :d1 AND :d2
+          AND (
+                TRY_CONVERT(date, LTRIM(RTRIM([FECHA VCTO])), 105) IS NULL
+                OR TRY_CONVERT(date, LTRIM(RTRIM([FECHA VCTO])), 105)
+                   >= DATEADD(day, :min_vu, TRY_CONVERT(date, LTRIM(RTRIM([FECHA DESCARGA INFO])), 105))
+              )
         GROUP BY TRY_CONVERT(date, LTRIM(RTRIM([FECHA DESCARGA INFO])), 105), LTRIM(RTRIM([CODIGO]))
     """).bindparams(bindparam("bod", expanding=True))
 
     stock = defaultdict(dict)   # fecha -> {sku: cajas}
     dias = set()
     with engine.connect() as c:
-        for f, sku, cj in c.execute(q, {"bod": BODEGAS_PROYECTO, "d1": desde, "d2": hasta}).fetchall():
+        for f, sku, cj in c.execute(q, {"bod": BODEGAS_PROYECTO, "d1": desde, "d2": hasta,
+                                  "min_vu": MIN_DIAS_VU}).fetchall():
             if f is None:
                 continue
             fd = f if isinstance(f, date) else _as_date(f)
