@@ -229,7 +229,26 @@ export default function Faltantes() {
           <button style={{ ...s.btn, opacity: selFecha ? 1 : 0.5 }}
             title="Descargar informe del día en Excel"
             disabled={!selFecha}
-            onClick={() => { if (selFecha) window.open(`${API}/faltantes/excel?fecha=${selFecha}`, "_blank"); }}>
+            onClick={async () => {
+              if (!selFecha) return;
+              try {
+                // fetch + blob: pasa por el proxy de CRA (como los otros llamados),
+                // a diferencia de window.open que navega y abre la app.
+                const resp = await fetch(`${API}/faltantes/excel?fecha=${selFecha}`);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `Informe_Quiebres_${selFecha}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              } catch (e) {
+                alert("No se pudo descargar el Excel: " + e.message);
+              }
+            }}>
             ↓ Excel
           </button>
         </div>
