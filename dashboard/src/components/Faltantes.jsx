@@ -26,6 +26,11 @@ const fmtDs = (s) => {
   return p.length === 3 ? `${p[2]}-${p[1]}` : s;
 };
 
+// Causa: etiqueta legible y color. sin_stock = rojo (produccion), vu_insuficiente = ambar (rotacion).
+const CAUSA_LABEL = { sin_stock: "Sin stock", vu_insuficiente: "VU insuficiente" };
+const causaColor = (causa, C) => (causa === "vu_insuficiente" ? C.amber : C.red);
+const causaBg    = (causa, C) => (causa === "vu_insuficiente" ? C.amberLt : C.redLt);
+
 // resta d días a una fecha YYYY-MM-DD con aritmética local (sin toISOString)
 const restarDias = (iso, dias) => {
   if (!iso) return iso;
@@ -57,6 +62,7 @@ export default function Faltantes() {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
   const [expandido, setExpandido] = useState({});   // {sku: true} filas abiertas
+  const [filtroCausa, setFiltroCausa] = useState("todo"); // todo | sin_stock | vu_insuficiente
 
   // 1. Rango disponible al montar; default: últimos 30 días hasta el último día
   useEffect(() => {
@@ -94,26 +100,34 @@ export default function Faltantes() {
   }, [selFecha]);
 
   const totalRango = useMemo(() => serie.reduce((s, r) => s + (r.faltante_cj || 0), 0), [serie]);
-  const totalDia   = useMemo(() => detalle.reduce((s, r) => s + (r.faltante_cj || 0), 0), [detalle]);
-  const skusDia    = useMemo(() => new Set(detalle.map((r) => r.sku)).size, [detalle]);
+  // detalle filtrado por causa (para tabla y KPIs del dia)
+  const detalleF = useMemo(
+    () => (filtroCausa === "todo" ? detalle : detalle.filter((r) => r.causa === filtroCausa)),
+    [detalle, filtroCausa]);
+  const totalDia   = useMemo(() => detalleF.reduce((s, r) => s + (r.faltante_cj || 0), 0), [detalleF]);
+  // faltante del dia partido por causa (para KPIs, siempre sobre el detalle completo)
+  const totSinStock = useMemo(() => detalle.filter(r=>r.causa==="sin_stock").reduce((s,r)=>s+(r.faltante_cj||0),0), [detalle]);
+  const totVU       = useMemo(() => detalle.filter(r=>r.causa==="vu_insuficiente").reduce((s,r)=>s+(r.faltante_cj||0),0), [detalle]);
+  const skusDia    = useMemo(() => new Set(detalleF.map((r) => r.sku)).size, [detalleF]);
   const chartData  = useMemo(
     () => serie.map((r) => ({ ...r, name: fmtDs(r.fecha) })), [serie]);
 
   // Agrupar el detalle por SKU: fila resumen (faltante total del SKU) + clientes.
   const porSku = useMemo(() => {
     const m = new Map();
-    for (const r of detalle) {
+    for (const r of detalleF) {
       if (!m.has(r.sku)) {
         m.set(r.sku, { sku: r.sku, descripcion: r.descripcion,
           stock_ini_cj: r.stock_ini_cj, programado_cj: r.programado_cj,
-          stock_estimado: r.stock_estimado, faltante_cj: 0, clientes: [] });
+          stock_estimado: r.stock_estimado, faltante_cj: 0, clientes: [], causas: new Set() });
       }
       const g = m.get(r.sku);
       g.faltante_cj += (r.faltante_cj || 0);
       g.clientes.push(r);
+      if (r.causa) g.causas.add(r.causa);
     }
     return Array.from(m.values()).sort((a, b) => b.faltante_cj - a.faltante_cj);
-  }, [detalle]);
+  }, [detalleF]);
 
   const s = {
     card:  { background: "#fff", border: `0.5px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 14 },
@@ -155,6 +169,14 @@ export default function Faltantes() {
             <input type="text" value={skuFiltro} placeholder="código SKU"
               onChange={(e) => setSkuFiltro(e.target.value.trim())} style={{ ...s.inp, width: 140 }} />
           </div>
+          <div>
+            <div style={s.lbl}>Causa</div>
+            <select value={filtroCausa} onChange={(e) => setFiltroCausa(e.target.value)} style={s.inp}>
+              <option value="todo">Todas</option>
+              <option value="sin_stock">Sin stock</option>
+              <option value="vu_insuficiente">VU insuficiente</option>
+            </select>
+          </div>
           {rango && (
             <div style={{ fontSize: 12, color: C.textMuted }}>
               Disponible: {rango.min_fecha} → {rango.max_fecha} ({rango.dias} días con datos)
@@ -163,11 +185,12 @@ export default function Faltantes() {
         </div>
 
         {/* KPIs */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 }}>
           <KPI label="Faltante del rango" value={`${fmtN(totalRango)} cj`} color={C.red} />
           <KPI label={`Faltante del día (${selFecha ? fmtDs(selFecha) : "—"})`} value={`${fmtN(totalDia)} cj`} color={C.red} />
+          <KPI label="Por falta de stock" value={`${fmtN(totSinStock)} cj`} color={C.red} sub="problema de producción" />
+          <KPI label="Por VU insuficiente" value={`${fmtN(totVU)} cj`} color={C.amber} sub="problema de rotación" />
           <KPI label="SKU con faltante (día)" value={skusDia} />
-          <KPI label="Líneas del día" value={detalle.length} sub="SKU × cliente" />
         </div>
 
         {error && <div style={{ color: C.red, fontSize: 13, marginBottom: 10 }}>Error: {error}</div>}
@@ -217,8 +240,8 @@ export default function Faltantes() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {["", "SKU", "Descripción", "Clientes", "Stock", "Programado", "Faltante"].map((h, i) => (
-                    <th key={h || i} style={{ ...s.th, textAlign: i >= 4 ? "right" : "left" }}>{h}</th>
+                  {["", "SKU", "Descripción", "Causa", "Clientes", "Stock", "Programado", "Faltante"].map((h, i) => (
+                    <th key={h || i} style={{ ...s.th, textAlign: i >= 5 ? "right" : "left" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -237,6 +260,20 @@ export default function Faltantes() {
                           {g.sku}{g.stock_estimado && <span title="Stock estimado (día sin snapshot)" style={{ color: C.amber }}> *</span>}
                         </td>
                         <td style={{ ...s.td, color: C.textMuted }}>{g.descripcion}</td>
+                        <td style={s.td}>
+                          {(() => {
+                            const cs = Array.from(g.causas || []);
+                            if (cs.length === 0) return null;
+                            if (cs.length > 1) return (
+                              <span style={{ fontSize: 11, fontWeight: 600, color: C.gray }}>Mixta</span>);
+                            const cz = cs[0];
+                            return (
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
+                                color: causaColor(cz, C), background: causaBg(cz, C) }}>
+                                {CAUSA_LABEL[cz] || cz}
+                              </span>);
+                          })()}
+                        </td>
                         <td style={s.td}>{g.clientes.length}</td>
                         <td style={{ ...s.td, textAlign: "right" }}>{fmtN(g.stock_ini_cj)}</td>
                         <td style={{ ...s.td, textAlign: "right" }}>{fmtN(g.programado_cj)}</td>
@@ -252,9 +289,14 @@ export default function Faltantes() {
                           <td style={{ ...s.td, color: C.textMuted, paddingLeft: 20 }} colSpan={2}>
                             ↳ {r.nom_cliente}
                           </td>
+                          <td style={s.td}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: causaColor(r.causa, C) }}>
+                              {CAUSA_LABEL[r.causa] || ""}
+                            </span>
+                          </td>
                           <td style={s.td}></td>
                           <td style={s.td}></td>
-                          <td style={{ ...s.td, textAlign: "right", color: C.red }}>{fmtN(r.faltante_cj)}</td>
+                          <td style={{ ...s.td, textAlign: "right", color: causaColor(r.causa, C) }}>{fmtN(r.faltante_cj)}</td>
                         </tr>
                       ))}
                     </React.Fragment>
