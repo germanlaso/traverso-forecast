@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -1151,6 +1152,25 @@ def get_faltantes_evolutivo_endpoint(desde: str | None = None, hasta: str | None
         out = [{"fecha": (r["fecha"].isoformat() if hasattr(r["fecha"], "isoformat") else str(r["fecha"])),
                 "faltante_cj": float(r["faltante_cj"] or 0)} for r in serie]
         return {"desde": desde, "hasta": hasta, "sku": sku, "cliente": cliente, "serie": out}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/faltantes/excel", tags=["Faltantes"])
+def get_faltantes_excel(fecha: str):
+    """Genera y descarga el Informe de Quiebres de Stock (xlsx) de un día
+    (YYYY-MM-DD): pestaña resumen por SKU + pestaña detalle por cliente."""
+    try:
+        from db_mrp import get_faltantes_por_fecha
+        import faltantes_excel
+        filas = get_faltantes_por_fecha(fecha)
+        contenido = faltantes_excel.generar_bytes(fecha, filas)
+        nombre = f"Informe_Quiebres_{fecha}.xlsx"
+        return Response(
+            content=contenido,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -226,8 +226,10 @@ export default function Faltantes() {
           <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
             Detalle del {selFecha || "—"} · {fmtN(totalDia)} cj en {skusDia} SKU
           </div>
-          <button style={s.btn} title="Próximamente"
-            onClick={() => alert("Descarga de Excel: disponible en la próxima versión.")}>
+          <button style={{ ...s.btn, opacity: selFecha ? 1 : 0.5 }}
+            title="Descargar informe del día en Excel"
+            disabled={!selFecha}
+            onClick={() => { if (selFecha) window.open(`${API}/faltantes/excel?fecha=${selFecha}`, "_blank"); }}>
             ↓ Excel
           </button>
         </div>
