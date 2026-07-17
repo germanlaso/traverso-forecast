@@ -16,23 +16,23 @@ Definición (cerrada con negocio):
 
   Stock (cajas) del SKU el día D, en las bodegas del proyecto {VESP01,BSUR01,VARA01}:
     - stock_total       = Σ lotes NO vencidos (vcto >= D, o sin vcto).
-    - stock_apto_canal  = Σ lotes con VU restante >= umbral del canal del cliente:
-                            · Supermercados Nacionales: VU restante > 50% de la VU total
-                            · Resto (y sin canal):      VU restante > 30% de la VU total
-                          VU total = MesDuracion (maestro de artículos) × 30 días.
+    - stock_apto        = Σ lotes con VU restante >= umbral de (cliente, SKU):
+                            · Si el par está en la tabla de logística (mrp_vu_cliente_sku):
+                              VU restante >= mínimo en DÍAS absolutos de esa tabla.
+                            · Si no: VU restante >= 50% de la VU total (MesDuracion × 30).
 
   CAUSA de la no-entrega (columna del informe):
     - stock_total < programado                         → 'sin_stock'
         (no alcanzaba ni contando todo el stock: problema de producción/abastecimiento)
-    - stock_total >= programado > stock_apto_canal     → 'vu_insuficiente'
-        (había producto, pero no con la frescura que el canal exige: problema de rotación)
-    - stock_apto_canal >= programado                   → NO es faltante por stock (se ignora)
+    - stock_total >= programado > stock_apto           → 'vu_insuficiente'
+        (había producto, pero no con la frescura requerida: problema de rotación)
+    - stock_apto >= programado                         → NO es faltante por stock (se ignora)
 
 Fuentes (todas ya usadas por el sistema):
   - OV/entregas: SAP HANA, SP EPV_Faltantes_NV_FC_V4 (schemas TR+MO), vía hana_pedidos.
   - Stock diario por lote (con FECHA VCTO): SQL Server, dbo.Stock_Lote_Fecha.
   - Vida útil por SKU (meses): SQL Server, dbo.MaestraArticuloV2 (solo PT='Y').
-  - Canal por cliente: SQL Server, SP dbo.spMaestraClientesv4 (campo Canal).
+  - VU mínima por cliente×SKU (días): Postgres, mrp_vu_cliente_sku (tabla de logística).
 
 Notas de datos:
   - STOCK y Cant NV/Ent están en cajas → comparación directa, sin conversión.
@@ -64,9 +64,11 @@ logger = logging.getLogger(__name__)
 BODEGAS_PROYECTO = ["VESP01", "BSUR01", "VARA01"]
 SKU_EXCLUIDOS = {"1000000000", "1061000000", "1061000001"}
 
-CANAL_SUPER_NACIONAL = "SUPERMERCADOS NACIONALES"
-PCT_VU_SUPER = 0.50
-PCT_VU_RESTO = 0.30
+# Umbral de vida útil para despacho:
+#  - Si el par (cliente, SKU) está en la tabla de logística (mrp_vu_cliente_sku),
+#    se usa su mínimo en DÍAS absolutos.
+#  - Si no está, se usa PCT_VU_DEFAULT de la VU total del maestro (MesDuracion×30).
+PCT_VU_DEFAULT = 0.50
 DIAS_POR_MES = 30
 
 
@@ -105,25 +107,17 @@ def _es_unitario(descripcion):
 
 # ── Canal por cliente ─────────────────────────────────────────────────────────
 
-def _leer_canales(engine):
-    """set de cod_cliente que son SUPERMERCADOS NACIONALES (si alguna de sus filas lo es)."""
-    supers = set()
-    with engine.connect() as c:
-        res = c.execute(text("EXEC [dbo].[spMaestraClientesv4]"))
-        cols = list(res.keys())
-        i_cod = cols.index("Codigo Cliente")
-        i_can = cols.index("Canal")
-        for r in res.fetchall():
-            cod = str(r[i_cod]).strip() if r[i_cod] else None
-            can = str(r[i_can]).strip().upper() if r[i_can] else None
-            if cod and can == CANAL_SUPER_NACIONAL:
-                supers.add(cod)
-    logger.info("Canales: %d clientes SUPERMERCADOS NACIONALES.", len(supers))
-    return supers
-
-
-def _umbral_pct(cod_cliente, supers):
-    return PCT_VU_SUPER if cod_cliente in supers else PCT_VU_RESTO
+def _umbral_dias(cod_cliente, sku, meses_vu, vu_tabla):
+    """Días mínimos de VU restante para que un lote sea apto para (cliente, sku).
+      - Si (cliente, sku) está en la tabla de logística → su mínimo en días absolutos.
+      - Si no → PCT_VU_DEFAULT × VU_total del maestro (meses_vu × 30).
+    Devuelve None si no hay forma de fijar umbral (SKU sin VU y sin fila en tabla):
+    en ese caso no se filtra por VU (apto = total, solo se descartan vencidos)."""
+    md = vu_tabla.get((cod_cliente, sku))
+    if md is not None:
+        return md
+    vu_total = (meses_vu or 0) * DIAS_POR_MES
+    return PCT_VU_DEFAULT * vu_total if vu_total > 0 else None
 
 
 # ── Vida útil por SKU ─────────────────────────────────────────────────────────
@@ -188,10 +182,9 @@ def _lotes_del_dia(lotes, dias_disp, dias_ord, sku, fecha):
     return lotes[prev].get(sku, []), True
 
 
-def _stock_total_y_apto(lotes_sku, fecha, meses_vu, pct):
-    """(stock_total_no_vencido, stock_apto_por_VU). Si meses_vu<=0 → apto=total."""
-    vu_total_dias = (meses_vu or 0) * DIAS_POR_MES
-    umbral_dias = pct * vu_total_dias if vu_total_dias > 0 else None
+def _stock_total_y_apto(lotes_sku, fecha, umbral_dias):
+    """(stock_total_no_vencido, stock_apto). umbral_dias = VU restante mínima para ser
+    apto; si None → no se filtra por VU (apto = total). Vencidos nunca cuentan."""
     total = 0.0
     apto = 0.0
     for cj, vcto in lotes_sku:
@@ -295,8 +288,10 @@ def calcular_faltantes(desde, hasta, conn, engine):
     grupos = _leer_ov(conn)
     por_cli, prog_sd, desc, nom = _agregar_ov(grupos, desde, hasta)
 
-    supers = _leer_canales(engine)
     vu = _leer_vida_util(engine)
+    from db_mrp import get_vu_cliente_sku
+    vu_tabla = get_vu_cliente_sku()
+    logger.info("VU cliente×SKU (logística): %d pares.", len(vu_tabla))
     lotes, dias_disp = _leer_stock_lotes(engine, desde, hasta)
     dias_ord = sorted(dias_disp)
 
@@ -306,9 +301,9 @@ def calcular_faltantes(desde, hasta, conn, engine):
         if no_ent <= 0:
             continue
         programado_sd = prog_sd[(sku, fecha)]
-        pct = _umbral_pct(cod_cli, supers)
+        umbral = _umbral_dias(cod_cli, sku, vu.get(sku, 0), vu_tabla)
         lotes_sku, estimado = _lotes_del_dia(lotes, dias_disp, dias_ord, sku, fecha)
-        stock_total, stock_apto = _stock_total_y_apto(lotes_sku, fecha, vu.get(sku, 0), pct)
+        stock_total, stock_apto = _stock_total_y_apto(lotes_sku, fecha, umbral)
 
         if stock_total < programado_sd:
             causa = "sin_stock"

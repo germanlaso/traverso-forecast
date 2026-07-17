@@ -373,6 +373,17 @@ def crear_tablas_params():
             ALTER TABLE mrp_faltantes ADD COLUMN IF NOT EXISTS causa VARCHAR(20) DEFAULT '';
             CREATE INDEX IF NOT EXISTS ix_faltantes_fecha ON mrp_faltantes (fecha);
             CREATE INDEX IF NOT EXISTS ix_faltantes_sku   ON mrp_faltantes (sku);
+
+            CREATE TABLE IF NOT EXISTS mrp_vu_cliente_sku (
+                cod_cliente   VARCHAR(30)  NOT NULL,
+                sku           VARCHAR(30)  NOT NULL,
+                descripcion   VARCHAR(120) DEFAULT '',
+                min_dias      INTEGER      NOT NULL,
+                min_meses     INTEGER,
+                pct_derivado  NUMERIC(6,4),
+                updated_at    TIMESTAMP    DEFAULT NOW(),
+                PRIMARY KEY (cod_cliente, sku)
+            );
         """))
         session.commit()
 
@@ -698,3 +709,33 @@ def borrar_toda_setup_matrix() -> None:
     with get_session() as session:
         session.execute(text("DELETE FROM mrp_setup_matrix"))
         session.commit()
+
+# -- VU minima por cliente x SKU (tabla de logistica) -------------------------
+
+def upsert_vu_cliente_sku(filas):
+    """Reemplaza (idempotente) filas de mrp_vu_cliente_sku."""
+    if not filas:
+        return 0
+    with get_session() as session:
+        for f in filas:
+            session.execute(text("""
+                INSERT INTO mrp_vu_cliente_sku
+                    (cod_cliente, sku, descripcion, min_dias, min_meses, pct_derivado, updated_at)
+                VALUES
+                    (:cod_cliente, :sku, :descripcion, :min_dias, :min_meses, :pct_derivado, NOW())
+                ON CONFLICT (cod_cliente, sku) DO UPDATE SET
+                    descripcion  = EXCLUDED.descripcion,
+                    min_dias     = EXCLUDED.min_dias,
+                    min_meses    = EXCLUDED.min_meses,
+                    pct_derivado = EXCLUDED.pct_derivado,
+                    updated_at   = NOW()
+            """), f)
+        session.commit()
+    return len(filas)
+
+def get_vu_cliente_sku():
+    """Devuelve {(cod_cliente, sku): min_dias} para el motor de faltantes."""
+    with get_session() as session:
+        rows = session.execute(text(
+            "SELECT cod_cliente, sku, min_dias FROM mrp_vu_cliente_sku")).fetchall()
+    return {(str(r[0]).strip(), str(r[1]).strip()): int(r[2]) for r in rows}
