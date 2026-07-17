@@ -62,7 +62,12 @@ from db import get_engine
 logger = logging.getLogger(__name__)
 
 BODEGAS_PROYECTO = ["VESP01", "BSUR01", "VARA01"]
-SKU_EXCLUIDOS = {"1000000000", "1061000000", "1061000001"}
+# SKU excluidos del informe: contables (arriendo, reciclaje, recup. gastos)
+# y otros no medibles como faltante por definición de negocio.
+SKU_EXCLUIDOS = {
+    "1000000000", "1061000000", "1061000001",   # contables
+    "500170200", "141041660", "141041650",       # excluidos por logística/negocio
+}
 
 # Umbral de vida útil para despacho:
 #  - Si el par (cliente, SKU) está en la tabla de logística (mrp_vu_cliente_sku),
