@@ -366,9 +366,11 @@ def crear_tablas_params():
                 no_entregado_cj  NUMERIC(14,2) DEFAULT 0,
                 faltante_cj      NUMERIC(14,2) DEFAULT 0,
                 stock_estimado   BOOLEAN     DEFAULT FALSE,
+                causa            VARCHAR(20) DEFAULT '',
                 updated_at       TIMESTAMP   DEFAULT NOW(),
                 PRIMARY KEY (fecha, sku, cod_cliente)
             );
+            ALTER TABLE mrp_faltantes ADD COLUMN IF NOT EXISTS causa VARCHAR(20) DEFAULT '';
             CREATE INDEX IF NOT EXISTS ix_faltantes_fecha ON mrp_faltantes (fecha);
             CREATE INDEX IF NOT EXISTS ix_faltantes_sku   ON mrp_faltantes (sku);
         """))
@@ -446,10 +448,10 @@ def upsert_faltantes(filas: list[dict]):
         session.execute(text("""
             INSERT INTO mrp_faltantes
                 (fecha, sku, descripcion, cod_cliente, nom_cliente, stock_ini_cj,
-                 programado_cj, no_entregado_cj, faltante_cj, stock_estimado, updated_at)
+                 programado_cj, no_entregado_cj, faltante_cj, stock_estimado, causa, updated_at)
             VALUES
                 (:fecha, :sku, :descripcion, :cod_cliente, :nom_cliente, :stock_ini_cj,
-                 :programado_cj, :no_entregado_cj, :faltante_cj, :stock_estimado, NOW())
+                 :programado_cj, :no_entregado_cj, :faltante_cj, :stock_estimado, :causa, NOW())
             ON CONFLICT (fecha, sku, cod_cliente) DO UPDATE SET
                 descripcion     = EXCLUDED.descripcion,
                 nom_cliente     = EXCLUDED.nom_cliente,
@@ -458,6 +460,7 @@ def upsert_faltantes(filas: list[dict]):
                 no_entregado_cj = EXCLUDED.no_entregado_cj,
                 faltante_cj     = EXCLUDED.faltante_cj,
                 stock_estimado  = EXCLUDED.stock_estimado,
+                causa           = EXCLUDED.causa,
                 updated_at      = NOW()
         """), filas)
         session.commit()
@@ -478,7 +481,7 @@ def get_faltantes_por_fecha(fecha: str) -> list[dict]:
     with get_session() as session:
         rows = session.execute(text("""
             SELECT fecha, sku, descripcion, cod_cliente, nom_cliente, stock_ini_cj,
-                   programado_cj, no_entregado_cj, faltante_cj, stock_estimado
+                   programado_cj, no_entregado_cj, faltante_cj, stock_estimado, causa
             FROM mrp_faltantes WHERE fecha = :f
             ORDER BY faltante_cj DESC, sku
         """), {"f": fecha}).mappings().all()
