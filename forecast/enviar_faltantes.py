@@ -140,6 +140,30 @@ def enviar(fecha=None, destinatarios=None):
     return True
 
 
+def enviar_alerta(asunto, cuerpo_texto, destinatarios=None):
+    """Envía un correo de alerta simple (texto plano). Usado por el wrapper del cron
+    cuando el cálculo falla. Por defecto va solo al primer destinatario admin (o a
+    FALTANTES_ALERTA si está definido)."""
+    pwd = os.environ.get("SMTP_PWD")
+    if not pwd:
+        raise RuntimeError("Falta SMTP_PWD en el entorno.")
+    dest = destinatarios or os.environ.get("FALTANTES_ALERTA") \
+        or os.environ.get("FALTANTES_DEST", "").split(",")[0].strip()
+    dest_list = [d.strip() for d in dest.split(",") if d.strip()] if isinstance(dest, str) else dest
+    if not dest_list:
+        raise RuntimeError("Sin destinatario para la alerta.")
+    msg = MIMEText(cuerpo_texto, "plain", "utf-8")
+    msg["Subject"] = asunto
+    msg["From"] = formataddr((str(Header(SMTP_FROM_NAME, "utf-8")), SMTP_USER))
+    msg["To"] = ", ".join(dest_list)
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
+        s.ehlo(); s.starttls(context=ssl.create_default_context()); s.ehlo()
+        s.login(SMTP_USER, pwd)
+        s.send_message(msg)
+    logger.info("Alerta enviada a: %s", ", ".join(dest_list))
+    return True
+
+
 if __name__ == "__main__":
     f = sys.argv[1] if len(sys.argv) > 1 else None
     try:
