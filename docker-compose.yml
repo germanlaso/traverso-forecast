@@ -41,6 +41,7 @@ services:
       - HANA_PWD=${HANA_PWD}
       - SMTP_PWD=${SMTP_PWD}
       - FALTANTES_DEST=${FALTANTES_DEST}
+      - FALTANTES_ALERTA=${FALTANTES_ALERTA}
       - OV_NETTING_ENABLED=${OV_NETTING_ENABLED:-1}
     depends_on:
       mrp_db:
