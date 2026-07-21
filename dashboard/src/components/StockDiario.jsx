@@ -104,7 +104,7 @@ function SkuSearch({ skus, value, onChange }) {
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
-export default function StockDiario({ initialSku = "", ordenesAprobadas = [] }) {
+export default function StockDiario({ initialSku = "", ordenesAprobadas = [], ordenesPlan = [] }) {
   const [skuList, setSkuList] = useState([]);
   const [selSku,  setSelSku]  = useState(initialSku || "121010290");
   const [data,    setData]    = useState(null);
@@ -137,6 +137,21 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [] }) 
 
   const dias = data?.dias ?? [];
   const enc  = data?.encabezado ?? null;
+  // (21-07) N° OFT por día: se cruza ordenesPlan (viene de plan.ordenes, trae numero_of
+  // ya asignado incluso para sugeridas) contra la fecha_lanzamiento, que es el día donde
+  // el balance diario ubica la OFT (oft_cajas). El endpoint diario_live NO trae numero_of,
+  // por eso el número se resuelve acá en el cliente (mismo patrón que StockProyeccion).
+  const ofPorFecha = useMemo(() => {
+    const idx = {};
+    (ordenesPlan || []).forEach((o) => {
+      if (o.sku !== selSku) return;
+      const f = o.fecha_lanzamiento;
+      if (!f) return;
+      if (!idx[f]) idx[f] = [];
+      idx[f].push(o);
+    });
+    return idx;
+  }, [ordenesPlan, selSku]);
   // u_por_caja del SKU seleccionado, para convertir entrada_aprobada_u (unidades) a cajas.
   const upcSel = (skuList.find((x) => x.sku === selSku)?.u_por_caja) || 1;
   const chartData = useMemo(() => dias.map((r) => ({
@@ -263,7 +278,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [] }) 
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    {["Fecha","N° OFT","Stock ini. disp.","Pedidos","Demanda (corr.)","Stock final","SS (u)","Estado"].map((h, i) => (
+                    {["Fecha","N° OFT","Stock disponible","Pedidos","Forecast","Demanda (corr.)","Cantidad OFT","Stock final","SS (u)","Estado"].map((h, i) => (
                       <th key={h} style={{ ...s.th, textAlign: i === 0 ? "left" : "right" }}>{h}</th>
                     ))}
                   </tr>
@@ -277,24 +292,57 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [] }) 
                     // FIRME (aprobada), distinta de una OFT sugerida por el solver.
                     const entApr = r.entrada_aprobada_u != null && r.entrada_aprobada_u > 0
                       ? r.entrada_aprobada_u / upcSel : 0;
+                    // (21-07) "asumida" = hay OFT pero SIN entrada aprobada -> sugerida por el solver.
+                    const esAsumida = tieneOft && entApr === 0;
+                    // N° OFT del día: cruce por fecha_lanzamiento (puede haber >1; se listan).
+                    const ofsDia = ofPorFecha[r.fecha] || [];
                     return (
                       <tr key={r.fecha} style={{ background: neg ? "#FFF0F0" : bajo ? "#FFFBF0" : i % 2 === 0 ? "#fff" : C.grayLt }}>
+                        {/* 1. Fecha */}
                         <td style={{ ...s.td, color: C.textMuted, textAlign: "left" }}>{r.fecha}</td>
+                        {/* 2. N° OFT (número limpio; "—" si no hay orden ese día) */}
                         <td style={{ ...s.td, textAlign: "right" }}>
-                          {tieneOft && (<span style={{ color: C.teal, fontWeight: 700 }}>{fmtN(r.oft_cajas)} cj</span>)}
-                          {tieneOft && entApr > 0 && <span style={{ color: C.textMuted }}> + </span>}
-                          {entApr > 0 && (<span style={{ color: C.purple, fontWeight: 700 }} title="OF/OFM aprobada (producción firme)">{fmtN(entApr)} cj ✓</span>)}
-                          {!tieneOft && entApr === 0 && <span style={{ color: C.textMuted }}>—</span>}</td>
+                          {ofsDia.length > 0
+                            ? ofsDia.map((o, k) => (
+                                <div key={o.numero_of || k}
+                                  style={{ color: o.aprobada ? C.purple : C.teal, fontWeight: 700, whiteSpace: "nowrap" }}
+                                  title={o.aprobada ? "OF/OFM aprobada (firme)" : "OFT sugerida"}>
+                                  {o.numero_of || "—"}
+                                </div>
+                              ))
+                            : <span style={{ color: C.textMuted }}>—</span>}
+                        </td>
+                        {/* 3. Stock disponible */}
                         <td style={{ ...s.td, textAlign: "right",
                           color: (r.stock_ini_disp_cj != null && r.stock_ini_disp_cj < 0) ? C.red : C.text }}>
                           {r.stock_ini_disp_cj != null ? fmtN(r.stock_ini_disp_cj) : "—"}</td>
+                        {/* 4. Pedidos */}
                         <td style={{ ...s.td, textAlign: "right", color: r.pedidos_cj > 0 ? C.purple : C.textMuted, fontWeight: r.pedidos_cj > 0 ? 700 : 400 }}>
                           {r.pedidos_cj > 0 ? fmtN(r.pedidos_cj) : "—"}</td>
+                        {/* 5. Forecast */}
+                        <td style={{ ...s.td, textAlign: "right", color: r.forecast_cj > 0 ? "#C96B6B" : C.textMuted }}>
+                          {r.forecast_cj > 0 ? fmtN(r.forecast_cj) : "—"}</td>
+                        {/* 6. Demanda (corr.) */}
                         <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmtN(r.demanda_corr_cj)}</td>
+                        {/* 7. Cantidad OFT (+ "asumida" si sugerida; "✓" si firme) */}
+                        <td style={{ ...s.td, textAlign: "right" }}>
+                          {tieneOft && (
+                            <span style={{ color: esAsumida ? C.teal : C.purple, fontWeight: 700 }}>
+                              {fmtN(r.oft_cajas)} cj{!esAsumida && " ✓"}
+                            </span>
+                          )}
+                          {tieneOft && esAsumida && (
+                            <div style={{ fontSize: 10, color: C.textMuted, fontStyle: "italic", lineHeight: 1.2 }}>asumida</div>
+                          )}
+                          {!tieneOft && <span style={{ color: C.textMuted }}>—</span>}
+                        </td>
+                        {/* 8. Stock final */}
                         <td style={{ ...s.td, textAlign: "right", fontWeight: 700,
                           color: neg ? C.red : bajo ? C.amber : C.text }}>
                           {r.stock_fin_cj != null ? fmtN(r.stock_fin_cj) : "—"}</td>
+                        {/* 9. SS (u) */}
                         <td style={{ ...s.td, textAlign: "right", color: C.textMuted }}>{r.ss_u > 0 ? fmtN(r.ss_u) : "—"}</td>
+                        {/* 10. Estado */}
                         <td style={{ ...s.td, textAlign: "center" }}>
                           {neg
                             ? <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: C.redLt, color: "#791F1F" }}>Quiebre</span>
