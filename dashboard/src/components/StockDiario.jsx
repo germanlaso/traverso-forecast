@@ -137,21 +137,31 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
 
   const dias = data?.dias ?? [];
   const enc  = data?.encabezado ?? null;
-  // (21-07) N° OFT por día: se cruza ordenesPlan (viene de plan.ordenes, trae numero_of
-  // ya asignado incluso para sugeridas) contra la fecha_lanzamiento, que es el día donde
-  // el balance diario ubica la OFT (oft_cajas). El endpoint diario_live NO trae numero_of,
-  // por eso el número se resuelve acá en el cliente (mismo patrón que StockProyeccion).
+  // (21-07) N° OFT por día. Dos fuentes con dos fechas de cruce distintas:
+  //  · SUGERIDAS (OFT sin aprobar): vienen en ordenesPlan (plan.ordenes, con numero_of
+  //    enriquecido), se ubican por fecha_lanzamiento -> día con oft_cajas.
+  //  · APROBADAS (OF/OFM firmes): vienen en ordenesAprobadas (/ordenes/aprobadas),
+  //    se ubican por fecha_entrada_real -> día con entrada_aprobada_u.
+  // El endpoint diario_live NO trae numero_of, por eso el número se resuelve acá.
   const ofPorFecha = useMemo(() => {
     const idx = {};
+    const push = (fecha, obj) => {
+      if (!fecha) return;
+      if (!idx[fecha]) idx[fecha] = [];
+      idx[fecha].push(obj);
+    };
+    // sugeridas del plan (no aprobadas), por fecha_lanzamiento
     (ordenesPlan || []).forEach((o) => {
+      if (o.sku !== selSku || o.aprobada) return;
+      push(o.fecha_lanzamiento, { numero_of: o.numero_of, aprobada: false });
+    });
+    // aprobadas (OF/OFM), por fecha_entrada_real
+    (ordenesAprobadas || []).forEach((o) => {
       if (o.sku !== selSku) return;
-      const f = o.fecha_lanzamiento;
-      if (!f) return;
-      if (!idx[f]) idx[f] = [];
-      idx[f].push(o);
+      push(o.fecha_entrada_real, { numero_of: o.numero_of, aprobada: true });
     });
     return idx;
-  }, [ordenesPlan, selSku]);
+  }, [ordenesPlan, ordenesAprobadas, selSku]);
   // u_por_caja del SKU seleccionado, para convertir entrada_aprobada_u (unidades) a cajas.
   const upcSel = (skuList.find((x) => x.sku === selSku)?.u_por_caja) || 1;
   const chartData = useMemo(() => dias.map((r) => ({
@@ -294,7 +304,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
                       ? r.entrada_aprobada_u / upcSel : 0;
                     // (21-07) "asumida" = hay OFT pero SIN entrada aprobada -> sugerida por el solver.
                     const esAsumida = tieneOft && entApr === 0;
-                    // N° OFT del día: cruce por fecha_lanzamiento (puede haber >1; se listan).
+                    // N° OFT del día (ver ofPorFecha: sugeridas + aprobadas; puede haber >1).
                     const ofsDia = ofPorFecha[r.fecha] || [];
                     return (
                       <tr key={r.fecha} style={{ background: neg ? "#FFF0F0" : bajo ? "#FFFBF0" : i % 2 === 0 ? "#fff" : C.grayLt }}>
@@ -324,17 +334,21 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
                           {r.forecast_cj > 0 ? fmtN(r.forecast_cj) : "—"}</td>
                         {/* 6. Demanda (corr.) */}
                         <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{fmtN(r.demanda_corr_cj)}</td>
-                        {/* 7. Cantidad OFT (+ "asumida" si sugerida; "✓" si firme) */}
+                        {/* 7. Cantidad OFT: sugerida (+ "asumida") y/o aprobada firme (✓) */}
                         <td style={{ ...s.td, textAlign: "right" }}>
                           {tieneOft && (
-                            <span style={{ color: esAsumida ? C.teal : C.purple, fontWeight: 700 }}>
-                              {fmtN(r.oft_cajas)} cj{!esAsumida && " ✓"}
+                            <span style={{ color: C.teal, fontWeight: 700 }}>{fmtN(r.oft_cajas)} cj</span>
+                          )}
+                          {tieneOft && entApr > 0 && <span style={{ color: C.textMuted }}> + </span>}
+                          {entApr > 0 && (
+                            <span style={{ color: C.purple, fontWeight: 700 }} title="OF/OFM aprobada (producción firme)">
+                              {fmtN(entApr)} cj ✓
                             </span>
                           )}
                           {tieneOft && esAsumida && (
                             <div style={{ fontSize: 10, color: C.textMuted, fontStyle: "italic", lineHeight: 1.2 }}>asumida</div>
                           )}
-                          {!tieneOft && <span style={{ color: C.textMuted }}>—</span>}
+                          {!tieneOft && entApr === 0 && <span style={{ color: C.textMuted }}>—</span>}
                         </td>
                         {/* 8. Stock final */}
                         <td style={{ ...s.td, textAlign: "right", fontWeight: 700,
