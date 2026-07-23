@@ -1179,6 +1179,43 @@ def get_faltantes_excel(fecha: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/faltantes/explicaciones", tags=["Faltantes"])
+def get_explicaciones_endpoint(fecha: str):
+    """Explicaciones cargadas para los faltantes de un día (YYYY-MM-DD).
+    Devuelve {sku: {explicacion, autor, congelada, updated_at}}."""
+    try:
+        from db_mrp import get_explicaciones_faltantes
+        return {"fecha": fecha, "explicaciones": get_explicaciones_faltantes(fecha)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ExplicacionFaltante(BaseModel):
+    sku: str
+    fecha: str
+    explicacion: str
+    autor: str | None = ""
+
+
+@app.post("/faltantes/explicaciones", tags=["Faltantes"])
+def post_explicacion_endpoint(payload: ExplicacionFaltante):
+    """Guarda/actualiza la explicacion de un (sku, fecha). Rechaza (409) si la
+    explicacion ya fue congelada por el envio del correo final."""
+    try:
+        from db_mrp import upsert_explicacion_faltante
+        res = upsert_explicacion_faltante(
+            payload.sku, payload.fecha, payload.explicacion, payload.autor or "")
+        if not res.get("ok"):
+            raise HTTPException(
+                status_code=409,
+                detail="La explicacion ya fue enviada y no puede editarse.")
+        return {"ok": True, "sku": payload.sku, "fecha": payload.fecha}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/regressors", tags=["Estacionalidad"])
 def get_regressors():
     """Retorna todos los regressores de estacionalidad definidos por categoría."""
