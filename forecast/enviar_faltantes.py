@@ -57,7 +57,7 @@ def _cuerpo_html(fecha, filas):
         por_causa[r.get("causa", "")] = por_causa.get(r.get("causa", ""), 0) + cj
         k = (r["sku"], r.get("descripcion", ""))
         por_sku[k] = por_sku.get(k, 0) + cj
-    top = sorted(por_sku.items(), key=lambda x: -x[1])[:5]
+    top = sorted(por_sku.items(), key=lambda x: -x[1])
 
     if not filas:
         return (f"<p>Estimados,</p>"
@@ -87,7 +87,7 @@ def _cuerpo_html(fecha, filas):
           <th style="padding:6px 12px;text-align:right">Cajas</th></tr>
         {filas_causa}
       </table>
-      <p style="margin-top:14px"><b>Top 5 productos con faltante:</b></p>
+      <p style="margin-top:14px"><b>Productos con faltante (ordenados por magnitud):</b></p>
       <table style="border-collapse:collapse">
         <tr style="background:#C0DCF0">
           <th style="padding:4px 12px;text-align:left">Cod. SAP</th>
