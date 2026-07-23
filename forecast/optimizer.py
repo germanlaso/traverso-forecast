@@ -470,6 +470,7 @@ def optimizar_plan_v12_rich(
         stock_inicial=stock_inicial,
         ss_forecast_ext=ss_forecast_ext,
         entradas_aprobadas=entradas_aprobadas,
+        pedidos_abiertos=pedidos_abiertos,
     )
 
     # Si la solucion es suboptima por timeout, dejar constancia para el usuario
@@ -1047,6 +1048,7 @@ def _post_procesar(
     stock_inicial: dict[str, float] | None = None,
     ss_forecast_ext: dict[str, dict[date, float]] | None = None,
     entradas_aprobadas: dict[str, list[dict]] | None = None,
+    pedidos_abiertos: dict[str, dict[date, float]] | None = None,
 ) -> dict[str, Any]:
     """Convierte la solución del solver en OFTs, stock visible y alertas.
 
@@ -1155,6 +1157,7 @@ def _post_procesar(
     _sti = stock_inicial or {}
     _ssext = ss_forecast_ext or {}
     _ea = entradas_aprobadas or {}
+    _pcrudo = pedidos_abiertos or {}   # (22-07) OV cruda por SKU/fecha (cajas), pre-netting
 
     for s in m.skus:
         sp = sku_params[s]
@@ -1163,6 +1166,7 @@ def _post_procesar(
         fc_ext_s = _ssext.get(s) or _dss.get(s) or {}   # extendido si está, si no el del horizonte
         fc_base_s = _dss.get(s) or {}
         consumo_s = _dco.get(s) or {}
+        pcrudo_s = _pcrudo.get(s) or {}   # (22-07) OV cruda del SKU: {fecha: cajas}
 
         serie = {}
         stock_prev_disp = float(_sti.get(s, 0.0))   # disponible inicial (sin clamp)
@@ -1175,6 +1179,10 @@ def _post_procesar(
             fc_d = fc_base_s.get(d, 0.0)                        # forecast del día
             consumo_d = consumo_s.get(d, 0.0)                  # max(fc, pedidos)
             pedidos_d = max(0.0, consumo_d - fc_d)             # OV del día = consumo - forecast (si >0)
+            # (22-07) OV cruda real del día (cajas -> unidades), ANTES del netting max(fc,ov).
+            # Distinto de pedidos_d (que es solo el exceso sobre forecast). Es informativo;
+            # NO entra en ningún cálculo de balance/optimización, solo para el dashboard.
+            pedidos_crudos_d = float(pcrudo_s.get(d, 0.0)) * upc
             ss_d = calcular_ss_diario(fc_ext_s, d, ss_dias)    # SS cobertura (fórmula nueva)
 
             # estado contra SS nuevo y quiebre real
@@ -1191,6 +1199,7 @@ def _post_procesar(
                 "stock_ini_disp_u": int(round(stock_prev_disp)),
                 "entrada_aprobada_u": int(round(entrada_apr_d)),
                 "pedidos_u": int(round(pedidos_d)),
+                "pedidos_crudos_u": int(round(pedidos_crudos_d)),
                 "demanda_corr_u": int(round(consumo_d)),
                 "forecast_u": int(round(fc_d)),
                 "stock_fin_u": int(stock_real),

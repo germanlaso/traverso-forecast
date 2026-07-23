@@ -326,9 +326,14 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
                         <td style={{ ...s.td, textAlign: "right",
                           color: (r.stock_ini_disp_cj != null && r.stock_ini_disp_cj < 0) ? C.red : C.text }}>
                           {r.stock_ini_disp_cj != null ? fmtN(r.stock_ini_disp_cj) : "—"}</td>
-                        {/* 4. Pedidos */}
-                        <td style={{ ...s.td, textAlign: "right", color: r.pedidos_cj > 0 ? C.purple : C.textMuted, fontWeight: r.pedidos_cj > 0 ? 700 : 400 }}>
-                          {r.pedidos_cj > 0 ? fmtN(r.pedidos_cj) : "—"}</td>
+                        {/* 4. Pedidos (OV cruda real; fallback a pedidos_cj si snapshot viejo) */}
+                        {(() => {
+                          const pedCrudo = r.pedidos_crudos_cj != null ? r.pedidos_crudos_cj : r.pedidos_cj;
+                          return (
+                            <td style={{ ...s.td, textAlign: "right", color: pedCrudo > 0 ? C.purple : C.textMuted, fontWeight: pedCrudo > 0 ? 700 : 400 }}>
+                              {pedCrudo > 0 ? fmtN(pedCrudo) : "—"}</td>
+                          );
+                        })()}
                         {/* 5. Forecast */}
                         <td style={{ ...s.td, textAlign: "right", color: r.forecast_cj > 0 ? "#C96B6B" : C.textMuted }}>
                           {r.forecast_cj > 0 ? fmtN(r.forecast_cj) : "—"}</td>
