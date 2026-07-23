@@ -62,6 +62,8 @@ export default function Faltantes() {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
   const [expandido, setExpandido] = useState({});   // {sku: true} filas abiertas
+  const [explic, setExplic] = useState({});          // {sku: {explicacion, autor, congelada}}
+  const [explicSaving, setExplicSaving] = useState({}); // {sku: 'saving'|'ok'|'err'}
   const [filtroCausa, setFiltroCausa] = useState("todo"); // todo | sin_stock | vu_insuficiente
 
   // 1. Rango disponible al montar; default: últimos 30 días hasta el último día
@@ -98,6 +100,36 @@ export default function Faltantes() {
       setDetalle(d.filas || []);
     }).catch(() => setDetalle([]));
   }, [selFecha]);
+
+  // 3b. Explicaciones del día seleccionado (feature 2026-07-23)
+  useEffect(() => {
+    if (!selFecha) { setExplic({}); return; }
+    fetch(`${API}/faltantes/explicaciones?fecha=${selFecha}`)
+      .then((r) => r.json())
+      .then((d) => setExplic(d.explicaciones || {}))
+      .catch(() => setExplic({}));
+  }, [selFecha]);
+
+  // Guarda la explicación de un SKU (al perder foco). No permite editar si está congelada.
+  const guardarExplicacion = async (sku, texto) => {
+    const actual = explic[sku] || {};
+    if (actual.congelada) return;                       // read-only
+    if ((actual.explicacion || "") === (texto || "")) return;  // sin cambios
+    setExplicSaving((s) => ({ ...s, [sku]: "saving" }));
+    try {
+      const resp = await fetch(`${API}/faltantes/explicaciones`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sku, fecha: selFecha, explicacion: texto, autor: "" }),
+      });
+      if (!resp.ok) throw new Error(resp.status === 409 ? "congelada" : "error");
+      setExplic((e) => ({ ...e, [sku]: { ...(e[sku] || {}), explicacion: texto } }));
+      setExplicSaving((s) => ({ ...s, [sku]: "ok" }));
+      setTimeout(() => setExplicSaving((s) => { const n = { ...s }; delete n[sku]; return n; }), 1500);
+    } catch (err) {
+      setExplicSaving((s) => ({ ...s, [sku]: "err" }));
+    }
+  };
 
   const totalRango = useMemo(() => serie.reduce((s, r) => s + (r.faltante_cj || 0), 0), [serie]);
   // detalle filtrado por causa (para tabla y KPIs del dia)
@@ -261,8 +293,8 @@ export default function Faltantes() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {["", "SKU", "Descripción", "Causa", "Clientes", "Stock", "Programado", "Faltante"].map((h, i) => (
-                    <th key={h || i} style={{ ...s.th, textAlign: i >= 5 ? "right" : "left" }}>{h}</th>
+                  {["", "SKU", "Descripción", "Causa", "Clientes", "Stock", "Programado", "Faltante", "Explicación"].map((h, i) => (
+                    <th key={h || i} style={{ ...s.th, textAlign: (i >= 5 && i <= 7) ? "right" : "left" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -299,6 +331,38 @@ export default function Faltantes() {
                         <td style={{ ...s.td, textAlign: "right" }}>{fmtN(g.stock_ini_cj)}</td>
                         <td style={{ ...s.td, textAlign: "right" }}>{fmtN(g.programado_cj)}</td>
                         <td style={{ ...s.td, textAlign: "right", fontWeight: 700, color: C.red }}>{fmtN(g.faltante_cj)}</td>
+                        {/* Explicación (por SKU). Editable salvo si congelada. */}
+                        <td style={{ ...s.td, minWidth: 220 }} onClick={(ev) => ev.stopPropagation()}>
+                          {(() => {
+                            const ex = explic[g.sku] || {};
+                            const estado = explicSaving[g.sku];
+                            if (ex.congelada) {
+                              return (
+                                <div style={{ fontSize: 12, color: C.textMuted }}>
+                                  {ex.explicacion || <span style={{ fontStyle: "italic" }}>—</span>}
+                                  <span title="Enviada — no editable" style={{ marginLeft: 6, color: C.gray }}>🔒</span>
+                                </div>
+                              );
+                            }
+                            return (
+                              <div>
+                                <textarea
+                                  defaultValue={ex.explicacion || ""}
+                                  placeholder="Agregar explicación…"
+                                  onClick={(ev) => ev.stopPropagation()}
+                                  onBlur={(ev) => guardarExplicacion(g.sku, ev.target.value.trim())}
+                                  rows={2}
+                                  style={{ width: "100%", fontSize: 12, fontFamily: "inherit",
+                                    border: `1px solid ${C.grayLt}`, borderRadius: 6, padding: "4px 6px",
+                                    resize: "vertical", boxSizing: "border-box" }}
+                                />
+                                {estado === "saving" && <span style={{ fontSize: 10, color: C.textMuted }}>guardando…</span>}
+                                {estado === "ok" && <span style={{ fontSize: 10, color: C.teal }}>✓ guardado</span>}
+                                {estado === "err" && <span style={{ fontSize: 10, color: C.red }}>error al guardar</span>}
+                              </div>
+                            );
+                          })()}
+                        </td>
                       </tr>
                       {/* Sub-filas por cliente (al expandir) */}
                       {abierto && g.clientes
@@ -318,6 +382,7 @@ export default function Faltantes() {
                           <td style={s.td}></td>
                           <td style={s.td}></td>
                           <td style={{ ...s.td, textAlign: "right", color: causaColor(r.causa, C) }}>{fmtN(r.faltante_cj)}</td>
+                          <td style={s.td}></td>
                         </tr>
                       ))}
                     </React.Fragment>
