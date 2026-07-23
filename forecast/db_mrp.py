@@ -384,6 +384,21 @@ def crear_tablas_params():
                 updated_at    TIMESTAMP    DEFAULT NOW(),
                 PRIMARY KEY (cod_cliente, sku)
             );
+
+            -- Explicaciones de faltantes (por SKU agregado y fecha).
+            -- Independiente de mrp_faltantes para sobrevivir a los recálculos de ventana.
+            CREATE TABLE IF NOT EXISTS mrp_faltantes_explicaciones (
+                sku          VARCHAR(30)  NOT NULL,
+                fecha        DATE         NOT NULL,
+                explicacion  TEXT         NOT NULL DEFAULT '',
+                autor        VARCHAR(120) DEFAULT '',
+                congelada    BOOLEAN      NOT NULL DEFAULT FALSE,
+                created_at   TIMESTAMP    DEFAULT NOW(),
+                updated_at   TIMESTAMP    DEFAULT NOW(),
+                PRIMARY KEY (sku, fecha)
+            );
+            CREATE INDEX IF NOT EXISTS ix_faltantes_expl_fecha
+                ON mrp_faltantes_explicaciones (fecha);
         """))
         session.commit()
 
@@ -739,3 +754,83 @@ def get_vu_cliente_sku():
         rows = session.execute(text(
             "SELECT cod_cliente, sku, min_dias FROM mrp_vu_cliente_sku")).fetchall()
     return {(str(r[0]).strip(), str(r[1]).strip()): int(r[2]) for r in rows}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Explicaciones de faltantes (feature 2026-07-23)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_explicaciones_faltantes(fecha) -> dict:
+    """Devuelve {sku: {explicacion, autor, congelada, updated_at}} para una fecha.
+    fecha: date o str 'YYYY-MM-DD'."""
+    with get_session() as session:
+        rows = session.execute(text("""
+            SELECT sku, explicacion, autor, congelada, updated_at
+            FROM mrp_faltantes_explicaciones
+            WHERE fecha = :f
+        """), {"f": str(fecha)}).fetchall()
+    return {
+        str(r[0]).strip(): {
+            "explicacion": r[1] or "",
+            "autor": r[2] or "",
+            "congelada": bool(r[3]),
+            "updated_at": r[4].isoformat() if r[4] else None,
+        }
+        for r in rows
+    }
+
+
+def upsert_explicacion_faltante(sku: str, fecha, explicacion: str, autor: str = "") -> dict:
+    """Inserta o actualiza la explicacion de un (sku, fecha).
+    Rechaza si la fila ya esta congelada (retorna {ok: False, motivo: 'congelada'})."""
+    sku = str(sku).strip()
+    with get_session() as session:
+        # ¿ya existe y esta congelada?
+        row = session.execute(text("""
+            SELECT congelada FROM mrp_faltantes_explicaciones
+            WHERE sku = :s AND fecha = :f
+        """), {"s": sku, "f": str(fecha)}).fetchone()
+        if row is not None and bool(row[0]):
+            return {"ok": False, "motivo": "congelada"}
+
+        session.execute(text("""
+            INSERT INTO mrp_faltantes_explicaciones
+                (sku, fecha, explicacion, autor, congelada, created_at, updated_at)
+            VALUES (:s, :f, :e, :a, FALSE, NOW(), NOW())
+            ON CONFLICT (sku, fecha) DO UPDATE SET
+                explicacion = EXCLUDED.explicacion,
+                autor       = EXCLUDED.autor,
+                updated_at  = NOW()
+        """), {"s": sku, "f": str(fecha), "e": explicacion or "", "a": autor or ""})
+        session.commit()
+    return {"ok": True}
+
+
+def congelar_explicaciones_faltantes(fecha) -> int:
+    """Marca congelada=TRUE todas las explicaciones de una fecha (lo llama el
+    cron de las 11 tras enviar el correo final). Retorna filas afectadas."""
+    with get_session() as session:
+        n = session.execute(text("""
+            UPDATE mrp_faltantes_explicaciones
+            SET congelada = TRUE, updated_at = NOW()
+            WHERE fecha = :f AND congelada = FALSE
+        """), {"f": str(fecha)}).rowcount
+        session.commit()
+    return n
+
+
+def limpiar_explicaciones_huerfanas() -> int:
+    """Borra explicaciones NO congeladas cuyo faltante (sku, fecha) ya no existe
+    en mrp_faltantes. Las congeladas se conservan como registro historico.
+    Lo llama cron_faltantes.py tras recalcular. Retorna filas borradas."""
+    with get_session() as session:
+        n = session.execute(text("""
+            DELETE FROM mrp_faltantes_explicaciones e
+            WHERE e.congelada = FALSE
+              AND NOT EXISTS (
+                  SELECT 1 FROM mrp_faltantes f
+                  WHERE f.sku = e.sku AND f.fecha = e.fecha
+              )
+        """)).rowcount
+        session.commit()
+    return n
