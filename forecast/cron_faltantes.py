@@ -35,6 +35,14 @@ def main():
         filas = faltantes.ejecutar(desde, ayer, persistir_bd=True)
         logger.info("Cálculo OK: %d filas persistidas (%s a %s).",
                     len(filas), desde.isoformat(), ayer.isoformat())
+        # limpiar explicaciones huérfanas (no congeladas) cuyo faltante ya no existe
+        try:
+            from db_mrp import limpiar_explicaciones_huerfanas
+            n_huerf = limpiar_explicaciones_huerfanas()
+            if n_huerf:
+                logger.info("Explicaciones huérfanas eliminadas: %d.", n_huerf)
+        except Exception as e_limp:
+            logger.warning("No se pudo limpiar explicaciones huérfanas: %s", e_limp)
     except Exception as e:
         tb = traceback.format_exc()
         logger.error("Cálculo FALLÓ: %s", e)

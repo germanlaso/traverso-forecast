@@ -48,10 +48,12 @@ def _fecha_txt(f):
     return f"{p[2]}-{p[1]}-{p[0]}" if len(p) == 3 else str(f)
 
 
-def construir(fecha, filas):
+def construir(fecha, filas, explicaciones=None):
     """fecha: str YYYY-MM-DD | date. filas: list de dicts de get_faltantes_por_fecha.
-    Devuelve un openpyxl Workbook."""
+    explicaciones: dict opcional {sku: {explicacion, autor}} — si se pasa, agrega la
+    columna 'Explicación' a la tabla resumen por SKU. Devuelve un openpyxl Workbook."""
     fecha_str = fecha if isinstance(fecha, str) else fecha.isoformat()
+    explicaciones = explicaciones or {}
 
     # --- agregación por SKU ---
     porsku = {}
@@ -131,7 +133,11 @@ def construir(fecha, filas):
 
     # Tabla resumen por SKU
     hdr_row = 12
+    con_expl = bool(explicaciones)
     headers = ["Producto", "Cod. SAP", "Causa", "Stock (cj)", "Programado (cj)", "Faltante (cj)", "%"]
+    if con_expl:
+        headers.append("Explicación")
+        ws.column_dimensions["J"].width = 45   # columna de explicación
     for i, h in enumerate(headers):
         cell = ws.cell(hdr_row, 3 + i, h)
         cell.font = _f(9, True); cell.fill = _fill(CELESTE)
@@ -146,6 +152,11 @@ def construir(fecha, filas):
         vals = [g["descripcion"], g["sku"], causa_txt,
                 round(g["stock_ini_cj"], 0), round(g["programado_cj"], 0),
                 round(g["faltante_cj"], 0), pct]
+        if con_expl:
+            ex = explicaciones.get(g["sku"], {})
+            txt = (ex.get("explicacion") or "").strip()
+            autor = (ex.get("autor") or "").strip()
+            vals.append(f"{txt}  ({autor})" if (txt and autor) else txt)
         for i, v in enumerate(vals):
             cell = ws.cell(r, 3 + i, v)
             cell.font = _f(8, False, "1A2332", name="Calibri")
@@ -159,6 +170,8 @@ def construir(fecha, filas):
             elif i == 6:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.number_format = "0.0%"
+            elif con_expl and i == 7:
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
         r += 1
@@ -229,9 +242,9 @@ def construir(fecha, filas):
     return wb
 
 
-def generar_bytes(fecha, filas):
+def generar_bytes(fecha, filas, explicaciones=None):
     """Devuelve los bytes del .xlsx (para servir por HTTP)."""
-    wb = construir(fecha, filas)
+    wb = construir(fecha, filas, explicaciones)
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)

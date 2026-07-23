@@ -107,10 +107,11 @@ def enviar(fecha=None, destinatarios=None):
     pwd = os.environ.get("SMTP_PWD")
     if not pwd:
         raise RuntimeError("Falta SMTP_PWD en el entorno.")
-    dest = destinatarios or os.environ.get("FALTANTES_DEST", "")
+    dest = destinatarios or os.environ.get("FALTANTES_DEST_AM") \
+        or os.environ.get("FALTANTES_DEST", "")
     dest_list = [d.strip() for d in dest.split(",") if d.strip()]
     if not dest_list:
-        raise RuntimeError("Falta FALTANTES_DEST (destinatarios) en el entorno.")
+        raise RuntimeError("Falta FALTANTES_DEST_AM/FALTANTES_DEST (destinatarios) en el entorno.")
 
     from db_mrp import get_faltantes_por_fecha
     import faltantes_excel
@@ -137,6 +138,89 @@ def enviar(fecha=None, destinatarios=None):
         s.login(SMTP_USER, pwd)
         s.send_message(msg)
     logger.info("Correo enviado a: %s", ", ".join(dest_list))
+    return True
+
+
+def _cuerpo_html_final(fecha, filas, explicaciones):
+    """Cuerpo HTML del correo final (11 AM): base + tabla de explicaciones por SKU."""
+    base = _cuerpo_html(fecha, filas)
+    # tabla de explicaciones por SKU (solo las que tienen texto)
+    skus_con_falta = {}
+    for r in filas:
+        k = (r["sku"], r.get("descripcion", ""))
+        skus_con_falta[k] = skus_con_falta.get(k, 0) + float(r.get("faltante_cj", 0) or 0)
+
+    filas_exp = []
+    for (sku, desc), cj in sorted(skus_con_falta.items(), key=lambda x: -x[1]):
+        ex = explicaciones.get(sku, {})
+        txt = (ex.get("explicacion") or "").strip()
+        autor = (ex.get("autor") or "").strip()
+        if not txt:
+            continue  # solo mostramos SKU que tienen explicación cargada
+        meta = f"<span style='color:#888;font-size:11px'> — {autor}</span>" if autor else ""
+        filas_exp.append(
+            f"<tr><td style='padding:4px 12px;vertical-align:top'><b>{sku}</b><br>"
+            f"<span style='color:#666;font-size:11px'>{desc}</span></td>"
+            f"<td style='padding:4px 12px'>{txt}{meta}</td></tr>")
+
+    if filas_exp:
+        tabla_exp = f"""
+      <p style="margin-top:16px"><b>Explicaciones incorporadas por las áreas:</b></p>
+      <table style="border-collapse:collapse;width:100%">
+        <tr style="background:#1A2D4D;color:#fff">
+          <th style="padding:6px 12px;text-align:left">Producto</th>
+          <th style="padding:6px 12px;text-align:left">Explicación</th></tr>
+        {''.join(filas_exp)}
+      </table>"""
+    else:
+        tabla_exp = ("<p style='margin-top:16px;color:#888'>No se incorporaron "
+                     "explicaciones para los faltantes de este día.</p>")
+
+    # insertar la tabla de explicaciones antes del pie del cuerpo base
+    marca = '<p style="color:#888;font-size:11px;margin-top:18px">'
+    if marca in base:
+        return base.replace(marca, tabla_exp + "\n      " + marca, 1)
+    return base + tabla_exp
+
+
+def enviar_final(fecha=None, destinatarios=None):
+    """Correo FINAL (11 AM) al grupo ampliado, con las explicaciones incorporadas.
+    Se envía aunque no haya explicaciones. Usa FALTANTES_DEST_FINAL."""
+    fecha = fecha or (date.today() - timedelta(days=1)).isoformat()
+    pwd = os.environ.get("SMTP_PWD")
+    if not pwd:
+        raise RuntimeError("Falta SMTP_PWD en el entorno.")
+    dest = destinatarios or os.environ.get("FALTANTES_DEST_FINAL", "")
+    dest_list = [d.strip() for d in dest.split(",") if d.strip()]
+    if not dest_list:
+        raise RuntimeError("Falta FALTANTES_DEST_FINAL (destinatarios) en el entorno.")
+
+    from db_mrp import get_faltantes_por_fecha, get_explicaciones_faltantes
+    import faltantes_excel
+    filas = get_faltantes_por_fecha(fecha)
+    explic = get_explicaciones_faltantes(fecha)
+    logger.info("Informe final del %s: %d filas, %d explicaciones.",
+                fecha, len(filas), len([e for e in explic.values() if (e.get('explicacion') or '').strip()]))
+
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = f"Informe de Quiebres de Stock (final) — {_fecha_txt(fecha)} — Traverso"
+    msg["From"] = formataddr((str(Header(SMTP_FROM_NAME, "utf-8")), SMTP_USER))
+    msg["To"] = ", ".join(dest_list)
+    msg.attach(MIMEText(_cuerpo_html_final(fecha, filas, explic), "html", "utf-8"))
+
+    xls = faltantes_excel.generar_bytes(fecha, filas, explic)
+    adj = MIMEApplication(xls, _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    adj.add_header("Content-Disposition", "attachment",
+                   filename=f"Informe_Quiebres_{fecha}.xlsx")
+    msg.attach(adj)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
+        s.ehlo()
+        s.starttls(context=ssl.create_default_context())
+        s.ehlo()
+        s.login(SMTP_USER, pwd)
+        s.send_message(msg)
+    logger.info("Correo FINAL enviado a: %s", ", ".join(dest_list))
     return True
 
 
