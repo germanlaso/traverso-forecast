@@ -6,6 +6,10 @@
 // que la validación del futuro formulario no pueda divergir del diagnóstico.
 
 import React, { useState, useEffect, useMemo } from "react";
+import {
+  ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
+  CartesianGrid, Tooltip, Legend, ReferenceLine,
+} from "recharts";
 
 const API = "";
 
@@ -118,15 +122,145 @@ function Grupo({ titulo, children }) {
   );
 }
 
-/* Panel de detalle de un SKU: TODOS los parámetros en unidades y cajas. */
-function DetalleSku({ it }) {
+/* ── Modal: proyección diaria de inventario ───────────────────────────────
+   Lee /plan/proyeccion_diaria_live/{sku} (el mismo endpoint de Stock Diario).
+   Se abre bajo demanda: NO se carga al expandir la fila, para no disparar una
+   consulta por cada SKU que el usuario abra.                                */
+function ProyeccionModal({ sku, descripcion, onClose }) {
+  const [d, setD]   = useState(null);
+  const [err, setErr] = useState("");
+  const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    const esc = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!sku) return;
+    setCargando(true);
+    fetch(`${API}/plan/proyeccion_diaria_live/${sku}`)
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then((j) => { setD(j); setErr(""); })
+      .catch((e) => setErr(String(e.message || e)))
+      .finally(() => setCargando(false));
+  }, [sku]);
+
+  const dias = d?.dias ?? [];
+  const serie = dias.map((x) => ({
+    fecha: String(x.fecha).slice(5),          // MM-DD
+    stock: x.stock_fin_cj,
+    ss: x.ss_u != null && d?.upc ? x.ss_u / d.upc : null,
+    demanda: x.demanda_corr_cj,
+    oft: x.oft_cajas || 0,
+    estado: x.estado,
+  }));
+
+  const nQuiebre = dias.filter((x) => x.estado === "QUIEBRE").length;
+  const nBajoSS  = dias.filter((x) => x.estado === "BAJO_SS").length;
+  const nOft     = dias.filter((x) => (x.oft_cajas || 0) > 0).length;
+  const stockMin = dias.length ? Math.min(...dias.map((x) => x.stock_fin_cj ?? 0)) : null;
+  const stockFin = dias.length ? dias[dias.length - 1].stock_fin_cj : null;
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(20,20,18,.45)", zIndex: 1000,
+               display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 12, width: "min(1080px, 96vw)",
+                 maxHeight: "92vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
+
+        {/* Cabecera */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 18px",
+                      background: C.tealMid, color: "#fff", borderRadius: "12px 12px 0 0" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5 }}>📊 {sku} — {descripcion}</div>
+            <div style={{ fontSize: 11, opacity: .9 }}>
+              Proyección diaria de inventario · plan vigente
+              {d?.plan_id ? ` #${d.plan_id}` : ""}
+            </div>
+          </div>
+          <button onClick={onClose} title="Cerrar (Esc)"
+            style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20,
+                     cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: 18 }}>
+          {cargando && <div style={{ color: C.textMuted, padding: 30, textAlign: "center" }}>Cargando proyección…</div>}
+          {err && (
+            <div style={{ background: C.redLt, border: `1px solid ${C.red}`, borderRadius: 8,
+                          padding: 12, color: "#791F1F", fontSize: 12.5 }}>
+              No se pudo cargar la proyección: {err}
+            </div>
+          )}
+          {!cargando && !err && d?.disponible === false && (
+            <div style={{ background: C.amberLt, borderRadius: 8, padding: 12, fontSize: 12.5 }}>
+              {d.mensaje || "No hay plan vigente."}
+            </div>
+          )}
+
+          {!cargando && !err && serie.length > 0 && (
+            <>
+              {/* KPIs */}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                <KPI label="Stock final" value={`${fmtN(stockFin)} cj`} />
+                <KPI label="Stock mínimo" value={`${fmtN(stockMin)} cj`}
+                     color={stockMin < 0 ? C.red : stockMin === 0 ? C.amber : C.text} />
+                <KPI label="Días en quiebre" value={nQuiebre} color={nQuiebre ? C.red : C.teal} />
+                <KPI label="Días bajo SS" value={nBajoSS} color={nBajoSS ? C.amber : C.teal} />
+                <KPI label="Días con OFT" value={nOft} sub={`${dias.length} días`} />
+              </div>
+
+              {/* Gráfico */}
+              <div style={{ height: 330 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={serie} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.grayLt} />
+                    <XAxis dataKey="fecha" tick={{ fontSize: 10, fill: C.textMuted }} interval="preserveStartEnd" />
+                    <YAxis tick={{ fontSize: 10, fill: C.textMuted }}
+                           tickFormatter={(v) => v.toLocaleString("es-CL")} />
+                    <Tooltip formatter={(v, n) => [v == null ? "—" : `${fmt1(v)} cj`, n]}
+                             contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.border}` }} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <ReferenceLine y={0} stroke={C.red} strokeWidth={1} />
+                    <Bar dataKey="oft" name="OFT (producción)" fill={C.tealLt} stroke={C.teal} barSize={9} />
+                    <Bar dataKey="demanda" name="Demanda" fill="#F6C7C7" barSize={5} />
+                    <Line type="monotone" dataKey="stock" name="Stock final" stroke={C.purple}
+                          strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="ss" name="Stock seguridad" stroke={C.amber}
+                          strokeWidth={1.5} strokeDasharray="5 4" dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 8 }}>
+                Mismos datos que la pestaña Stock Diario (endpoint reactivo: recalcula el balance
+                con las OF aprobadas vigentes). Valores en cajas.
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+function DetalleSku({ it, onVerProyeccion }) {
   const d = it.derivados || {};
   const pp = it.params_producto || {};
   const pl = it.params_en_linea || {};
   return (
     <div style={{ padding: "12px 16px 14px 34px", background: "#FBFAF7",
                   borderBottom: `1px solid ${C.border}` }}>
-      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{it.descripcion}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{it.descripcion}</div>
+        <button onClick={(e) => { e.stopPropagation(); onVerProyeccion(); }}
+          style={{ padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                   border: `1px solid ${C.purple}`, background: C.purpleLt, color: C.purple,
+                   fontWeight: 600 }}>
+          📊 Ver proyección diaria
+        </button>
+      </div>
       <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
 
         <Grupo titulo="Parámetros del producto">
@@ -203,6 +337,7 @@ export default function ParametrosDiagnostico() {
   const [unidad, setUnidad]   = useState("u");        // 'u' | 'cj'
   const [abierta, setAbierta] = useState({});          // {codigo: true}
   const [skuAbierto, setSkuAbierto] = useState({});    // {"linea|sku": true}
+  const [modal, setModal] = useState(null);            // {sku, descripcion} | null
   const [filtro, setFiltro]   = useState("todos");     // todos | alertas | errores
   const [ocultos, setOcultos] = useState({});          // {codigoAlerta: true} -> chip apagado
 
@@ -400,6 +535,15 @@ export default function ParametrosDiagnostico() {
                               {abierto ? "▼" : "▶"}
                             </span>
                             {it.sku}
+                            <span onClick={(e) => { e.stopPropagation();
+                                     setModal({ sku: it.sku, descripcion: it.descripcion }); }}
+                                  title="Ver proyección diaria de inventario"
+                                  style={{ marginLeft: 6, fontSize: 12, cursor: "pointer",
+                                           padding: "1px 4px", borderRadius: 4,
+                                           border: `1px solid ${C.border}`, background: "#fff",
+                                           color: C.purple, userSelect: "none" }}>
+                              📈
+                            </span>
                             {it.otras_lineas?.length > 0 && (
                               <div style={{ fontSize: 9.5, color: C.textMuted, marginLeft: 14 }}>
                                 tb. en {it.otras_lineas.join(", ")}
@@ -456,7 +600,8 @@ export default function ParametrosDiagnostico() {
                         {abierto && (
                           <tr>
                             <td colSpan={11} style={{ padding: 0 }}>
-                              <DetalleSku it={it} />
+                              <DetalleSku it={it}
+                                onVerProyeccion={() => setModal({ sku: it.sku, descripcion: it.descripcion })} />
                             </td>
                           </tr>
                         )}
@@ -506,6 +651,11 @@ export default function ParametrosDiagnostico() {
         bodega &lt; {r.umbrales?.ratio_cap_bodega ?? 2}× batch mínimo.
         La demanda usada es el promedio de las próximas 4 semanas completas del plan vigente.
       </div>
+
+      {modal && (
+        <ProyeccionModal sku={modal.sku} descripcion={modal.descripcion}
+                         onClose={() => setModal(null)} />
+      )}
     </div>
   );
 }
