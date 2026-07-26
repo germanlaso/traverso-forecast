@@ -1165,10 +1165,11 @@ def get_faltantes_excel(fecha: str):
     """Genera y descarga el Informe de Quiebres de Stock (xlsx) de un día
     (YYYY-MM-DD): pestaña resumen por SKU + pestaña detalle por cliente."""
     try:
-        from db_mrp import get_faltantes_por_fecha
+        from db_mrp import get_faltantes_por_fecha, get_explicaciones_faltantes
         import faltantes_excel
         filas = get_faltantes_por_fecha(fecha)
-        contenido = faltantes_excel.generar_bytes(fecha, filas)
+        explic = get_explicaciones_faltantes(fecha)
+        contenido = faltantes_excel.generar_bytes(fecha, filas, explic, con_explicaciones=True)
         nombre = f"Informe_Quiebres_{fecha}.xlsx"
         return Response(
             content=contenido,
@@ -1210,6 +1211,105 @@ def post_explicacion_endpoint(payload: ExplicacionFaltante):
                 status_code=409,
                 detail="La explicacion ya fue enviada y no puede editarse.")
         return {"ok": True, "sku": payload.sku, "fecha": payload.fecha}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Diagnóstico de parámetros MRP (línea / SKU) — read-only (Fase 1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _forecast_diario_cj_desde_plan(n_semanas: int = 4) -> dict:
+    """Demanda diaria estimada por SKU (cajas/día), leída del plan vigente.
+    Promedia las próximas n semanas COMPLETAS (descarta semana_parcial) y divide
+    por los días hábiles. Si no hay plan vigente devuelve {}."""
+    from db_mrp import SessionLocal
+    with SessionLocal() as s:
+        row = s.execute(_sql(
+            "SELECT snapshot FROM mrp_planes WHERE vigente LIMIT 1"
+        )).mappings().first()
+    if row is None:
+        return {}
+    snap = row["snapshot"] or {}
+    proy = ((snap.get("vista_dashboard") or {}).get("proyeccion_por_sku")) or {}
+    out = {}
+    for sku, d in proy.items():
+        sem = [w for w in (d.get("semanas") or []) if not w.get("semana_parcial")]
+        sem = sem[:n_semanas]
+        if not sem:
+            continue
+        try:
+            prom_cj = sum(float(w.get("ventas_cj") or 0) for w in sem) / len(sem)
+        except (TypeError, ValueError):
+            continue
+        out[str(sku).strip()] = prom_cj / 5.0     # cj/día (5 días hábiles)
+    return out
+
+
+@app.get("/params/diagnostico", tags=["Parametros"])
+def get_params_diagnostico():
+    """Árbol línea -> SKU con capacidades, indicadores derivados y semáforos.
+    Solo lectura: no modifica ningún parámetro."""
+    try:
+        from db_mrp import get_all_lineas, get_all_sku_params, get_all_sku_lineas
+        import params_diagnostico as _pdiag
+        return _pdiag.construir_diagnostico(
+            lineas=get_all_lineas(),
+            sku_params=get_all_sku_params(),
+            sku_lineas=get_all_sku_lineas(),
+            forecast_diario_cj=_forecast_diario_cj_desde_plan(),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SimulacionParams(BaseModel):
+    sku: str
+    linea: str
+    params_producto: dict | None = None   # overrides: batch_min_u, batch_mult_u, ...
+    params_en_linea: dict | None = None   # overrides: factor_velocidad, t_cambio_hrs
+    params_linea: dict | None = None      # overrides: turnos_dia, horas_turno, ...
+    actor: str | None = ""                # reservado para cuando exista SSO
+
+
+@app.post("/params/diagnostico/simular", tags=["Parametros"])
+def post_params_simular(payload: SimulacionParams):
+    """Recalcula los indicadores de un (SKU, línea) con parámetros PROPUESTOS.
+    NO escribe nada en la base: es un 'qué pasaría si'."""
+    try:
+        from db_mrp import get_all_lineas, get_all_sku_params, get_all_sku_lineas
+        import params_diagnostico as _pdiag
+
+        lin = next((l for l in get_all_lineas()
+                    if str(l.get("codigo")).strip() == payload.linea.strip()), None)
+        if lin is None:
+            raise HTTPException(status_code=404, detail=f"Línea no encontrada: {payload.linea}")
+        prod = next((p for p in get_all_sku_params()
+                     if str(p.get("sku")).strip() == payload.sku.strip()), None)
+        if prod is None:
+            raise HTTPException(status_code=404, detail=f"SKU no encontrado: {payload.sku}")
+        par = next((x for x in get_all_sku_lineas()
+                    if str(x.get("sku")).strip() == payload.sku.strip()
+                    and str(x.get("linea")).strip() == payload.linea.strip()), {})
+
+        lin_prop  = {**lin,  **(payload.params_linea or {})}
+        prod_prop = {**prod, **(payload.params_producto or {})}
+        par_prop  = {**par,  **(payload.params_en_linea or {})}
+
+        der_l = _pdiag.derivados_linea(lin_prop)
+        fc = _forecast_diario_cj_desde_plan().get(payload.sku.strip())
+
+        actual = _pdiag.diagnosticar_sku(prod, _pdiag.derivados_linea(lin), par, fc)
+        propuesto = _pdiag.diagnosticar_sku(prod_prop, der_l, par_prop, fc)
+        return {
+            "sku": payload.sku, "linea": payload.linea,
+            "derivados_linea": der_l,
+            "actual": actual,
+            "propuesto": propuesto,
+            "guardado": False,   # Fase 1: simulación pura, nunca escribe
+        }
     except HTTPException:
         raise
     except Exception as e:
