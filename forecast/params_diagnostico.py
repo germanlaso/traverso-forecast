@@ -221,15 +221,20 @@ def diagnosticar_sku(params_producto: dict,
 def construir_diagnostico(lineas: list[dict],
                           sku_params: list[dict],
                           sku_lineas: list[dict],
-                          forecast_diario_cj: dict | None = None) -> dict:
+                          forecast_diario_cj: dict | None = None,
+                          skus_inactivos: set | None = None) -> dict:
     """Arma el árbol de diagnóstico.
 
     lineas     : get_all_lineas()      -> [{codigo, nombre, area, turnos_dia, ...}]
-    sku_params : get_all_sku_params()  -> [{sku, descripcion, batch_min_u, ...}]
+    sku_params : get_all_sku_params()  -> [{sku, descripcion, batch_min_u, ...}]  (solo activos)
     sku_lineas : get_all_sku_lineas()  -> [{sku, linea, factor_velocidad, preferida, ...}]
     forecast_diario_cj : {sku: cajas/día} (del plan vigente); puede ser None/{}.
+    skus_inactivos : set de SKU que existen pero están activo=FALSE. Sirve para no
+                     reportarlos como error de integridad cuando conservan su
+                     asignación de línea (caso normal, no un problema de datos).
     """
     forecast_diario_cj = forecast_diario_cj or {}
+    skus_inactivos = skus_inactivos or set()
     p_by_sku = {str(p["sku"]).strip(): p for p in sku_params}
 
     # pares por línea, y líneas por SKU (para el badge "también en ...")
@@ -256,17 +261,27 @@ def construir_diagnostico(lineas: list[dict],
             sku = str(par.get("sku") or "").strip()
             prod = p_by_sku.get(sku)
             if prod is None:
-                # par huérfano: hay sku_linea pero no sku_params
+                # El SKU no está entre los activos. Dos casos muy distintos:
+                #  · inactivo  -> normal, conserva su asignación de línea (info)
+                #  · inexistente -> problema real de integridad de datos (error)
+                inactivo = sku in skus_inactivos
                 items.append({
-                    "sku": sku, "descripcion": "(sin parámetros de SKU)",
+                    "sku": sku,
+                    "descripcion": "(SKU inactivo)" if inactivo else "(sin parámetros de SKU)",
                     "params_producto": {}, "params_en_linea": dict(par),
                     "derivados": {}, "preferida": bool(par.get("preferida")),
                     "otras_lineas": [l for l in lineas_por_sku.get(sku, []) if l != cod],
-                    "alertas": [_alerta(NIVEL_ERROR, "SKU_SIN_PARAMS",
-                                        "El par SKU-línea existe pero el SKU no está en "
-                                        "mrp_sku_params.")],
+                    "inactivo": inactivo,
+                    "alertas": [_alerta(
+                        NIVEL_INFO, "SKU_INACTIVO",
+                        "SKU marcado como inactivo; conserva la asignación de línea pero "
+                        "no entra en la planificación.")
+                        if inactivo else _alerta(
+                        NIVEL_ERROR, "SKU_SIN_PARAMS",
+                        "El par SKU-línea existe pero el SKU no está en mrp_sku_params.")],
                 })
-                tot_err += 1
+                if not inactivo:
+                    tot_err += 1
                 continue
 
             skus_con_linea.add(sku)

@@ -1262,11 +1262,22 @@ def get_params_diagnostico():
             fc = _forecast_diario_cj_desde_plan()
         except Exception:
             fc = {}
+        # SKU que existen pero están inactivos: conservan asignación de línea y no
+        # deben reportarse como error de integridad.
+        try:
+            from sqlalchemy import text as _sql2
+            from db_mrp import SessionLocal
+            with SessionLocal() as s:
+                inactivos = {str(r[0]).strip() for r in s.execute(_sql2(
+                    "SELECT sku FROM mrp_sku_params WHERE activo = FALSE")).fetchall()}
+        except Exception:
+            inactivos = set()
         return _pdiag.construir_diagnostico(
             lineas=get_all_lineas(),
             sku_params=get_all_sku_params(),
             sku_lineas=get_all_sku_lineas(),
             forecast_diario_cj=fc,
+            skus_inactivos=inactivos,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
