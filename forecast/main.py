@@ -1225,6 +1225,7 @@ def _forecast_diario_cj_desde_plan(n_semanas: int = 4) -> dict:
     """Demanda diaria estimada por SKU (cajas/día), leída del plan vigente.
     Promedia las próximas n semanas COMPLETAS (descarta semana_parcial) y divide
     por los días hábiles. Si no hay plan vigente devuelve {}."""
+    from sqlalchemy import text as _sql
     from db_mrp import SessionLocal
     with SessionLocal() as s:
         row = s.execute(_sql(
@@ -1255,14 +1256,20 @@ def get_params_diagnostico():
     try:
         from db_mrp import get_all_lineas, get_all_sku_params, get_all_sku_lineas
         import params_diagnostico as _pdiag
+        # el forecast es opcional: si no hay plan vigente o falla la lectura, el
+        # diagnóstico igual sirve (pierde solo los indicadores de cobertura).
+        try:
+            fc = _forecast_diario_cj_desde_plan()
+        except Exception:
+            fc = {}
         return _pdiag.construir_diagnostico(
             lineas=get_all_lineas(),
             sku_params=get_all_sku_params(),
             sku_lineas=get_all_sku_lineas(),
-            forecast_diario_cj=_forecast_diario_cj_desde_plan(),
+            forecast_diario_cj=fc,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
 
 class SimulacionParams(BaseModel):
