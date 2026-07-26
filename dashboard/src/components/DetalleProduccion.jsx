@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import axios from "axios";
+import ProyeccionModal from "./ProyeccionModal";
 
 const API = "";
 const C = {
@@ -405,9 +406,10 @@ export default function DetalleProduccion({
   onOFMCreada=null,
   planLoading=false,
   onSolicitarPlan=null,
-  onIrAStock=null,          // navegar a pestana Stock por SKU
+  onIrAStock=null,          // (obsoleto) navegaba a Stock por SKU; ahora se abre el modal
 }){
   const [semanaBase,setSemanaBase]=useState(getDomingoActual());
+  const [modalProy,setModalProy]=useState(null);   // {sku, descripcion} | null
   const [lineaFiltro,setLineaFiltro]=useState('');   // '' = todas las lineas
   const [lineas,setLineas]=useState([]);
   const [params,setParams]=useState({});
@@ -804,11 +806,10 @@ export default function DetalleProduccion({
                         <tr key={i} style={{background:rowBg}}>
                           <td style={{...s.tblCell,fontWeight:700,color:o.numero_of?.startsWith("OFT")?"#854F0B":C.tealMid,whiteSpace:"nowrap"}}>{o.numero_of}</td>
                           <td style={{...s.tblCell,fontWeight:700,color:C.teal}}>
-                            {onIrAStock
-                              ? <span onClick={(e)=>{e.stopPropagation();onIrAStock(o.sku);}}
-                                  title="Ver proyección de stock de este SKU"
+                            <span onClick={(e)=>{e.stopPropagation();
+                                    setModalProy({sku:o.sku,descripcion:o.descripcion||""});}}
+                                  title="Ver proyección diaria de inventario"
                                   style={{cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{o.sku}</span>
-                              : o.sku}
                           </td>
                           <td style={{...s.tblCell,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.descripcion}</td>
                           <td style={{...s.tblCell,whiteSpace:"nowrap"}}>
@@ -891,6 +892,11 @@ export default function DetalleProduccion({
           </div>
         );
       })}
+
+      {modalProy && (
+        <ProyeccionModal sku={modalProy.sku} descripcion={modalProy.descripcion}
+                         onClose={()=>setModalProy(null)} />
+      )}
     </div>
   );
 }
