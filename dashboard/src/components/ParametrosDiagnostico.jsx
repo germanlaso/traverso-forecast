@@ -224,8 +224,10 @@ function ProyeccionModal({ sku, descripcion, onClose }) {
                              contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.border}` }} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     <ReferenceLine y={0} stroke={C.red} strokeWidth={1} />
-                    <Bar dataKey="oft" name="OFT (producción)" fill={C.tealLt} stroke={C.teal} barSize={9} />
-                    <Bar dataKey="demanda" name="Demanda" fill="#F6C7C7" barSize={5} />
+                    <Bar dataKey="oft" name="OFT (producción)" fill={C.tealMid} fillOpacity={0.30}
+                         stroke={C.teal} barSize={9} />
+                    <Bar dataKey="demanda" name="Demanda" fill="#B85C5C" fillOpacity={0.42}
+                         barSize={5} />
                     <Line type="monotone" dataKey="stock" name="Stock final" stroke={C.purple}
                           strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="ss" name="Stock seguridad" stroke={C.amber}
