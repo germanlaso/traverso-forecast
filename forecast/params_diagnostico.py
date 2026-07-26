@@ -87,14 +87,15 @@ def derivados_linea(linea: dict) -> dict:
 def diagnosticar_sku(params_producto: dict,
                      der_linea: dict,
                      params_en_linea: dict,
-                     forecast_diario_cj: float | None = None) -> dict:
+                     forecast_semanal_cj: float | None = None) -> dict:
     """Indicadores derivados + alertas para un SKU en una línea concreta.
 
     params_producto : batch_min_u, batch_mult_u, cap_bodega_u, ss_dias,
                       lead_time_sem, u_por_caja, mto
     der_linea       : salida de derivados_linea()
     params_en_linea : factor_velocidad, t_cambio_hrs, preferida
-    forecast_diario_cj : demanda diaria estimada en cajas (None si no hay plan)
+    forecast_semanal_cj : demanda semanal estimada en cajas (None si no hay plan).
+                          El diario se deriva dividiendo por DIAS_HABILES_SEMANA.
     """
     upc        = _i(params_producto.get("u_por_caja"), 1) or 1
     batch_min  = _i(params_producto.get("batch_min_u"))
@@ -116,7 +117,9 @@ def diagnosticar_sku(params_producto: dict,
     cabe_turno   = (batch_min <= cap_turno) if cap_turno else False
     cabe_dia     = (batch_min <= cap_dia) if cap_dia else False
 
-    fc_cj = None if forecast_diario_cj is None else _f(forecast_diario_cj)
+    fc_sem_cj = None if forecast_semanal_cj is None else _f(forecast_semanal_cj)
+    fc_sem_u  = None if fc_sem_cj is None else fc_sem_cj * upc
+    fc_cj = None if fc_sem_cj is None else fc_sem_cj / DIAS_HABILES_SEMANA
     fc_u  = None if fc_cj is None else fc_cj * upc
     dias_cobertura = _div(batch_min, fc_u) if fc_u else None
 
@@ -137,12 +140,17 @@ def diagnosticar_sku(params_producto: dict,
         "batch_cabe_turno":  cabe_turno,
         "batch_cabe_dia":    cabe_dia,
         "t_cambio_hrs":      t_camb,
+        "forecast_sem_cj":    _r(fc_sem_cj, 1),
+        "forecast_sem_u":     _r(fc_sem_u, 0),
         "forecast_diario_cj": _r(fc_cj, 1),
         "forecast_diario_u":  _r(fc_u, 0),
         "dias_cobertura_batch": _r(dias_cobertura, 1),
+        "semanas_cobertura_batch": _r(_div(dias_cobertura, DIAS_HABILES_SEMANA), 2)
+                                    if dias_cobertura is not None else None,
         "cap_bodega_u":  None if not cap_bod_finita else cap_bod,
         "cap_bodega_cj": None if not cap_bod_finita else _r(cap_bod / upc, 1),
         "ratio_cap_bodega": _r(ratio_bodega, 2),
+        "lead_time_sem": _f(params_producto.get("lead_time_sem"), 1),
         "ss_dias": ss_dias,
         "mto": mto,
     }
@@ -221,19 +229,19 @@ def diagnosticar_sku(params_producto: dict,
 def construir_diagnostico(lineas: list[dict],
                           sku_params: list[dict],
                           sku_lineas: list[dict],
-                          forecast_diario_cj: dict | None = None,
+                          forecast_semanal_cj: dict | None = None,
                           skus_inactivos: set | None = None) -> dict:
     """Arma el árbol de diagnóstico.
 
     lineas     : get_all_lineas()      -> [{codigo, nombre, area, turnos_dia, ...}]
     sku_params : get_all_sku_params()  -> [{sku, descripcion, batch_min_u, ...}]  (solo activos)
     sku_lineas : get_all_sku_lineas()  -> [{sku, linea, factor_velocidad, preferida, ...}]
-    forecast_diario_cj : {sku: cajas/día} (del plan vigente); puede ser None/{}.
+    forecast_semanal_cj : {sku: cajas/semana} (promedio del plan vigente); puede ser None/{}.
     skus_inactivos : set de SKU que existen pero están activo=FALSE. Sirve para no
                      reportarlos como error de integridad cuando conservan su
                      asignación de línea (caso normal, no un problema de datos).
     """
-    forecast_diario_cj = forecast_diario_cj or {}
+    forecast_semanal_cj = forecast_semanal_cj or {}
     skus_inactivos = skus_inactivos or set()
     p_by_sku = {str(p["sku"]).strip(): p for p in sku_params}
 
@@ -300,7 +308,7 @@ def construir_diagnostico(lineas: list[dict],
                 "preferida":        bool(par.get("preferida")),
             }
             diag = diagnosticar_sku(params_producto, der_l, params_en_linea,
-                                    forecast_diario_cj.get(sku))
+                                    forecast_semanal_cj.get(sku))
             tot_err  += sum(1 for a in diag["alertas"] if a["nivel"] == NIVEL_ERROR)
             tot_warn += sum(1 for a in diag["alertas"] if a["nivel"] == NIVEL_WARN)
 

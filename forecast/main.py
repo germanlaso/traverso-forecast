@@ -1221,10 +1221,11 @@ def post_explicacion_endpoint(payload: ExplicacionFaltante):
 # Diagnóstico de parámetros MRP (línea / SKU) — read-only (Fase 1)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _forecast_diario_cj_desde_plan(n_semanas: int = 4) -> dict:
-    """Demanda diaria estimada por SKU (cajas/día), leída del plan vigente.
-    Promedia las próximas n semanas COMPLETAS (descarta semana_parcial) y divide
-    por los días hábiles. Si no hay plan vigente devuelve {}."""
+def _forecast_semanal_cj_desde_plan(n_semanas: int = 4) -> dict:
+    """Demanda SEMANAL estimada por SKU (cajas/semana), leída del plan vigente.
+    Promedia las próximas n semanas COMPLETAS (descarta semana_parcial).
+    El valor diario se deriva aguas abajo dividiendo por los días hábiles.
+    Si no hay plan vigente devuelve {}."""
     from sqlalchemy import text as _sql
     from db_mrp import SessionLocal
     with SessionLocal() as s:
@@ -1245,7 +1246,7 @@ def _forecast_diario_cj_desde_plan(n_semanas: int = 4) -> dict:
             prom_cj = sum(float(w.get("ventas_cj") or 0) for w in sem) / len(sem)
         except (TypeError, ValueError):
             continue
-        out[str(sku).strip()] = prom_cj / 5.0     # cj/día (5 días hábiles)
+        out[str(sku).strip()] = prom_cj          # cj/semana
     return out
 
 
@@ -1259,7 +1260,7 @@ def get_params_diagnostico():
         # el forecast es opcional: si no hay plan vigente o falla la lectura, el
         # diagnóstico igual sirve (pierde solo los indicadores de cobertura).
         try:
-            fc = _forecast_diario_cj_desde_plan()
+            fc = _forecast_semanal_cj_desde_plan()
         except Exception:
             fc = {}
         # SKU que existen pero están inactivos: conservan asignación de línea y no
@@ -1276,7 +1277,7 @@ def get_params_diagnostico():
             lineas=get_all_lineas(),
             sku_params=get_all_sku_params(),
             sku_lineas=get_all_sku_lineas(),
-            forecast_diario_cj=fc,
+            forecast_semanal_cj=fc,
             skus_inactivos=inactivos,
         )
     except Exception as e:
@@ -1317,7 +1318,7 @@ def post_params_simular(payload: SimulacionParams):
         par_prop  = {**par,  **(payload.params_en_linea or {})}
 
         der_l = _pdiag.derivados_linea(lin_prop)
-        fc = _forecast_diario_cj_desde_plan().get(payload.sku.strip())
+        fc = _forecast_semanal_cj_desde_plan().get(payload.sku.strip())
 
         actual = _pdiag.diagnosticar_sku(prod, _pdiag.derivados_linea(lin), par, fc)
         propuesto = _pdiag.diagnosticar_sku(prod_prop, der_l, par_prop, fc)

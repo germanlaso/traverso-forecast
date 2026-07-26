@@ -87,12 +87,122 @@ function KPI({ label, value, color, sub }) {
   );
 }
 
+/* Dato del panel de detalle: muestra el valor en unidades Y cajas a la vez. */
+function Dato({ label, u, cj, texto, sufijo, resaltar }) {
+  const hay = (v) => v !== null && v !== undefined;
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "3px 0",
+                  borderBottom: `1px dashed ${C.grayLt}` }}>
+      <span style={{ fontSize: 11, color: C.textMuted }}>{label}</span>
+      <span style={{ fontSize: 11.5, fontWeight: resaltar ? 700 : 500, color: resaltar ? C.amber : C.text,
+                     textAlign: "right", whiteSpace: "nowrap" }}>
+        {texto !== undefined ? texto : (
+          <>
+            {hay(u) ? fmtN(u) : "—"}<span style={{ color: C.textMuted, fontSize: 10 }}> u</span>
+            {hay(cj) && <> · {fmt1(cj)}<span style={{ color: C.textMuted, fontSize: 10 }}> cj</span></>}
+          </>
+        )}
+        {sufijo ? <span style={{ color: C.textMuted, fontSize: 10 }}> {sufijo}</span> : null}
+      </span>
+    </div>
+  );
+}
+
+function Grupo({ titulo, children }) {
+  return (
+    <div style={{ flex: "1 1 230px", minWidth: 215 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: C.tealMid, textTransform: "uppercase",
+                    letterSpacing: .3, marginBottom: 4 }}>{titulo}</div>
+      {children}
+    </div>
+  );
+}
+
+/* Panel de detalle de un SKU: TODOS los parámetros en unidades y cajas. */
+function DetalleSku({ it }) {
+  const d = it.derivados || {};
+  const pp = it.params_producto || {};
+  const pl = it.params_en_linea || {};
+  return (
+    <div style={{ padding: "12px 16px 14px 34px", background: "#FBFAF7",
+                  borderBottom: `1px solid ${C.border}` }}>
+      <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 8 }}>{it.descripcion}</div>
+      <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+
+        <Grupo titulo="Parámetros del producto">
+          <Dato label="Batch mínimo"   u={d.batch_min_u}  cj={d.batch_min_cj} />
+          <Dato label="Múltiplo batch" u={d.batch_mult_u} cj={d.batch_mult_cj} />
+          <Dato label="Cap. bodega"    u={d.cap_bodega_u} cj={d.cap_bodega_cj}
+                texto={d.cap_bodega_u == null ? "sin límite" : undefined} />
+          <Dato label="Unidades/caja"  texto={String(d.u_por_caja ?? pp.u_por_caja ?? "—")} />
+          <Dato label="Stock seguridad" texto={`${d.ss_dias ?? pp.ss_dias ?? "—"} días`} />
+          <Dato label="Lead time"      texto={`${d.lead_time_sem ?? pp.lead_time_sem ?? "—"} sem`} />
+          <Dato label="Tipo"           texto={d.mto ? "MTO (contra pedido)" : "MTS (a stock)"} />
+          <div style={{ fontSize: 9.5, color: C.textMuted, marginTop: 3 }}>
+            Globales del SKU: aplican en todas sus líneas.
+          </div>
+        </Grupo>
+
+        <Grupo titulo="En esta línea">
+          <Dato label="Asignación"      texto={it.preferida ? "Preferida" : "Alternativa"} />
+          <Dato label="Factor velocidad" texto={String(pl.factor_velocidad ?? "—")}
+                resaltar={pl.factor_velocidad < 1} />
+          <Dato label="Vel. efectiva"   texto={`${fmtN(d.vel_efectiva_u_hr)} u/hr`} />
+          <Dato label="T. cambio"       texto={`${fmt1(pl.t_cambio_hrs ?? d.t_cambio_hrs)} h`} />
+          {it.otras_lineas?.length > 0 && (
+            <Dato label="También en" texto={it.otras_lineas.join(", ")} />
+          )}
+        </Grupo>
+
+        <Grupo titulo="Capacidad efectiva">
+          <Dato label="Por turno"  u={d.cap_turno_u} cj={d.cap_turno_cj} />
+          <Dato label="Por día"    u={d.cap_dia_u}   cj={d.cap_dia_cj} />
+          <Dato label="Por semana" u={d.cap_sem_u}   cj={d.cap_sem_cj} />
+          <Dato label="Horas por batch" texto={d.horas_por_batch == null ? "—" : `${fmt1(d.horas_por_batch)} h`} />
+          <Dato label="% del día por batch"
+                texto={d.pct_dia_por_batch == null ? "—" : `${fmt1(d.pct_dia_por_batch)} %`}
+                resaltar={d.pct_dia_por_batch > 90} />
+        </Grupo>
+
+        <Grupo titulo="Demanda (plan vigente)">
+          <Dato label="Forecast semanal" u={d.forecast_sem_u}    cj={d.forecast_sem_cj} />
+          <Dato label="Forecast diario"  u={d.forecast_diario_u} cj={d.forecast_diario_cj} />
+          <Dato label="Cobertura del batch"
+                texto={d.dias_cobertura_batch == null ? "sin forecast"
+                       : `${fmt1(d.dias_cobertura_batch)} días (${fmt1(d.semanas_cobertura_batch)} sem)`}
+                resaltar={d.dias_cobertura_batch > 30} />
+          <Dato label="Bodega / batch"
+                texto={d.ratio_cap_bodega == null ? "—" : `${fmt1(d.ratio_cap_bodega)}×`}
+                resaltar={d.ratio_cap_bodega != null && d.ratio_cap_bodega < 2} />
+          <div style={{ fontSize: 9.5, color: C.textMuted, marginTop: 3 }}>
+            Promedio de las próximas 4 semanas completas; diario = semanal ÷ 5.
+          </div>
+        </Grupo>
+      </div>
+
+      {(it.alertas || []).length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          {it.alertas.map((a, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 4 }}>
+              <span style={{ ...s.pill(NIVEL_BG[a.nivel], NIVEL_COLOR[a.nivel]), flexShrink: 0 }}>
+                {ALERTA_LABEL[a.codigo] || a.codigo}
+              </span>
+              <span style={{ fontSize: 11.5, color: C.text }}>{a.mensaje}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ParametrosDiagnostico() {
   const [data, setData]       = useState(null);
   const [cargando, setCargando] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [unidad, setUnidad]   = useState("u");        // 'u' | 'cj'
   const [abierta, setAbierta] = useState({});          // {codigo: true}
+  const [skuAbierto, setSkuAbierto] = useState({});    // {"linea|sku": true}
   const [filtro, setFiltro]   = useState("todos");     // todos | alertas | errores
   const [ocultos, setOcultos] = useState({});          // {codigoAlerta: true} -> chip apagado
 
@@ -260,8 +370,9 @@ export default function ParametrosDiagnostico() {
                   <thead>
                     <tr>
                       {["SKU", "Descripción", "Asig.", "Factor", `Batch mín (${unidad})`,
-                        `Cap. día (${unidad})`, "% día", "Hrs/batch", "Cobertura", "Diagnóstico"].map((h, i) => (
-                        <th key={h} style={{ ...s.th, textAlign: i >= 3 && i <= 8 ? "right" : "left" }}>{h}</th>
+                        `Cap. día (${unidad})`, `Fcst sem (${unidad})`, "% día", "Hrs/batch",
+                        "Cobertura", "Diagnóstico"].map((h, i) => (
+                        <th key={h} style={{ ...s.th, textAlign: i >= 3 && i <= 9 ? "right" : "left" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -273,13 +384,24 @@ export default function ParametrosDiagnostico() {
                       const hayWarn = al.some((a) => a.nivel === "warn");
                       const batch = unidad === "u" ? dv.batch_min_u : dv.batch_min_cj;
                       const capd  = unidad === "u" ? dv.cap_dia_u   : dv.cap_dia_cj;
+                      const fsem  = unidad === "u" ? dv.forecast_sem_u : dv.forecast_sem_cj;
                       const pct   = dv.pct_dia_por_batch;
+                      const key   = `${l.codigo}|${it.sku}`;
+                      const abierto = !!skuAbierto[key];
                       return (
-                        <tr key={it.sku} style={{ background: hayErr ? "#FFF6F6" : hayWarn ? "#FFFCF5" : "#fff" }}>
+                        <React.Fragment key={it.sku}>
+                        <tr onClick={() => setSkuAbierto((o) => ({ ...o, [key]: !o[key] }))}
+                            title="Ver todos los parámetros"
+                            style={{ cursor: "pointer",
+                                     background: abierto ? C.tealLt
+                                               : hayErr ? "#FFF6F6" : hayWarn ? "#FFFCF5" : "#fff" }}>
                           <td style={{ ...s.td, fontWeight: 600 }}>
+                            <span style={{ color: C.textMuted, fontSize: 9, marginRight: 5 }}>
+                              {abierto ? "▼" : "▶"}
+                            </span>
                             {it.sku}
                             {it.otras_lineas?.length > 0 && (
-                              <div style={{ fontSize: 9.5, color: C.textMuted }}>
+                              <div style={{ fontSize: 9.5, color: C.textMuted, marginLeft: 14 }}>
                                 tb. en {it.otras_lineas.join(", ")}
                               </div>
                             )}
@@ -304,6 +426,10 @@ export default function ParametrosDiagnostico() {
                           <td style={{ ...s.td, textAlign: "right", color: C.textMuted }}>
                             {unidad === "u" ? fmtN(capd) : fmt1(capd)}
                           </td>
+                          <td style={{ ...s.td, textAlign: "right",
+                                       color: fsem == null ? C.textMuted : C.purple }}>
+                            {fsem == null ? "—" : (unidad === "u" ? fmtN(fsem) : fmt1(fsem))}
+                          </td>
                           <td style={{ ...s.td, textAlign: "right", fontWeight: 700,
                                        color: pct == null ? C.textMuted : pct > 100 ? C.red : pct > 90 ? C.amber : C.teal }}>
                             {pct == null ? "—" : `${fmt1(pct)}%`}
@@ -327,6 +453,14 @@ export default function ParametrosDiagnostico() {
                                 ))}
                           </td>
                         </tr>
+                        {abierto && (
+                          <tr>
+                            <td colSpan={11} style={{ padding: 0 }}>
+                              <DetalleSku it={it} />
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
