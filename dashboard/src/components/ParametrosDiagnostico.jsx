@@ -65,14 +65,24 @@ function Param({ value, sufijo, titulo, fuerte }) {
   );
 }
 
-function BarraCarga({ pct }) {
+function BarraCarga({ pct, cautivaPct, flexiblePct }) {
   if (pct === null || pct === undefined) return <span style={{ color: C.textMuted, fontSize: 11 }}>s/d</span>;
-  const p = Math.max(0, Math.min(pct, 130));
+  const ESCALA = 130;
   const col = pct > 100 ? C.red : pct > 85 ? C.amber : C.teal;
+  const wCau = Math.max(0, Math.min(cautivaPct ?? pct, ESCALA)) / ESCALA * 100;
+  const wFle = Math.max(0, Math.min(flexiblePct ?? 0, ESCALA)) / ESCALA * 100;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 130 }}>
-      <div style={{ flex: 1, height: 7, background: C.grayLt, borderRadius: 4, overflow: "hidden", minWidth: 70 }}>
-        <div style={{ width: `${(p / 130) * 100}%`, height: "100%", background: col }} />
+    <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 150 }}
+         title={cautivaPct != null
+           ? `Cautiva ${fmt1(cautivaPct)}% (no se puede mover) · Flexible ${fmt1(flexiblePct)}% (SKU con línea alternativa)`
+           : undefined}>
+      <div style={{ flex: 1, height: 8, background: C.grayLt, borderRadius: 4,
+                    overflow: "hidden", minWidth: 80, display: "flex", position: "relative" }}>
+        <div style={{ width: `${wCau}%`, height: "100%", background: col }} />
+        <div style={{ width: `${wFle}%`, height: "100%", background: col, opacity: .38 }} />
+        {/* marca del 100% */}
+        <div style={{ position: "absolute", left: `${100 / ESCALA * 100}%`, top: 0, bottom: 0,
+                      width: 1, background: C.text, opacity: .35 }} />
       </div>
       <span style={{ fontSize: 11, fontWeight: 700, color: col, width: 44, textAlign: "right" }}>
         {fmt1(pct)}%
@@ -285,8 +295,13 @@ function DetalleSku({ it, onVerProyeccion }) {
                 resaltar={pl.factor_velocidad < 1} />
           <Dato label="Vel. efectiva"   texto={`${fmtN(d.vel_efectiva_u_hr)} u/hr`} />
           <Dato label="T. cambio"       texto={`${fmt1(pl.t_cambio_hrs ?? d.t_cambio_hrs)} h`} />
-          {it.otras_lineas?.length > 0 && (
-            <Dato label="También en" texto={it.otras_lineas.join(", ")} />
+          <Dato label="Lotes por semana" texto={d.lotes_sem == null ? "—" : fmt1(d.lotes_sem)} />
+          <Dato label="Días de máquina/sem"
+                texto={d.dias_prod_sem == null ? "—" : `${fmt1(d.dias_prod_sem)} d`} />
+          {(it.alternativas || []).length === 0 && (
+            <div style={{ fontSize: 9.5, color: C.textMuted, marginTop: 3 }}>
+              Sin línea alternativa: esta carga es cautiva.
+            </div>
           )}
         </Grupo>
 
@@ -315,6 +330,49 @@ function DetalleSku({ it, onVerProyeccion }) {
           </div>
         </Grupo>
       </div>
+
+      {(it.alternativas || []).length > 0 && (
+        <div style={{ marginTop: 10, padding: "8px 10px", background: "#fff",
+                      border: `1px solid ${C.border}`, borderRadius: 8 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: C.purple, textTransform: "uppercase",
+                        letterSpacing: .3, marginBottom: 5 }}>
+            Líneas alternativas
+          </div>
+          <table style={{ borderCollapse: "collapse", fontSize: 11.5 }}>
+            <thead>
+              <tr>{["Línea", "Costaría", "Carga actual", "Holgura", "¿Absorbe?"].map((h, i) => (
+                <th key={h} style={{ padding: "2px 12px 4px 0", textAlign: i === 0 ? "left" : "right",
+                                     color: C.textMuted, fontSize: 10, fontWeight: 600 }}>{h}</th>))}</tr>
+            </thead>
+            <tbody>
+              {it.alternativas.map((a) => (
+                <tr key={a.linea}>
+                  <td style={{ padding: "2px 12px 2px 0", fontWeight: 600 }}>{a.linea}</td>
+                  <td style={{ padding: "2px 12px 2px 0", textAlign: "right" }}>
+                    {a.dias_prod_sem == null ? "—" : `${fmt1(a.dias_prod_sem)} d`}
+                  </td>
+                  <td style={{ padding: "2px 12px 2px 0", textAlign: "right",
+                               color: a.carga_pct > 100 ? C.red : a.carga_pct > 85 ? C.amber : C.text }}>
+                    {fmt1(a.carga_pct)}%
+                  </td>
+                  <td style={{ padding: "2px 12px 2px 0", textAlign: "right", color: C.textMuted }}>
+                    {a.holgura_dias == null ? "—" : `${fmt1(a.holgura_dias)} d`}
+                  </td>
+                  <td style={{ padding: "2px 0", textAlign: "right" }}>
+                    <span style={s.pill(a.absorbe ? C.tealLt : C.redLt, a.absorbe ? C.tealMid : C.red)}>
+                      {a.absorbe ? "Sí" : "No"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 9.5, color: C.textMuted, marginTop: 4 }}>
+            "Costaría" son los días de máquina en esa línea (dependen de su velocidad y factor).
+            "Absorbe" = la holgura de esa línea alcanza para tomar toda la demanda de este SKU.
+          </div>
+        </div>
+      )}
 
       {(it.alertas || []).length > 0 && (
         <div style={{ marginTop: 10 }}>
@@ -486,13 +544,27 @@ export default function ParametrosDiagnostico() {
               <div style={{ fontSize: 11.5, color: C.textMuted, minWidth: 200 }}>
                 {fmtN(d.velocidad_u_hr)} u/hr · {d.turnos_dia}t × {fmt1(d.horas_turno ? d.horas_turno : d.horas_dia / (d.turnos_dia || 1))}h × {d.dias_semana}d
               </div>
-              <div style={{ fontSize: 11.5, minWidth: 190 }}>
+              <div style={{ fontSize: 11.5, minWidth: 175 }}>
                 <span style={{ color: C.textMuted }}>día </span><b>{fmtN(d.cap_dia_u)}</b>
                 <span style={{ color: C.textMuted }}> · sem </span><b>{fmtN(d.cap_sem_u)}</b>
                 <span style={{ color: C.textMuted, fontSize: 10 }}> u</span>
               </div>
-              <BarraCarga pct={d.carga_pct} />
+              <div style={{ fontSize: 11.5, minWidth: 128 }}
+                   title="Días de máquina que requiere la demanda semanal, contra los días hábiles disponibles">
+                <b style={{ color: (d.holgura_dias ?? 0) < 0 ? C.red : C.text }}>
+                  {fmt1(d.dias_prod_necesarios)}
+                </b>
+                <span style={{ color: C.textMuted }}> / {d.dias_disponibles} días</span>
+              </div>
+              <BarraCarga pct={d.carga_pct} cautivaPct={d.carga_cautiva_pct}
+                          flexiblePct={d.carga_flexible_pct} />
               <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+                {l.n_flexibles > 0 && (
+                  <span style={s.pill(C.purpleLt, C.purple)}
+                        title={`${l.n_flexibles} SKU con línea alternativa · ${fmt1(d.dias_prod_flexibles)} días de máquina movibles`}>
+                    {l.n_flexibles} movible{l.n_flexibles > 1 ? "s" : ""}
+                  </span>
+                )}
                 <span style={{ fontSize: 11, color: C.textMuted }}>{l.n_skus} SKU</span>
                 {l.n_errores > 0 && <span style={s.pill(C.redLt, "#791F1F")}>{l.n_errores} error{l.n_errores > 1 ? "es" : ""}</span>}
                 {l.n_warnings > 0 && <span style={s.pill(C.amberLt, "#854F0B")}>{l.n_warnings} advert.</span>}
@@ -507,9 +579,9 @@ export default function ParametrosDiagnostico() {
                   <thead>
                     <tr>
                       {["SKU", "Descripción", "Asig.", "Factor", `Batch mín (${unidad})`,
-                        `Cap. día (${unidad})`, `Fcst sem (${unidad})`, "% día", "Hrs/batch",
-                        "Cobertura", "Diagnóstico"].map((h, i) => (
-                        <th key={h} style={{ ...s.th, textAlign: i >= 3 && i <= 9 ? "right" : "left" }}>{h}</th>
+                        `Cap. día (${unidad})`, `Fcst sem (${unidad})`, "Lotes/sem", "Días prod.",
+                        "% día", "Hrs/batch", "Cobertura", "Diagnóstico"].map((h, i) => (
+                        <th key={h} style={{ ...s.th, textAlign: i >= 3 && i <= 11 ? "right" : "left" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -546,9 +618,15 @@ export default function ParametrosDiagnostico() {
                                            color: C.purple, userSelect: "none" }}>
                               📈
                             </span>
-                            {it.otras_lineas?.length > 0 && (
-                              <div style={{ fontSize: 9.5, color: C.textMuted, marginLeft: 14 }}>
-                                tb. en {it.otras_lineas.join(", ")}
+                            {(it.alternativas || []).length > 0 && (
+                              <div style={{ fontSize: 9.5, marginLeft: 14, marginTop: 1 }}>
+                                {it.alternativas.map((a) => (
+                                  <div key={a.linea} style={{ color: a.absorbe ? C.tealMid : C.textMuted }}
+                                       title={`En ${a.linea} costaría ${fmt1(a.dias_prod_sem)} días de máquina. `
+                                            + `Esa línea está al ${fmt1(a.carga_pct)}% con ${fmt1(a.holgura_dias)} días libres.`}>
+                                    → {a.linea} ({fmt1(a.carga_pct)}%) {a.absorbe ? "✓ absorbe" : "✕ sin holgura"}
+                                  </div>
+                                ))}
                               </div>
                             )}
                           </td>
@@ -576,6 +654,12 @@ export default function ParametrosDiagnostico() {
                                        color: fsem == null ? C.textMuted : C.purple }}>
                             {fsem == null ? "—" : (unidad === "u" ? fmtN(fsem) : fmt1(fsem))}
                           </td>
+                          <td style={{ ...s.td, textAlign: "right", color: C.textMuted }}>
+                            {dv.lotes_sem == null ? "—" : fmt1(dv.lotes_sem)}
+                          </td>
+                          <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>
+                            {dv.dias_prod_sem == null ? "—" : `${fmt1(dv.dias_prod_sem)} d`}
+                          </td>
                           <td style={{ ...s.td, textAlign: "right", fontWeight: 700,
                                        color: pct == null ? C.textMuted : pct > 100 ? C.red : pct > 90 ? C.amber : C.teal }}>
                             {pct == null ? "—" : `${fmt1(pct)}%`}
@@ -601,7 +685,7 @@ export default function ParametrosDiagnostico() {
                         </tr>
                         {abierto && (
                           <tr>
-                            <td colSpan={11} style={{ padding: 0 }}>
+                            <td colSpan={13} style={{ padding: 0 }}>
                               <DetalleSku it={it}
                                 onVerProyeccion={() => setModal({ sku: it.sku, descripcion: it.descripcion })} />
                             </td>

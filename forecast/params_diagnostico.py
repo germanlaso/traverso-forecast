@@ -144,6 +144,10 @@ def diagnosticar_sku(params_producto: dict,
         "forecast_sem_u":     _r(fc_sem_u, 0),
         "forecast_diario_cj": _r(fc_cj, 1),
         "forecast_diario_u":  _r(fc_u, 0),
+        # Días de máquina que consume la demanda semanal de este SKU en ESTA línea.
+        # Es el insumo de la carga de línea: la suma de todos sus SKU vs días hábiles.
+        "dias_prod_sem":  _r(_div(fc_sem_u, cap_dia), 2) if fc_sem_u else None,
+        "lotes_sem":      _r(_div(fc_sem_u, batch_min), 2) if (fc_sem_u and batch_min) else None,
         "dias_cobertura_batch": _r(dias_cobertura, 1),
         "semanas_cobertura_batch": _r(_div(dias_cobertura, DIAS_HABILES_SEMANA), 2)
                                     if dias_cobertura is not None else None,
@@ -327,13 +331,27 @@ def construir_diagnostico(lineas: list[dict],
         n_err  = sum(1 for it in items for a in it["alertas"] if a["nivel"] == NIVEL_ERROR)
         n_warn = sum(1 for it in items for a in it["alertas"] if a["nivel"] == NIVEL_WARN)
 
-        # carga estimada de la línea: demanda semanal de sus SKU vs capacidad
+        # Carga de la línea, medida en DÍAS DE MÁQUINA por semana.
+        # Se separa en:
+        #   · cautiva  -> SKU que solo pueden producirse en esta línea (piso irreducible)
+        #   · flexible -> SKU con línea alternativa (podrían moverse)
+        # OJO: la carga total puede estar sobrestimada cuando hay SKU multi-línea, porque
+        # a cada línea se le imputa la demanda COMPLETA del SKU. El rango
+        # [cautiva, total] acota la carga real.
+        dias_cautivos = dias_flexibles = 0.0
         dem_sem_u = 0.0
         for it in items:
-            fc = it["derivados"].get("forecast_diario_u")
-            if fc:
-                dem_sem_u += _f(fc) * der_l["dias_semana"]
-        carga_pct = _div(dem_sem_u, der_l["cap_sem_u"])
+            dp = _f(it["derivados"].get("dias_prod_sem"))
+            dem_sem_u += _f(it["derivados"].get("forecast_sem_u"))
+            if it.get("otras_lineas"):
+                dias_flexibles += dp
+            else:
+                dias_cautivos += dp
+        dias_totales = dias_cautivos + dias_flexibles
+        dsem = der_l["dias_semana"] or 5
+        carga_pct     = (dias_totales / dsem * 100) if dsem else None
+        cautiva_pct   = (dias_cautivos / dsem * 100) if dsem else None
+        flexible_pct  = (dias_flexibles / dsem * 100) if dsem else None
 
         out_lineas.append({
             "codigo": cod,
@@ -349,14 +367,54 @@ def construir_diagnostico(lineas: list[dict],
             "derivados": {
                 **der_l,
                 "demanda_sem_estimada_u": _r(dem_sem_u, 0),
-                "carga_pct": _r((carga_pct * 100) if carga_pct is not None else None, 1),
+                "dias_prod_necesarios":   _r(dias_totales, 2),
+                "dias_prod_cautivos":     _r(dias_cautivos, 2),
+                "dias_prod_flexibles":    _r(dias_flexibles, 2),
+                "dias_disponibles":       dsem,
+                "carga_pct":          _r(carga_pct, 1),
+                "carga_cautiva_pct":  _r(cautiva_pct, 1),
+                "carga_flexible_pct": _r(flexible_pct, 1),
+                "holgura_dias": _r(dsem - dias_totales, 2),
                 "holgura_u": _r(_f(der_l["cap_sem_u"]) - dem_sem_u, 0),
             },
             "n_skus": len(items),
+            "n_flexibles": sum(1 for it in items if it.get("otras_lineas")),
             "n_errores": n_err,
             "n_warnings": n_warn,
             "skus": items,
         })
+
+    # ── Anotación cruzada de alternativas ────────────────────────────────────
+    # Para cada SKU que puede correr en más de una línea, se anota qué costaría
+    # producirlo en cada alternativa (días de máquina allí, que dependen de la
+    # velocidad y el factor de ESA línea) y cómo está cargada esa línea hoy.
+    # Es lo que permite responder "¿hay dónde absorber el exceso?".
+    dias_por_par = {}     # (sku, linea) -> dias_prod_sem
+    linea_por_cod = {}    # codigo -> dict de la línea de salida
+    for l in out_lineas:
+        linea_por_cod[l["codigo"]] = l
+        for it in l["skus"]:
+            dias_por_par[(it["sku"], l["codigo"])] = it["derivados"].get("dias_prod_sem")
+
+    for l in out_lineas:
+        for it in l["skus"]:
+            alts = []
+            for otra in it.get("otras_lineas", []):
+                lo = linea_por_cod.get(otra)
+                if lo is None:
+                    continue
+                d_alli = dias_por_par.get((it["sku"], otra))
+                alts.append({
+                    "linea": otra,
+                    "dias_prod_sem": d_alli,
+                    "carga_pct": lo["derivados"].get("carga_pct"),
+                    "holgura_dias": lo["derivados"].get("holgura_dias"),
+                    # ¿la holgura de esa línea alcanza para absorber este SKU?
+                    "absorbe": (d_alli is not None
+                                and lo["derivados"].get("holgura_dias") is not None
+                                and _f(lo["derivados"]["holgura_dias"]) >= _f(d_alli)),
+                })
+            it["alternativas"] = alts
 
     # ── SKU sin línea asignada ───────────────────────────────────────────────
     sin_linea = []
