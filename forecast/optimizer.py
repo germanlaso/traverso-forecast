@@ -161,10 +161,28 @@ SOLVER_RANDOM_SEED = None  # (N2) si != None se fija en el solver (reproducibili
 # OFF (default): single-pass N1-min, identico al cron actual. ON: optimizar_plan
 # corre A (N1-min, define Q*) -> C (SS-target, barrera Q*). Ver DEFINICION_N2_v2.
 N2_ENABLED = _os.environ.get("N2_ENABLED", "0") == "1"
-N2_PESOS_C = {"W_DEF_LEVE": 20, "W_DEF_GRAVE": 60, "W_EXC_LEVE": 3, "W_EXC_ALTO": 8}
+# (27-07-2026) Pesos y workers de la pasada C, configurables por entorno para poder
+# calibrar sin tocar código. Los defaults son los valores históricos: sin variables
+# definidas, el comportamiento es idéntico al anterior.
+#   N2_W_DEF_LEVE / N2_W_DEF_GRAVE : castigo por déficit vs SS (tramos)
+#   N2_W_EXC_LEVE / N2_W_EXC_ALTO  : castigo por exceso sobre SS (tramos)
+#   N2_WORKERS_C                   : workers de la pasada C
+N2_PESOS_C = {
+    "W_DEF_LEVE":  int(_os.environ.get("N2_W_DEF_LEVE",  "20")),
+    "W_DEF_GRAVE": int(_os.environ.get("N2_W_DEF_GRAVE", "60")),
+    "W_EXC_LEVE":  int(_os.environ.get("N2_W_EXC_LEVE",  "3")),
+    "W_EXC_ALTO":  int(_os.environ.get("N2_W_EXC_ALTO",  "8")),
+}
 N2_WORKERS_A = 8
-N2_WORKERS_C = 2 # H=8: C@1w no converge (TIMEOUT_SIN_SOLUCION); 2w a costa de determinismo
+N2_WORKERS_C = int(_os.environ.get("N2_WORKERS_C", "2"))
+# H=8: C@1w no converge (TIMEOUT_SIN_SOLUCION); 2w a costa de determinismo
 N2_SEED_C = 42
+# (27-07-2026) Modo de la barrera Q* de N2. Ver bloque 6b en optimizar_plan_v12_rich.
+#   "universal": stock_u >= Q* en toda celda (histórico; congela la sobreproducción de A).
+#   "quiebre"  : stock_u >= min(Q*, 0) — preserva el nivel de servicio de A sin
+#                congelar su inventario, dejando a C reducir producción hacia el SS.
+N2_BARRERA_MODO = _os.environ.get("N2_BARRERA_MODO", "universal").strip().lower()
+
 N2_TL_A = int(_os.environ.get("N2_TL_A", "1800"))
 N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 
@@ -443,14 +461,42 @@ def optimizar_plan_v12_rich(
     # ─── 6b. (N2) Barrera dura Q*: stock_u[(d,s)] >= Q*[(s, d_iso)] ───────────
     # Cota inferior por celda tomada del stock SIN clamp de la pasada N1
     # (DEFINICION_N2_v2 §1.2): N2 no puede empeorar ningun quiebre que N1 evito.
+    #
+    # (27-07-2026) MODO configurable via env N2_BARRERA_MODO:
+    #
+    #   "universal" (histórico): stock_u >= Q* en TODA celda. Problema: la pasada A
+    #       corre con W_DEF=W_EXC=W_SETUP=0, o sea es INDIFERENTE a cuánto produce
+    #       — cualquier nivel de stock le da el mismo objetivo. Si el LNS deja a un
+    #       SKU con inventario inflado, ese valor se vuelve PISO OBLIGATORIO para C.
+    #       C sí penaliza el exceso sobre SS (W_EXC_ALTO), pero no puede bajarlo:
+    #       la cota es dura. Resultado: sobreproducción que C no puede corregir.
+    #
+    #   "quiebre" (recomendado): stock_u >= min(Q*, 0). Preserva EXACTAMENTE el
+    #       propósito declarado —no empeorar el nivel de servicio de A— sin
+    #       congelar su nivel de inventario:
+    #         · Q* >= 0 (A no quebró)  -> cota 0: C no puede introducir un quiebre
+    #                                     nuevo, pero SÍ puede reducir producción.
+    #         · Q* <  0 (inevitable)   -> cota Q*: C no puede empeorarlo.
+    #       C queda libre para acercar el inventario al SS, que es su misión.
+    _modo_barrera = N2_BARRERA_MODO
     if cotas_qstar:
         _n_barrera = 0
+        _n_relajadas = 0
         for (d, s), var in m.stock_u.items():
             q = cotas_qstar.get((s, d.isoformat()))
-            if q is not None:
-                m.model.Add(var >= q)
-                _n_barrera += 1
-        logger.info(f"[N2] barrera Q*: {_n_barrera} cotas agregadas")
+            if q is None:
+                continue
+            if _modo_barrera == "quiebre":
+                q_eff = min(int(q), 0)
+                if q_eff != int(q):
+                    _n_relajadas += 1
+            else:
+                q_eff = int(q)
+            m.model.Add(var >= q_eff)
+            _n_barrera += 1
+        logger.info(f"[N2] barrera Q* modo={_modo_barrera}: {_n_barrera} cotas agregadas"
+                    + (f" ({_n_relajadas} relajadas a 0 -> C puede reducir producción)"
+                       if _modo_barrera == "quiebre" else ""))
 
     # ─── 7. Resolver ─────────────────────────────────────────────────────────
     solver = cp_model.CpSolver()
@@ -1422,7 +1468,8 @@ def _correr_dos_pasadas(**rich_kwargs) -> dict:
         SOLVER_NUM_WORKERS = N2_WORKERS_C
         SOLVER_RANDOM_SEED = N2_SEED_C
         kwargs_C["cotas_qstar"] = qstar
-        logger.info(f"[N2] Pasada C (SS-target) @ {N2_WORKERS_C}w seed={N2_SEED_C} TL={N2_TL_C}s")
+        logger.info(f"[N2] Pasada C (SS-target) @ {N2_WORKERS_C}w seed={N2_SEED_C} "
+                    f"TL={N2_TL_C}s pesos={N2_PESOS_C} barrera={N2_BARRERA_MODO}")
         resC = optimizar_plan_v12_rich(**kwargs_C)
         logger.info(f"[N2] C status={resC.get('status')} gap={resC.get('gap')}")
     finally:
