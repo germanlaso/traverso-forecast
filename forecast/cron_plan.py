@@ -132,6 +132,13 @@ def main():
     # get_sales_df vive en main; lo importamos para reusar el cache/carga real
     from main import get_sales_df
     df_sales = get_sales_df()
+    # D1 (27-07-2026): el forecast debe cubrir el horizonte + los 35 dias de margen
+    # que necesita el SS de cobertura + 7 de colchon. La constante `horizonte + 4`
+    # no lo garantizaba: make_future_dataframe ancla en el fin de historia DEL
+    # MODELO, no en hoy; con modelos cacheados el 82,6% de los SKU quedaba corto.
+    # Ver DECISION_forecast_cobertura_y_reentrenamiento.md
+    fecha_cobertura = hoy + dt.timedelta(days=args.horizonte * 7 + 42)
+    log.info(f"[4/8] el forecast debe cubrir hasta {fecha_cobertura}")
     forecasts = {}
     n_mto = 0
     for sku in sku_params:
@@ -143,7 +150,8 @@ def main():
             continue
         try:
             r = run_sku_pipeline(df=df_sales, sku=sku, canal=None,
-                                 forecast_periods=args.horizonte + 4)
+                                 forecast_periods=args.horizonte + 4,
+                                 fecha_cobertura=fecha_cobertura)
             forecasts[sku] = r.get("forecast", [])
         except Exception as e:
             log.warning(f"[4/8] forecast no disponible para {sku}: {e}")

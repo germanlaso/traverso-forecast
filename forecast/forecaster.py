@@ -8,7 +8,8 @@ Regressores: automáticos por Categ. Comercial via seasonality.py
 import pickle
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date, timedelta
+from math import ceil
 
 import pandas as pd
 import numpy as np
@@ -261,13 +262,40 @@ def _cap_forecast(fc: pd.DataFrame,
     return fc
 
 
+def _periods_para_cobertura(ultima_semana,
+                            fecha_cobertura: date | None,
+                            minimo: int) -> int:
+    """Períodos semanales necesarios para que el forecast llegue a `fecha_cobertura`.
+
+    (D1, 27-07-2026) `make_future_dataframe` extiende desde la ÚLTIMA SEMANA
+    ENTRENADA del modelo, no desde hoy. Con modelos cacheados el desfase puede
+    ser de semanas: el 27-07 el 82,6% de los SKU tenía forecast que no alcanzaba
+    el horizonte del plan (hasta 42 días ciegos). Anclamos los períodos a la
+    fecha objetivo en vez de usar la constante `horizonte + 4`.
+
+    Nunca devuelve menos que `minimo`: sólo amplía, jamás recorta.
+    Ver DECISION_forecast_cobertura_y_reentrenamiento.md
+    """
+    if fecha_cobertura is None or ultima_semana is None:
+        return minimo
+    try:
+        u = pd.Timestamp(ultima_semana).date()
+    except Exception:
+        return minimo
+    dias = (fecha_cobertura - u).days
+    if dias <= 0:
+        return minimo
+    return max(minimo, int(ceil(dias / 7)) + 1)   # +1: margen de semana parcial
+
+
 def run_sku_pipeline(df: pd.DataFrame,
                      sku: str,
                      canal: str | None          = None,
                      zona: str | None           = None,
                      extra_events: list[dict] | None = None,
                      forecast_periods: int      = 26,
-                     force_retrain: bool        = False) -> dict:
+                     force_retrain: bool        = False,
+                     fecha_cobertura: date | None = None) -> dict:
     """
     Pipeline completo para un segmento SKU x Canal x Zona.
 
@@ -292,7 +320,11 @@ def run_sku_pipeline(df: pd.DataFrame,
         if cached:
             model, meta = cached
             prophet_df = prepare_prophet_df(df, sku, canal, zona)
-            fc = make_forecast(model, forecast_periods, regressors)
+            # D1: períodos anclados a la fecha objetivo del plan. El ancla es la
+            # historia DEL MODELO (puede ser vieja), no la de las ventas.
+            _periods = _periods_para_cobertura(
+                model.history["ds"].max(), fecha_cobertura, forecast_periods)
+            fc = make_forecast(model, _periods, regressors)
             fc = _cap_forecast(fc, prophet_df)
             # Siempre devolver historial aunque venga del caché
             history = (
@@ -322,14 +354,17 @@ def run_sku_pipeline(df: pd.DataFrame,
 
     # Entrenar con historial completo
     model = train_model(prophet_df, regressors=regressors, extra_events=extra_events)
-    fc    = make_forecast(model, forecast_periods, regressors, extra_events)
+    # D1: modelo recién entrenado -> el ancla es el fin de la historia real.
+    _periods = _periods_para_cobertura(
+        prophet_df["ds"].max(), fecha_cobertura, forecast_periods)
+    fc    = make_forecast(model, _periods, regressors, extra_events)
     fc    = _cap_forecast(fc, prophet_df)
 
     save_model(model, key, metadata={
         "metrics":        metrics,
         "n_history":      len(prophet_df),
         "freq":           FREQ,
-        "forecast_periods": forecast_periods,
+        "forecast_periods": _periods,          # efectivos (D1), no el mínimo pedido
         "categoria":      categoria,
         "regressors":     [r["name"] for r in regressors],
         "n_regressors":   len(regressors),
