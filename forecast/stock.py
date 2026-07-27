@@ -33,6 +33,12 @@ DIAS_ALERTA_VENCIMIENTO = int(os.environ.get("DIAS_ALERTA_VENCIMIENTO", "30"))
 # Ejemplo: BODEGAS_MRP=BSUR01,HIGUERAS
 # Bodegas por defecto — hardcodeadas en el query SQL (más eficiente que filtrar en pandas)
 # Se pueden sobreescribir via env BODEGAS_MRP para el filtro de pandas (doble seguridad)
+# Base de datos de Montaner (misma instancia y credenciales que Traverso; se
+# consulta con nombre de tres partes, sin conexión adicional).
+#   - Vacío   -> se omite Montaner y el stock queda sólo con Traverso.
+#   - Default -> DBMontanerV2 (no requiere tocar docker-compose.yml).
+SQL_DB_MONTANER = os.environ.get("SQL_DB_MONTANER", "DBMontanerV2").strip()
+
 _bodegas_env = os.environ.get("BODEGAS_MRP", "BSUR01,VESP01,VARA01").strip()
 BODEGAS_INCLUIDAS: list[str] = [b.strip() for b in _bodegas_env.split(",") if b.strip()]
 
@@ -40,6 +46,33 @@ BODEGAS_INCLUIDAS: list[str] = [b.strip() for b in _bodegas_env.split(",") if b.
 # Bodegas incluidas en el MRP (configurable también vía env BODEGAS_MRP)
 _BODEGAS_DEFAULT = ("'BSUR01'", "'VESP01'", "'VARA01'")
 
+# (27-07-2026) Consolidación Traverso + Montaner.
+#
+# Contexto: produce siempre Traverso, pero cuando la venta se hace por Montaner el
+# producto se transfiere a una bodega de Montaner — misma bodega física, mismo
+# nombre, pero registrada en OTRA base de datos (DBMontanerV2). La demanda ya
+# consolidaba ambas empresas (dbo.ventas trae TR/CS/MON y el conector HANA lee los
+# dos esquemas), pero el stock NO: el MRP veía sólo la porción de Traverso.
+# Efecto: quiebres sobrestimados, sobreproducción y faltantes falsos en los SKU
+# Montaner. Ej. 121011175 al 27-07: 12 cj en Traverso, 1.026 cj reales.
+#
+# El MISMO lote se reparte entre ambas BD con cantidades distintas (no es copia):
+# se SUMAN, no se deduplican.
+#
+# La fecha de referencia es siempre el MAX de Traverso; Montaner se consulta con
+# ESA fecha, no con la suya. Si Montaner no tiene ese snapshot (su tabla existe
+# desde el 27-07-2026) aporta 0 filas y se registra un WARNING: preferimos perder
+# el aporte de Montaner antes que mezclar snapshots de días distintos.
+
+_MAX_FECHA_QUERY = """
+SELECT MAX(TRY_CONVERT(date, [FECHA DESCARGA INFO], 105))
+FROM {bd}.dbo.Stock_Lote_Fecha
+WHERE [BODEGA] IN ('BSUR01', 'VESP01', 'VARA01')
+"""
+
+# Filtra la fecha como STRING (sargable). [FECHA DESCARGA INFO] es texto dd-mm-yyyy
+# con cero a la izquierda; comparar sin TRY_CONVERT evita el segundo escaneo
+# completo de la tabla (3,2 M de filas, sin índices).
 _STOCK_QUERY = """
 SELECT
     [CODIGO]              AS sku,
@@ -50,19 +83,41 @@ SELECT
     [UMED]                AS umed,
     [DESCRIPCION]         AS descripcion,
     [FECHA DESCARGA INFO] AS fecha_descarga
-FROM dbo.Stock_Lote_Fecha
+FROM {bd}.dbo.Stock_Lote_Fecha
 WHERE
     [BODEGA] IN ('BSUR01', 'VESP01', 'VARA01')
     AND [CODIGO] IS NOT NULL
     AND [CODIGO] <> ''
     AND [STOCK] IS NOT NULL
     AND [STOCK] <> ''
-    AND TRY_CONVERT(date, [FECHA DESCARGA INFO], 105) = (
-        SELECT MAX(TRY_CONVERT(date, [FECHA DESCARGA INFO], 105))
-        FROM dbo.Stock_Lote_Fecha
-        WHERE [BODEGA] IN ('BSUR01', 'VESP01', 'VARA01')
-    )
+    AND [FECHA DESCARGA INFO] = :fecha
 """
+
+
+def _parse_decimal(v) -> float:
+    """Convierte el STOCK (texto) a float sin asumir cuál es el separador decimal.
+
+    Traverso escribe formato europeo ("12,000000") y Montaner formato inglés
+    ("913.000000"). La regla es agnóstica: el separador DECIMAL es el ÚLTIMO que
+    aparece; cualquier otro es separador de miles. Así el parser sobrevive si TI
+    unifica los formatos más adelante, sin que nadie tenga que tocar el código.
+
+    El parser anterior quitaba el punto seguido de 3 dígitos y sobre "913.000000"
+    devolvía 913000000 — 913 millones de cajas.
+    """
+    s = str(v).strip()
+    if not s or s.lower() in ("nan", "none"):
+        return 0.0
+    i_coma, i_punto = s.rfind(","), s.rfind(".")
+    if i_coma > i_punto:
+        s = s.replace(".", "").replace(",", ".")   # decimal = coma
+    else:
+        s = s.replace(",", "")                     # decimal = punto
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
 
 # ── Funciones públicas ────────────────────────────────────────────────────────
 
@@ -73,10 +128,46 @@ def fetch_and_save_stock() -> dict:
     """
     logger.info("[STOCK] Iniciando descarga desde SQL Server...")
 
+    bd_traverso = os.environ.get("SQL_DATABASE", "DBTraversoV2").strip()
     engine = get_engine()
+    partes: list[pd.DataFrame] = []
+
     with engine.connect() as conn:
-        result = conn.execute(_text(_STOCK_QUERY))
-        df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        # 1) Fecha de referencia = último snapshot de Traverso.
+        fecha_ref = conn.execute(
+            _text(_MAX_FECHA_QUERY.format(bd=bd_traverso))
+        ).fetchone()[0]
+        if fecha_ref is None:
+            raise RuntimeError("[STOCK] Traverso no tiene snapshots de stock.")
+        fecha_str = fecha_ref.strftime("%d-%m-%Y")
+        logger.info(f"[STOCK] Fecha de referencia (MAX Traverso): {fecha_str}")
+
+        # 2) Traverso + Montaner, ambos con ESA fecha.
+        fuentes = [("T", bd_traverso)]
+        if SQL_DB_MONTANER:
+            fuentes.append(("M", SQL_DB_MONTANER))
+        else:
+            logger.warning("[STOCK] SQL_DB_MONTANER vacío -> sólo stock de Traverso.")
+
+        for empresa, bd in fuentes:
+            try:
+                res = conn.execute(_text(_STOCK_QUERY.format(bd=bd)),
+                                   {"fecha": fecha_str})
+                parte = pd.DataFrame(res.fetchall(), columns=res.keys())
+            except Exception as e:
+                if empresa == "T":
+                    raise
+                logger.error(f"[STOCK] {bd} no se pudo leer ({e}) -> se omite Montaner.")
+                continue
+            parte["empresa"] = empresa
+            logger.info(f"[STOCK] {bd}: {len(parte)} filas")
+            if empresa == "M" and parte.empty:
+                logger.warning(
+                    f"[STOCK] {bd} SIN datos para {fecha_str}. El stock queda sólo con "
+                    "Traverso: los SKU Montaner quedarán subestimados.")
+            partes.append(parte)
+
+    df = pd.concat(partes, ignore_index=True) if partes else pd.DataFrame()
 
     # Normalizar tipos
     df["sku"] = df["sku"].astype(str).str.strip()
@@ -84,16 +175,9 @@ def fetch_and_save_stock() -> dict:
     df["lote"] = df["lote"].astype(str).str.strip()
     df["umed"] = df["umed"].astype(str).str.strip()
     df["descripcion"] = df["descripcion"].astype(str).str.strip()
-    # STOCK viene como nvarchar con formato europeo: "1,000000" = 1.0
-    # Paso 1: si es string, reemplazar separador de miles (.) y coma decimal (,→.)
-    df["stock_unidades"] = (
-        df["stock_unidades"]
-        .astype(str)
-        .str.strip()
-        .str.replace(r"\.(?=\d{3})", "", regex=True)   # quitar sep. miles
-        .str.replace(",", ".", regex=False)               # coma → punto decimal
-    )
-    df["stock_unidades"] = pd.to_numeric(df["stock_unidades"], errors="coerce").fillna(0)
+    # STOCK viene como texto y el separador decimal NO es el mismo en las dos BD
+    # (Traverso "12,000000" / Montaner "913.000000"). Ver _parse_decimal.
+    df["stock_unidades"] = df["stock_unidades"].map(_parse_decimal)
     # dayfirst=True: SQL Server entrega estas fechas en formato dd/mm/yyyy
     # (la query filtra con TRY_CONVERT estilo 105 = dia primero). Sin dayfirst,
     # pandas asume mes primero y cruza dia/mes cuando dia<=12 (ej. 08/07 -> 07/ago).
@@ -116,6 +200,12 @@ def fetch_and_save_stock() -> dict:
     n_skus = df["sku"].nunique()
     n_registros = len(df)
     fecha_descarga = df["fecha_descarga"].max()
+
+    # Aporte de cada empresa: si Montaner deja de llegar, se nota en el log.
+    if "empresa" in df.columns:
+        for emp, g in df.groupby("empresa"):
+            logger.info(f"[STOCK] empresa {emp}: {len(g)} filas, "
+                        f"{g['sku'].nunique()} SKU, {g['stock_unidades'].sum():,.0f} cj")
     logger.info(
         f"[STOCK] Guardado: {n_registros} registros, {n_skus} SKUs → {STOCK_PARQUET_PATH}"
     )
@@ -136,7 +226,8 @@ def load_stock_parquet() -> pd.DataFrame:
     if not STOCK_PARQUET_PATH.exists():
         logger.warning("[STOCK] Parquet no encontrado — stock_actual vacío. Ejecuta POST /stock/refresh")
         return pd.DataFrame(columns=["sku", "bodega", "lote", "fecha_vcto",
-                                      "stock_unidades", "umed", "descripcion"])
+                                      "stock_unidades", "umed", "descripcion",
+                                      "empresa"])
     return pd.read_csv(STOCK_PARQUET_PATH, dtype={"sku": str}, parse_dates=["fecha_vcto", "fecha_descarga"])
 
 
@@ -248,9 +339,16 @@ def stock_summary() -> dict:
     # UMED=CJ significa que el stock ya está en cajas
     total_cajas = float(total_u)  # Stock_Lote_Fecha reporta en cajas (UMED=CJ)
 
+    por_empresa = (
+        df.groupby("empresa")["stock_unidades"].agg(["count", "sum"]).to_dict("index")
+        if "empresa" in df.columns else {}
+    )
+
     return {
         "disponible": True,
         "n_skus": int(n_skus),
+        "por_empresa": {k: {"filas": int(v["count"]), "cajas": float(v["sum"])}
+                        for k, v in por_empresa.items()},
         "n_bodegas": int(n_bodegas),
         "total_cajas": total_cajas,
         "total_unidades": float(total_u),
