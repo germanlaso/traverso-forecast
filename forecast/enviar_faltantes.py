@@ -47,6 +47,52 @@ def _fecha_txt(f):
     return f"{p[2]}-{p[1]}-{p[0]}" if len(p) == 3 else str(f)
 
 
+def _fechas_iso(desde, hasta):
+    """Lista de fechas ISO del rango, inclusive."""
+    from datetime import date as _d
+    d1 = desde if isinstance(desde, _d) else datetime.strptime(str(desde)[:10], "%Y-%m-%d").date()
+    d2 = hasta if isinstance(hasta, _d) else datetime.strptime(str(hasta)[:10], "%Y-%m-%d").date()
+    out, d = [], d1
+    while d <= d2:
+        out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
+def _filas_de(fechas):
+    """Concatena los faltantes de varias fechas. Cada fila conserva su campo `fecha`,
+    así que el detalle por día no se pierde (el dashboard los sigue mostrando
+    separados porque mrp_faltantes guarda por fecha)."""
+    from db_mrp import get_faltantes_por_fecha
+    filas = []
+    for f in fechas:
+        filas.extend(get_faltantes_por_fecha(f))
+    return filas
+
+
+def _tabla_por_dia(filas):
+    """Desglose por día. Solo se usa cuando el informe cubre más de una fecha
+    (típicamente el lunes, que reporta viernes + fin de semana)."""
+    por_dia = {}
+    for r in filas:
+        k = str(r.get("fecha", ""))[:10]
+        por_dia[k] = por_dia.get(k, 0) + float(r.get("faltante_cj", 0) or 0)
+    if len(por_dia) <= 1:
+        return ""
+    filas_html = "".join(
+        f"<tr><td style='padding:4px 12px'>{_fecha_txt(d)}</td>"
+        f"<td style='padding:4px 12px;text-align:right'><b>{v:,.0f}</b> cj</td></tr>"
+        for d, v in sorted(por_dia.items()))
+    return f"""
+      <p style="margin-top:14px"><b>Detalle por día:</b></p>
+      <table style="border-collapse:collapse;margin:4px 0">
+        <tr style="background:#C0DCF0">
+          <th style="padding:6px 12px;text-align:left">Fecha</th>
+          <th style="padding:6px 12px;text-align:right">Cajas</th></tr>
+        {filas_html}
+      </table>"""
+
+
 def _cuerpo_html(fecha, filas):
     """Arma el cuerpo HTML: total, split por causa, top SKU."""
     total = sum(float(r.get("faltante_cj", 0) or 0) for r in filas)
@@ -95,6 +141,7 @@ def _cuerpo_html(fecha, filas):
           <th style="padding:4px 12px;text-align:right">Faltante</th></tr>
         {filas_top}
       </table>
+      {_tabla_por_dia(filas)}
       <p style="margin-top:14px">Se adjunta el informe detallado en Excel
          (resumen por SKU + detalle por cliente).</p>
       <p style="color:#888;font-size:11px;margin-top:18px">
@@ -102,8 +149,28 @@ def _cuerpo_html(fecha, filas):
     </div>"""
 
 
-def enviar(fecha=None, destinatarios=None):
-    fecha = fecha or (date.today() - timedelta(days=1)).isoformat()
+def enviar(fecha=None, destinatarios=None, desde=None, hasta=None):
+    """Correo de las 8 AM.
+
+    Modo día único (comportamiento histórico): se pasa `fecha`.
+    Modo rango: se pasan `desde` y `hasta`; el correo cubre todos esos días en un
+    solo envío. Lo usa cron_faltantes.py para que el lunes reporte viernes + fin de
+    semana sin mandar correos en días no hábiles.
+    """
+    if desde is not None and hasta is not None:
+        from dias_informe import etiqueta_rango
+        import datetime as _dt
+        d1 = desde if isinstance(desde, date) else _dt.date.fromisoformat(str(desde)[:10])
+        d2 = hasta if isinstance(hasta, date) else _dt.date.fromisoformat(str(hasta)[:10])
+        fechas = _fechas_iso(d1, d2)
+        etiqueta = etiqueta_rango(d1, d2)
+        sufijo_archivo = d1.isoformat() if d1 == d2 else f"{d1.isoformat()}_a_{d2.isoformat()}"
+    else:
+        fecha = fecha or (date.today() - timedelta(days=1)).isoformat()
+        fechas = [str(fecha)[:10]]
+        etiqueta = str(fecha)[:10]
+        sufijo_archivo = str(fecha)[:10]
+
     pwd = os.environ.get("SMTP_PWD")
     if not pwd:
         raise RuntimeError("Falta SMTP_PWD en el entorno.")
@@ -113,22 +180,21 @@ def enviar(fecha=None, destinatarios=None):
     if not dest_list:
         raise RuntimeError("Falta FALTANTES_DEST_AM/FALTANTES_DEST (destinatarios) en el entorno.")
 
-    from db_mrp import get_faltantes_por_fecha
     import faltantes_excel
-    filas = get_faltantes_por_fecha(fecha)
-    logger.info("Faltantes del %s: %d filas.", fecha, len(filas))
+    filas = _filas_de(fechas)
+    logger.info("Faltantes de %s (%d día/s): %d filas.", etiqueta, len(fechas), len(filas))
 
     msg = MIMEMultipart("mixed")
-    msg["Subject"] = f"Informe de Quiebres de Stock — {_fecha_txt(fecha)} — Traverso"
+    msg["Subject"] = f"Informe de Quiebres de Stock — {_fecha_txt(etiqueta)} — Traverso"
     msg["From"] = formataddr((str(Header(SMTP_FROM_NAME, "utf-8")), SMTP_USER))
     msg["To"] = ", ".join(dest_list)
-    msg.attach(MIMEText(_cuerpo_html(fecha, filas), "html", "utf-8"))
+    msg.attach(MIMEText(_cuerpo_html(etiqueta, filas), "html", "utf-8"))
 
     # adjuntar Excel (siempre, aunque no haya faltantes, para dejar registro)
-    xls = faltantes_excel.generar_bytes(fecha, filas)
+    xls = faltantes_excel.generar_bytes(etiqueta, filas)
     adj = MIMEApplication(xls, _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     adj.add_header("Content-Disposition", "attachment",
-                   filename=f"Informe_Quiebres_{fecha}.xlsx")
+                   filename=f"Informe_Quiebres_{sufijo_archivo}.xlsx")
     msg.attach(adj)
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
@@ -183,10 +249,25 @@ def _cuerpo_html_final(fecha, filas, explicaciones):
     return base + tabla_exp
 
 
-def enviar_final(fecha=None, destinatarios=None):
+def enviar_final(fecha=None, destinatarios=None, desde=None, hasta=None):
     """Correo FINAL (11 AM) al grupo ampliado, con las explicaciones incorporadas.
-    Se envía aunque no haya explicaciones. Usa FALTANTES_DEST_FINAL."""
-    fecha = fecha or (date.today() - timedelta(days=1)).isoformat()
+    Se envía aunque no haya explicaciones. Usa FALTANTES_DEST_FINAL.
+
+    Acepta día único (`fecha`) o rango (`desde`/`hasta`), igual que enviar()."""
+    if desde is not None and hasta is not None:
+        from dias_informe import etiqueta_rango
+        import datetime as _dt
+        d1 = desde if isinstance(desde, date) else _dt.date.fromisoformat(str(desde)[:10])
+        d2 = hasta if isinstance(hasta, date) else _dt.date.fromisoformat(str(hasta)[:10])
+        fechas = _fechas_iso(d1, d2)
+        etiqueta = etiqueta_rango(d1, d2)
+        sufijo_archivo = d1.isoformat() if d1 == d2 else f"{d1.isoformat()}_a_{d2.isoformat()}"
+    else:
+        fecha = fecha or (date.today() - timedelta(days=1)).isoformat()
+        fechas = [str(fecha)[:10]]
+        etiqueta = str(fecha)[:10]
+        sufijo_archivo = str(fecha)[:10]
+
     pwd = os.environ.get("SMTP_PWD")
     if not pwd:
         raise RuntimeError("Falta SMTP_PWD en el entorno.")
@@ -195,23 +276,28 @@ def enviar_final(fecha=None, destinatarios=None):
     if not dest_list:
         raise RuntimeError("Falta FALTANTES_DEST_FINAL (destinatarios) en el entorno.")
 
-    from db_mrp import get_faltantes_por_fecha, get_explicaciones_faltantes
+    from db_mrp import get_explicaciones_faltantes
     import faltantes_excel
-    filas = get_faltantes_por_fecha(fecha)
-    explic = get_explicaciones_faltantes(fecha)
-    logger.info("Informe final del %s: %d filas, %d explicaciones.",
-                fecha, len(filas), len([e for e in explic.values() if (e.get('explicacion') or '').strip()]))
+    filas = _filas_de(fechas)
+    # Explicaciones de todas las fechas del rango. Si un mismo SKU tiene explicación
+    # en más de un día, gana la más reciente (se recorre en orden cronológico).
+    explic = {}
+    for f in fechas:
+        explic.update(get_explicaciones_faltantes(f) or {})
+    logger.info("Informe final de %s (%d día/s): %d filas, %d explicaciones.",
+                etiqueta, len(fechas), len(filas),
+                len([e for e in explic.values() if (e.get('explicacion') or '').strip()]))
 
     msg = MIMEMultipart("mixed")
-    msg["Subject"] = f"Informe de Quiebres de Stock (final) — {_fecha_txt(fecha)} — Traverso"
+    msg["Subject"] = f"Informe de Quiebres de Stock (final) — {_fecha_txt(etiqueta)} — Traverso"
     msg["From"] = formataddr((str(Header(SMTP_FROM_NAME, "utf-8")), SMTP_USER))
     msg["To"] = ", ".join(dest_list)
-    msg.attach(MIMEText(_cuerpo_html_final(fecha, filas, explic), "html", "utf-8"))
+    msg.attach(MIMEText(_cuerpo_html_final(etiqueta, filas, explic), "html", "utf-8"))
 
-    xls = faltantes_excel.generar_bytes(fecha, filas, explic)
+    xls = faltantes_excel.generar_bytes(etiqueta, filas, explic)
     adj = MIMEApplication(xls, _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     adj.add_header("Content-Disposition", "attachment",
-                   filename=f"Informe_Quiebres_{fecha}.xlsx")
+                   filename=f"Informe_Quiebres_{sufijo_archivo}.xlsx")
     msg.attach(adj)
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
