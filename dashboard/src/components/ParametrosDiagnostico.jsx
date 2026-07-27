@@ -269,7 +269,19 @@ export default function ParametrosDiagnostico() {
   const [unidad, setUnidad]   = useState("u");        // 'u' | 'cj'
   const [abierta, setAbierta] = useState({});          // {codigo: true}
   const [skuAbierto, setSkuAbierto] = useState({});    // {"linea|sku": true}
-  const [modal, setModal] = useState(null);            // {sku, descripcion} | null
+  const [modal, setModal] = useState(null);            // {sku, descripcion, lista, indice} | null
+
+  // Abre el modal de proyección recordando la lista visible de la línea, para
+  // poder avanzar al SKU siguiente sin cerrar (revisión rápida de proyecciones).
+  const abrirProyeccion = (items, idx) => setModal({
+    sku: items[idx].sku, descripcion: items[idx].descripcion,
+    lista: items.map((x) => ({ sku: x.sku, descripcion: x.descripcion })),
+    indice: idx,
+  });
+  const navegarProyeccion = (i) => setModal((m) => {
+    if (!m?.lista || i < 0 || i >= m.lista.length) return m;
+    return { ...m, sku: m.lista[i].sku, descripcion: m.lista[i].descripcion, indice: i };
+  });
   const [filtro, setFiltro]   = useState("todos");     // todos | alertas | errores
   const [ocultos, setOcultos] = useState({});          // {codigoAlerta: true} -> chip apagado
 
@@ -458,7 +470,7 @@ export default function ParametrosDiagnostico() {
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((it) => {
+                    {items.map((it, idxSku) => {
                       const dv = it.derivados || {};
                       const al = (it.alertas || []).filter(visible);
                       const hayErr = al.some((a) => a.nivel === "error");
@@ -482,7 +494,7 @@ export default function ParametrosDiagnostico() {
                             </span>
                             {it.sku}
                             <span onClick={(e) => { e.stopPropagation();
-                                     setModal({ sku: it.sku, descripcion: it.descripcion }); }}
+                                     abrirProyeccion(items, idxSku); }}
                                   title="Ver proyección diaria de inventario"
                                   style={{ marginLeft: 6, fontSize: 12, cursor: "pointer",
                                            padding: "1px 4px", borderRadius: 4,
@@ -559,7 +571,7 @@ export default function ParametrosDiagnostico() {
                           <tr>
                             <td colSpan={13} style={{ padding: 0 }}>
                               <DetalleSku it={it}
-                                onVerProyeccion={() => setModal({ sku: it.sku, descripcion: it.descripcion })} />
+                                onVerProyeccion={() => abrirProyeccion(items, idxSku)} />
                             </td>
                           </tr>
                         )}
@@ -612,6 +624,8 @@ export default function ParametrosDiagnostico() {
 
       {modal && (
         <ProyeccionModal sku={modal.sku} descripcion={modal.descripcion}
+                         lista={modal.lista} indice={modal.indice}
+                         onNavegar={navegarProyeccion}
                          onClose={() => setModal(null)} />
       )}
     </div>

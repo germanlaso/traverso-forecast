@@ -7,6 +7,11 @@
 // Uso:
 //   const [modal, setModal] = useState(null);        // {sku, descripcion} | null
 //   {modal && <ProyeccionModal {...modal} onClose={() => setModal(null)} />}
+//
+// Navegación entre SKU (opcional): si se pasan `lista` (array {sku, descripcion}),
+// `indice` (posición actual) y `onNavegar(nuevoIndice)`, el modal muestra los
+// controles ◀ ▶ y responde a las flechas del teclado. Permite barrer los SKU de
+// la tabla sin cerrar el modal. Si no se pasan, el modal funciona igual que antes.
 
 import React, { useState, useEffect } from "react";
 import {
@@ -28,6 +33,12 @@ const C = {
 const fmtN = (n) => (n === null || n === undefined ? "—" : Math.round(n).toLocaleString("es-CL"));
 const fmt1 = (n) => (n === null || n === undefined ? "—" : Number(n).toLocaleString("es-CL", { maximumFractionDigits: 1 }));
 
+const navBtn = {
+  background: "rgba(255,255,255,.16)", border: "1px solid rgba(255,255,255,.35)",
+  color: "#fff", borderRadius: 6, width: 26, height: 24, fontSize: 11,
+  lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+};
+
 function KPI({ label, value, color, sub }) {
   return (
     <div style={{ background: C.grayLt, borderRadius: 8, padding: "10px 14px", minWidth: 110 }}>
@@ -42,20 +53,35 @@ function KPI({ label, value, color, sub }) {
    Lee /plan/proyeccion_diaria_live/{sku} (el mismo endpoint de Stock Diario).
    Se abre bajo demanda: NO se carga al expandir la fila, para no disparar una
    consulta por cada SKU que el usuario abra.                                */
-export default function ProyeccionModal({ sku, descripcion, onClose }) {
+export default function ProyeccionModal({ sku, descripcion, onClose,
+                                          lista, indice, onNavegar }) {
   const [d, setD]   = useState(null);
   const [err, setErr] = useState("");
   const [cargando, setCargando] = useState(true);
 
+  // ── Navegación entre SKU (opcional) ──────────────────────────────────────
+  const hayNav = Array.isArray(lista) && lista.length > 1
+                 && typeof onNavegar === "function" && Number.isInteger(indice);
+  const hayPrev = hayNav && indice > 0;
+  const haySig  = hayNav && indice < lista.length - 1;
+  const irPrev = () => { if (hayPrev) onNavegar(indice - 1); };
+  const irSig  = () => { if (haySig)  onNavegar(indice + 1); };
+
   useEffect(() => {
-    const esc = (e) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
-  }, [onClose]);
+    const teclas = (e) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (!hayNav) return;
+      if (e.key === "ArrowLeft"  && indice > 0)                { e.preventDefault(); onNavegar(indice - 1); }
+      if (e.key === "ArrowRight" && indice < lista.length - 1) { e.preventDefault(); onNavegar(indice + 1); }
+    };
+    window.addEventListener("keydown", teclas);
+    return () => window.removeEventListener("keydown", teclas);
+  }, [onClose, hayNav, indice, lista, onNavegar]);
 
   useEffect(() => {
     if (!sku) return;
     setCargando(true);
+    setErr("");
     fetch(`${API}/plan/proyeccion_diaria_live/${sku}`)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((j) => { setD(j); setErr(""); })
@@ -97,6 +123,20 @@ export default function ProyeccionModal({ sku, descripcion, onClose }) {
               {d?.plan_id ? ` #${d.plan_id}` : ""}
             </div>
           </div>
+          {hayNav && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginRight: 4 }}>
+              <button onClick={irPrev} disabled={!hayPrev} title="SKU anterior (←)"
+                style={{ ...navBtn, opacity: hayPrev ? 1 : .35,
+                         cursor: hayPrev ? "pointer" : "default" }}>◀</button>
+              <span style={{ fontSize: 11.5, opacity: .95, minWidth: 52, textAlign: "center",
+                             fontVariantNumeric: "tabular-nums" }}>
+                {indice + 1} / {lista.length}
+              </span>
+              <button onClick={irSig} disabled={!haySig} title="SKU siguiente (→)"
+                style={{ ...navBtn, opacity: haySig ? 1 : .35,
+                         cursor: haySig ? "pointer" : "default" }}>▶</button>
+            </div>
+          )}
           <button onClick={onClose} title="Cerrar (Esc)"
             style={{ background: "transparent", border: "none", color: "#fff", fontSize: 20,
                      cursor: "pointer", lineHeight: 1 }}>×</button>
