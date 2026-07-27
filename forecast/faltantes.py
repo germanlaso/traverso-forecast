@@ -62,6 +62,17 @@ from db import get_engine
 logger = logging.getLogger(__name__)
 
 BODEGAS_PROYECTO = ["VESP01", "BSUR01", "VARA01"]
+
+# (27-07-2026) Consolidación de stock Traverso + Montaner.
+# Produce siempre Traverso, pero cuando la venta se hace por Montaner el producto
+# se transfiere a una bodega de Montaner: misma bodega física y mismo nombre, pero
+# registrada en OTRA base de datos. Las OV ya venían consolidadas (hana_pedidos lee
+# SBO_TRAVERSO y SBO_MONTANER), el stock no -> faltantes falsos en los SKU Montaner.
+# Ej. 121011175 al 27-07: el informe veía 12 cj; el stock real era 1.026 cj.
+#
+# Vacío -> sólo Traverso. Default DBMontanerV2 (no requiere tocar docker-compose).
+SQL_DB_TRAVERSO = os.environ.get("SQL_DATABASE", "DBTraversoV2").strip()
+SQL_DB_MONTANER = os.environ.get("SQL_DB_MONTANER", "DBMontanerV2").strip()
 # SKU excluidos del informe: contables (arriendo, reciclaje, recup. gastos)
 # y otros no medibles como faltante por definición de negocio.
 SKU_EXCLUIDOS = {
@@ -148,19 +159,33 @@ def _leer_vida_util(engine):
 
 def _leer_stock_lotes(engine, desde, hasta):
     """lotes_por_dia[fecha][sku] = [(stock_cj, fecha_vcto|None)], y set de días."""
-    q = text("""
+    # Un SELECT por empresa, unidos con UNION ALL. NO se deduplica: el mismo lote
+    # se reparte entre ambas BD con cantidades distintas (no es una copia), así que
+    # las filas se acumulan y se suman aguas abajo en lotes[fecha][sku].
+    #
+    # La consolidación es POR FECHA de forma natural: Montaner sólo aporta filas en
+    # los días que tenga snapshot (su tabla existe desde el 27-07-2026), de modo que
+    # los recálculos hacia atrás dan exactamente lo mismo que antes.
+    #
+    # REPLACE([STOCK], ',', '.') funciona con los dos formatos: Traverso escribe
+    # "12,000000" (coma decimal) y Montaner "913.000000" (punto), que queda intacto.
+    _sel = """
         SELECT
             TRY_CONVERT(date, LTRIM(RTRIM([FECHA DESCARGA INFO])), 105) AS f,
             LTRIM(RTRIM([CODIGO]))                                      AS sku,
             TRY_CONVERT(float, REPLACE([STOCK], ',', '.'))              AS stock_cj,
             TRY_CONVERT(date, LTRIM(RTRIM([FECHA VCTO])), 105)          AS vcto
-        FROM dbo.Stock_Lote_Fecha
+        FROM {bd}.dbo.Stock_Lote_Fecha
         WHERE [BODEGA] IN :bod
           AND TRY_CONVERT(date, LTRIM(RTRIM([FECHA DESCARGA INFO])), 105) BETWEEN :d1 AND :d2
-    """).bindparams(bindparam("bod", expanding=True))
+    """
+    _bds = [SQL_DB_TRAVERSO] + ([SQL_DB_MONTANER] if SQL_DB_MONTANER else [])
+    q = text(" UNION ALL ".join(_sel.format(bd=b) for b in _bds)) \
+        .bindparams(bindparam("bod", expanding=True))
 
     lotes = defaultdict(lambda: defaultdict(list))
     dias = set()
+    n_filas = 0
     with engine.connect() as c:
         for f, sku, cj, vcto in c.execute(
                 q, {"bod": BODEGAS_PROYECTO, "d1": desde, "d2": hasta}).fetchall():
@@ -170,6 +195,9 @@ def _leer_stock_lotes(engine, desde, hasta):
             vd = vcto if (vcto is None or isinstance(vcto, date)) else _as_date(vcto)
             lotes[fd][str(sku).strip()].append((float(cj or 0.0), vd))
             dias.add(fd)
+            n_filas += 1
+    logger.info("Stock por lote: %d filas de %s (%d días).",
+                n_filas, " + ".join(_bds), len(dias))
     return lotes, dias
 
 
