@@ -1567,9 +1567,17 @@ def optimizar_plan(
     # ─── 4. Forecast: cajas → unidades, lista → dict {lunes: yhat_u} ─────────
     # IMPORTANTE: Prophet entrega forecast como histórico + futuro. Aquí
     # filtramos solo el futuro y limitamos al horizonte de planificación.
+    #
+    # (D1, 27-07-2026) La cota SUPERIOR llegaba sólo al fin del horizonte y
+    # descartaba las semanas que el SS de cobertura necesita (`_fecha_fin_ext`
+    # = fecha_fin + 35 d). Resultado: aunque el forecast se generara largo, acá
+    # se recortaba y el SS caía a cero en la cola del plan.
+    # Se amplía +42 d (35 del margen SS + 7 de colchón). La cota INFERIOR no se
+    # toca: es la que evita sumar el histórico de Prophet (ver FIX v1.2.1 abajo).
+    # Ver DECISION_forecast_cobertura_y_reentrenamiento.md
     horizonte_dias_default = max(horizonte_semanas * 7, 14)
     fecha_inicio_default = date.today()
-    fecha_fin_default = fecha_inicio_default + timedelta(days=horizonte_dias_default)
+    fecha_fin_default = fecha_inicio_default + timedelta(days=horizonte_dias_default + 42)
     from calendario import semana_iso_inicio
     lunes_inicio = semana_iso_inicio(fecha_inicio_default)
     lunes_fin = semana_iso_inicio(fecha_fin_default)
