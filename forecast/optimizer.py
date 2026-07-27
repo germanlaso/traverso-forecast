@@ -360,6 +360,56 @@ def optimizar_plan_v12_rich(
             fecha_fin=_fecha_fin_ext,
         )
 
+    # ─── D4: Guarda de cobertura del forecast (27-07-2026) ───────────────────
+    # Detecta el caso "extensión de rango sin datos": distribuir_forecast_a_diario
+    # rellena con ceros, así que el dict diario SIEMPRE llega a fecha_fin aunque el
+    # forecast semanal se haya agotado antes. Por eso verificamos el forecast SEMANAL.
+    #
+    # Origen: hallazgo 27-07-2026 (plan id=56). El forecast terminaba el 11-09 con
+    # horizonte hasta el 20-09 => 9 días sin demanda y SS truncado desde el 24-08.
+    # La falla fue SILENCIOSA. Ver DECISION_forecast_cobertura_y_reentrenamiento.md
+    #
+    # Esta guarda SÓLO OBSERVA Y LOGUEA; no altera el plan.
+    def _ultima_semana_cubierta(fc_sem: dict) -> date | None:
+        """Último día cubierto por el forecast semanal (clave + 6 días)."""
+        claves = [k for k, v in fc_sem.items() if v and v > 0]
+        if not claves:
+            return None
+        ult = max(claves)
+        if isinstance(ult, str):
+            ult = date.fromisoformat(ult[:10])
+        elif not isinstance(ult, date) and hasattr(ult, "date"):
+            ult = ult.date()          # pandas.Timestamp / datetime
+        elif isinstance(ult, date) and hasattr(ult, "hour"):
+            ult = ult.date()          # datetime.datetime (subclase de date)
+        return ult + timedelta(days=6)
+
+    _criticos: list[tuple[str, date, int]] = []   # no cubre el horizonte -> días ciegos
+    _avisos:   list[tuple[str, date, int]] = []   # no cubre el margen SS -> SS truncado
+    _sin_fc:   list[str] = []
+    for sku in skus_modelo:
+        _cob = _ultima_semana_cubierta(forecast_semanal.get(sku, {}))
+        if _cob is None:
+            _sin_fc.append(sku)
+        elif _cob < fecha_fin:
+            _criticos.append((sku, _cob, (fecha_fin - _cob).days))
+        elif _cob < _fecha_fin_ext:
+            _avisos.append((sku, _cob, (_fecha_fin_ext - _cob).days))
+
+    _n = len(skus_modelo) or 1
+    _pct = 100.0 * len(_criticos) / _n
+    print(f"[cobertura] horizonte hasta {fecha_fin} | SS necesita hasta {_fecha_fin_ext}")
+    print(f"[cobertura] SKUs={len(skus_modelo)} | CRITICOS={len(_criticos)} ({_pct:.1f}%) "
+          f"| avisos_SS={len(_avisos)} | sin_forecast={len(_sin_fc)}")
+    for _s, _c, _d in sorted(_criticos, key=lambda t: -t[2])[:15]:
+        print(f"[cobertura] CRITICO {_s}: forecast hasta {_c} -> {_d} dias CIEGOS en el plan")
+    for _s, _c, _d in sorted(_avisos, key=lambda t: -t[2])[:10]:
+        print(f"[cobertura] aviso   {_s}: forecast hasta {_c} -> SS truncado {_d} dias")
+    if _pct > 5.0:
+        print(f"[cobertura] *** ALERTA: {_pct:.1f}% de los SKU no cubren el horizonte. "
+              f"El plan tiene dias sin demanda. Revisar reentrenamiento de modelos. ***")
+    # ─── fin D4 ──────────────────────────────────────────────────────────────
+
     # ─── 4. Capacidad por línea-día ──────────────────────────────────────────
     cap_dia: dict[tuple[date, str], int] = {}
     for d in horizonte:
