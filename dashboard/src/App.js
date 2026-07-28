@@ -19,6 +19,14 @@ const BACKEND_URL = (() => {
   return `${protocol}//${hostname}${backendPort ? ':' + backendPort : ''}`;
 })();
 
+// (28-07-2026) Ancho del contenedor principal según la pestaña.
+// Las vistas de TABLA (muchas columnas) aprovechan todo el monitor; las de texto y
+// gráficos conservan el tope de 1100 px: una línea de ~1900 px se lee mal y los
+// gráficos de altura fija (330 px) se achatan al estirarse.
+// Para volver al comportamiento anterior, dejar TABS_ANCHAS vacío.
+const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion']);
+const MAIN_MAXW_ANCHO = 1800;
+
 const C = {
   teal:'#1D9E75',tealLt:'#E1F5EE',tealMid:'#0F6E56',
   blue:'#185FA5',blueLt:'#E6F1FB',
@@ -631,7 +639,7 @@ export default function App() {
         ))}
       </div>
 
-      <div style={s.main}>
+      <div style={{...s.main, maxWidth: TABS_ANCHAS.has(activeTab) ? MAIN_MAXW_ANCHO : s.main.maxWidth}}>
         {error && <div style={s.alert('error')}>{error}</div>}
 
         {/* ══ FORECAST TAB ══ */}
