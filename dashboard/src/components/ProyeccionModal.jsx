@@ -39,12 +39,18 @@ const navBtn = {
   lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
 };
 
-function KPI({ label, value, color, sub }) {
+function KPI({ label, value, color, sub, sub2, aviso }) {
   return (
     <div style={{ background: C.grayLt, borderRadius: 8, padding: "10px 14px", minWidth: 110 }}>
       <div style={{ fontSize: 10.5, color: C.textMuted, textTransform: "uppercase", letterSpacing: .3 }}>{label}</div>
       <div style={{ fontSize: 21, fontWeight: 700, color: color || C.text, marginTop: 2 }}>{value}</div>
-      {sub && <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 2 }}>{sub}</div>}
+      {sub && (
+        <div style={{ fontSize: 10.5, color: aviso ? C.amber : C.textMuted, marginTop: 2 }}
+             title={aviso || undefined}>
+          {sub}{aviso ? " ⚠" : ""}
+        </div>
+      )}
+      {sub2 && <div style={{ fontSize: 9.5, color: C.textMuted, marginTop: 1 }}>{sub2}</div>}
     </div>
   );
 }
@@ -98,6 +104,18 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
     oft: x.oft_cajas || 0,
     estado: x.estado,
   }));
+
+  // Encabezado del plan: stock físico de apertura y lo comprometido por OV vencida.
+  const enc      = d?.encabezado || {};
+  const emp      = enc.por_empresa || {};
+  const stockIni = enc.stock_fisico_cj;
+  const compro   = enc.comprometido_cj;
+  const dispIni  = enc.disponible_inicial_cj;
+  const hayEmp   = (emp.T || 0) + (emp.M || 0) > 0;
+  const avisoEmp = hayEmp && emp.cuadra === false
+    ? "La apertura por empresa viene del stock actual y no coincide con el total del plan "
+      + "(el stock se refrescó después de generarlo)."
+    : null;
 
   const nQuiebre = dias.filter((x) => x.estado === "QUIEBRE").length;
   const nBajoSS  = dias.filter((x) => x.estado === "BAJO_SS").length;
@@ -160,6 +178,13 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
             <>
               {/* KPIs */}
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                <KPI label="Stock inicial" value={`${fmtN(stockIni)} cj`}
+                     sub={hayEmp ? `TRA ${fmt1(emp.T_cj)} · MON ${fmt1(emp.M_cj)}` : null}
+                     aviso={avisoEmp}
+                     sub2={compro > 0 ? `disponible ${fmt1(dispIni)} cj` : null} />
+                <KPI label="Comprometido" value={`${fmtN(compro)} cj`}
+                     color={compro > 0 ? C.amber : C.text}
+                     sub="OV vencidas" />
                 <KPI label="Stock final" value={`${fmtN(stockFin)} cj`} />
                 <KPI label="Stock mínimo" value={`${fmtN(stockMin)} cj`}
                      color={stockMin < 0 ? C.red : stockMin === 0 ? C.amber : C.text} />

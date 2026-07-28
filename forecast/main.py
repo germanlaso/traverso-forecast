@@ -991,6 +991,41 @@ def get_proyeccion_diaria_live(sku: str):
         "ss_dias": encab.get("ss_dias"),
     }
 
+    # (28-07) Apertura del stock inicial por empresa (Traverso / Montaner).
+    # El desglose sale del parquet de stock (columna `empresa`, agregada el 27-07 al
+    # consolidar ambas BD); el snapshot del plan sólo guarda el total. En condiciones
+    # normales coinciden, porque el plan se genera del mismo parquet en el paso 1/8.
+    # Si alguien refresca el stock después de generar el plan pueden diverger: por eso
+    # se devuelve también `total_parquet_u` y el flag `cuadra`, para que la vista pueda
+    # advertirlo en vez de mostrar una apertura que no suma.
+    empresa_u = {}
+    total_parquet_u = None
+    try:
+        import stock as _stk
+        _df = _stk.load_stock_parquet()
+        if not _df.empty and "empresa" in _df.columns:
+            _s = _df[_df["sku"].astype(str).str.strip() == str(sku).strip()]
+            if not _s.empty:
+                _g = _s.groupby("empresa")["stock_unidades"].sum()
+                # el parquet está en CAJAS (UMED=CJ); el encabezado en unidades
+                empresa_u = {str(k): int(round(float(v) * upc)) for k, v in _g.items()}
+                total_parquet_u = int(round(float(_s["stock_unidades"].sum()) * upc))
+    except Exception as _e_emp:
+        logger.warning(f"apertura por empresa no disponible para {sku}: {_e_emp}")
+
+    _fis = encab.get("stock_fisico_u")
+    encabezado["por_empresa"] = {
+        "T": empresa_u.get("T", 0),
+        "M": empresa_u.get("M", 0),
+        "T_cj": _cj(empresa_u.get("T", 0)),
+        "M_cj": _cj(empresa_u.get("M", 0)),
+        "total_parquet_u": total_parquet_u,
+        "total_parquet_cj": _cj(total_parquet_u),
+        # tolerancia de 1 caja por redondeos de la conversión u <-> cj
+        "cuadra": (total_parquet_u is not None and _fis is not None
+                   and abs(total_parquet_u - int(_fis)) <= upc),
+    }
+
     return {
         "disponible": True,
         "live": True,
