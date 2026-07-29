@@ -125,6 +125,12 @@ def migrar():
         formato = _str(row[15]) if len(row) > 15 else ""
         mto     = (_str(row[16]).upper() == "SI") if len(row) > 16 else False
 
+        # V6 (29-07): granel_grupo (col 17). Estado de granel de planta que
+        # habilita el envasado. Normalizado a minuscula; solo ketchup/mostaza,
+        # cualquier otro valor o vacio -> "" (independiente).
+        _gg = _str(row[17]).lower() if len(row) > 17 else ""
+        granel_grupo = _gg if _gg in ("ketchup", "mostaza") else ""
+
         params = {
             "sku":             sku,
             "descripcion":     _str(row[1]),
@@ -141,6 +147,7 @@ def migrar():
             "activo":          activo,
             "mto":             mto,
             "formato":         formato,
+            "granel_grupo":    granel_grupo,
         }
         upsert_sku_params(params)
         print(f"  SKU {sku}: {params['descripcion'][:35]} | linea={linea_cod} | cap_bod={params['cap_bodega_u']:,}" + (" | MTO" if mto else ""))

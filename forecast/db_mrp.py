@@ -338,6 +338,7 @@ def crear_tablas_params():
                 activo          BOOLEAN     DEFAULT TRUE,
                 mto             BOOLEAN     DEFAULT FALSE,
                 formato         VARCHAR(30) DEFAULT '',
+                granel_grupo    VARCHAR(20) NOT NULL DEFAULT '',
                 updated_at      TIMESTAMP   DEFAULT NOW()
             );
 
@@ -353,6 +354,7 @@ def crear_tablas_params():
             -- Columnas agregadas post-creación (idempotente para BD existentes)
             ALTER TABLE mrp_sku_params ADD COLUMN IF NOT EXISTS mto     BOOLEAN     DEFAULT FALSE;
             ALTER TABLE mrp_sku_params ADD COLUMN IF NOT EXISTS formato VARCHAR(30) DEFAULT '';
+            ALTER TABLE mrp_sku_params ADD COLUMN IF NOT EXISTS granel_grupo VARCHAR(20) NOT NULL DEFAULT '';
 
             -- Informe de faltantes por quiebre (por fecha, SKU y cliente).
             CREATE TABLE IF NOT EXISTS mrp_faltantes (
@@ -560,10 +562,10 @@ def upsert_sku_params(p: dict):
         session.execute(text("""
             INSERT INTO mrp_sku_params
                 (sku, descripcion, categoria, tipo, u_por_caja, lead_time_sem, ss_dias,
-                 batch_min_u, batch_mult_u, cap_bodega_u, t_cambio_hrs, linea_preferida, activo, mto, formato, updated_at)
+                 batch_min_u, batch_mult_u, cap_bodega_u, t_cambio_hrs, linea_preferida, activo, mto, formato, granel_grupo, updated_at)
             VALUES
                 (:sku, :descripcion, :categoria, :tipo, :u_por_caja, :lead_time_sem, :ss_dias,
-                 :batch_min_u, :batch_mult_u, :cap_bodega_u, :t_cambio_hrs, :linea_preferida, :activo, :mto, :formato, NOW())
+                 :batch_min_u, :batch_mult_u, :cap_bodega_u, :t_cambio_hrs, :linea_preferida, :activo, :mto, :formato, :granel_grupo, NOW())
             ON CONFLICT (sku) DO UPDATE SET
                 descripcion     = EXCLUDED.descripcion,
                 categoria       = EXCLUDED.categoria,
@@ -579,6 +581,7 @@ def upsert_sku_params(p: dict):
                 activo          = EXCLUDED.activo,
                 mto             = EXCLUDED.mto,
                 formato         = EXCLUDED.formato,
+                granel_grupo    = EXCLUDED.granel_grupo,
                 updated_at      = NOW()
         """), p)
         session.commit()
