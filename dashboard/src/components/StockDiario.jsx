@@ -3,6 +3,7 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Legend
 } from "recharts";
+import { useCampanas, bandasCampana, renderBandas, NotaCampana } from "../campanaBandas";
 
 // Pestaña "Stock Diario": apertura DIARIA del stock del plan vigente, diferenciando
 // la demanda por forecast vs pedidos (OV). Lee el backend como fuente de verdad
@@ -187,6 +188,14 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
     entrada_cj: r.entrada_aprobada_u ? r.entrada_aprobada_u / upcSel : 0,
   })), [dias, upcSel]);
 
+  // Bandas de campaña de granel (solo SKU acoplados; independientes sin bandas).
+  const { calendario, grupoDeSku } = useCampanas();
+  const grupoSku = grupoDeSku(selSku);
+  const bandas = bandasCampana({
+    calendario, grupo: grupoSku,
+    puntos: chartData.map((r) => ({ iso: String(r.fecha).slice(0, 10), eje: r.name })),
+  });
+
   // Totales para tarjetas (demanda del horizonte)
   const totFc   = dias.reduce((sum, r) => sum + (r.forecast_cj || 0), 0);
   const totPed  = dias.reduce((sum, r) => sum + (r.pedidos_cj || 0), 0);
@@ -282,6 +291,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
 
             <ResponsiveContainer width="100%" height={320}>
               <ComposedChart data={chartData} margin={{ top: 4, right: 12, left: 0, bottom: 4 }}>
+                {renderBandas(bandas)}
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }}
                   interval={Math.max(0, Math.floor(chartData.length / 14))} />
@@ -307,6 +317,8 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
                 <ReferenceLine y={0} stroke={C.red} strokeDasharray="3 3" />
               </ComposedChart>
             </ResponsiveContainer>
+
+            <NotaCampana grupo={grupoSku} hayBandas={bandas.length > 0} />
 
             <div style={{ ...s.tblWrap, marginTop: 14 }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>

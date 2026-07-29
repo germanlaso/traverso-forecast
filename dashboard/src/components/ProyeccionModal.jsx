@@ -18,6 +18,7 @@ import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
+import { useCampanas, bandasCampana, renderBandas, NotaCampana } from "../campanaBandas";
 
 const API = "";
 
@@ -64,6 +65,7 @@ function KPI({ label, value, color, sub, sub2, aviso }) {
    consulta por cada SKU que el usuario abra.                                */
 export default function ProyeccionModal({ sku, descripcion, onClose,
                                           lista, indice, onNavegar }) {
+  const { calendario, grupoDeSku } = useCampanas();
   const [d, setD]   = useState(null);
   const [err, setErr] = useState("");
   const [cargando, setCargando] = useState(true);
@@ -117,6 +119,13 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
     aprobada: x.entrada_aprobada_u && d?.upc ? x.entrada_aprobada_u / d.upc : 0,
     estado: x.estado,
   }));
+
+  // Bandas de campaña: solo para SKU acoplados a un granel (ketchup/mostaza).
+  const grupoSku = grupoDeSku(sku);
+  const bandas = bandasCampana({
+    calendario, grupo: grupoSku,
+    puntos: dias.map((x) => ({ iso: String(x.fecha).slice(0, 10), eje: String(x.fecha).slice(5) })),
+  });
 
   // Encabezado del plan: stock físico de apertura y lo comprometido por OV vencida.
   const enc      = d?.encabezado || {};
@@ -213,6 +222,7 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
               <div style={{ height: 330 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={serie} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+                    {renderBandas(bandas)}
                     <CartesianGrid strokeDasharray="3 3" stroke={C.grayLt} />
                     <XAxis dataKey="fecha" tick={{ fontSize: 10, fill: C.textMuted }} interval="preserveStartEnd" />
                     <YAxis tick={{ fontSize: 10, fill: C.textMuted }}
@@ -236,6 +246,8 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+
+              <NotaCampana grupo={grupoSku} hayBandas={bandas.length > 0} />
 
               <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 8 }}>
                 Mismos datos que la pestaña Stock Diario (endpoint reactivo: recalcula el balance
