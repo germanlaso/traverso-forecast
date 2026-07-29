@@ -132,7 +132,7 @@ function sumaDias(iso, n) {
    reconocer los hijos directos del grafico.
 
    Las semanas que BLOQUEAN al SKU van mas marcadas — son las que explican el hueco.
-   Granel rotula arriba y formato abajo, para que se distingan si se superponen.   */
+   Ambas etiquetas van arriba; la de formato con un dy para no solaparse.          */
 export function renderBandas(bandas) {
   if (!bandas || !bandas.length) return null;
   return bandas.map((b, i) => (
@@ -145,7 +145,10 @@ export function renderBandas(bandas) {
       ifOverflow="extendDomain"
       label={{
         value: b.etiqueta,
-        position: b.dimension === "formato" ? "insideBottom" : "insideTop",
+        // Ambas arriba. El formato baja unos px para no pisar la del granel
+        // cuando un SKU esta afectado por las dos reglas a la vez.
+        position: "insideTop",
+        dy: b.dimension === "formato" ? 12 : 0,
         fontSize: 9,
         fill: colorDe(b.modo),
         opacity: b.bloquea ? 0.95 : 0.5,
@@ -159,8 +162,8 @@ export function NotaCampana({ hayBandas }) {
   if (!hayBandas) return null;
   return (
     <div style={{ fontSize: 10.5, color: "#888780", marginTop: 6 }}>
-      Franjas = campaña prevista por semana (granel de planta arriba, formato de línea
-      abajo). Las más marcadas son semanas en que <strong>este SKU no puede
+      Franjas = campaña prevista por semana (granel de planta y formato de línea).
+      Las más marcadas son semanas en que <strong>este SKU no puede
       envasarse</strong>. El calendario se administra en la pestaña <strong>Campañas</strong>.
     </div>
   );
