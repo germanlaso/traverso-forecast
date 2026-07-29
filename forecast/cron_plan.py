@@ -38,6 +38,112 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("cron_plan")
 
 
+def _detectar_recepcion_pendiente(aprobadas, unidades_por_caja, hoy, umbral=0.80):
+    """Alertas de OF lanzadas el ÚLTIMO DÍA HÁBIL que no se reflejan en el stock de HOY.
+
+    Día HÁBIL, no calendario: un lunes hay que mirar las OF del viernes. Con
+    `hoy - 1 día` la alerta nunca se disparaba los lunes (nadie lanza OF el domingo),
+    que es justo el día en que más importa.
+
+    Las entregas se acumulan sobre TODO el rango [día de lanzamiento .. ayer], porque
+    entre el lanzamiento y hoy pudo haber despachos (el sábado hay facturación).
+
+    Ver el bloque 6c de main() para la semántica completa y los sesgos del método.
+    Devuelve una lista de dicts listos para `snapshot['alertas']`; nunca modifica
+    stock ni entradas: es puramente informativo.
+    """
+    from sqlalchemy import text as _t
+    from db import get_engine
+    from stock import _parse_decimal
+
+    try:
+        from dias_informe import dia_habil_anterior
+        ayer = dia_habil_anterior(hoy) or (hoy - dt.timedelta(days=1))
+    except Exception:
+        ayer = hoy - dt.timedelta(days=1)
+
+    # OF lanzadas el último día hábil, agregadas por SKU (puede haber más de una)
+    ofs, refs = {}, {}
+    for ap in aprobadas:
+        if ap.get("fecha_lanzamiento_real") != ayer:
+            continue
+        sku = str(ap.get("sku", "")).strip()
+        cj = float(ap.get("cantidad_real_cj") or 0)
+        if not sku or cj <= 0:
+            continue
+        ofs[sku] = ofs.get(sku, 0.0) + cj
+        refs.setdefault(sku, []).append(str(ap.get("numero_of", "")))
+    if not ofs:
+        return []
+
+    lista_sku = ",".join("'" + s + "'" for s in ofs)
+    bodegas = "'BSUR01','VESP01','VARA01'"
+
+    def _snap(engine, fecha_ddmmyyyy):
+        out = {}
+        for bd in ("DBTraversoV2", "DBMontanerV2"):
+            try:
+                rows = engine.execute(_t(
+                    f"SELECT LTRIM(RTRIM([CODIGO])) AS sku, [STOCK] AS st "
+                    f"FROM {bd}.dbo.Stock_Lote_Fecha "
+                    f"WHERE [FECHA DESCARGA INFO] = :f "
+                    f"  AND [BODEGA] IN ({bodegas}) "
+                    f"  AND LTRIM(RTRIM([CODIGO])) IN ({lista_sku})"),
+                    {"f": fecha_ddmmyyyy}).fetchall()
+            except Exception:
+                continue          # Montaner puede no tener ese snapshot
+            for sku, st in rows:
+                out[sku] = out.get(sku, 0.0) + _parse_decimal(st)
+        return out
+
+    with get_engine().connect() as c:
+        s_ayer = _snap(c, ayer.strftime("%d-%m-%Y"))
+        s_hoy = _snap(c, hoy.strftime("%d-%m-%Y"))
+        entregas = {}
+        try:
+            # rango completo: del día de lanzamiento hasta ayer inclusive. Si el
+            # lanzamiento fue un viernes, cubre también sábado y domingo.
+            for sku, cant in c.execute(_t(
+                f"SELECT LTRIM(RTRIM([Codigo Articulo])) AS sku, SUM([Cantidad]) AS q "
+                f"FROM dbo.ventas WHERE CAST([Fecha] AS DATE) BETWEEN :d1 AND :d2 "
+                f"  AND [Tipo Doc] IN ('Factura','Boleta') AND [Cantidad] > 0 "
+                f"  AND LTRIM(RTRIM([Codigo Articulo])) IN ({lista_sku}) "
+                f"GROUP BY LTRIM(RTRIM([Codigo Articulo]))"),
+                {"d1": ayer, "d2": hoy - dt.timedelta(days=1)}).fetchall():
+                entregas[sku] = float(cant or 0)
+        except Exception:
+            entregas = {}         # sin entregas -> faltante sobrestimado, no subestimado
+
+    alertas = []
+    for sku, of_cj in sorted(ofs.items()):
+        esperado = s_ayer.get(sku, 0.0) + of_cj - entregas.get(sku, 0.0)
+        real = s_hoy.get(sku, 0.0)
+        faltante = esperado - real
+        if faltante < umbral * of_cj:
+            continue
+        upc = int(unidades_por_caja.get(sku, 1) or 1)
+        alertas.append({
+            "sku": sku,
+            "tipo": "RECEPCION_PENDIENTE",
+            "fecha": hoy.isoformat(),
+            "numero_of": ", ".join(x for x in refs.get(sku, []) if x),
+            "of_cj": round(of_cj, 1),
+            "stock_ayer_cj": round(s_ayer.get(sku, 0.0), 1),
+            "entregas_ayer_cj": round(entregas.get(sku, 0.0), 1),
+            "esperado_cj": round(esperado, 1),
+            "real_cj": round(real, 1),
+            "faltante_cj": round(faltante, 1),
+            "faltante_u": int(round(faltante * upc)),
+            "mensaje": (
+                f"OF de {of_cj:.0f} cj lanzada el {ayer.isoformat()} (último día hábil) "
+                f"no se refleja en el "
+                f"stock de hoy (esperado {esperado:.0f} cj, real {real:.0f} cj). "
+                f"Probable terminal report pendiente: los quiebres de los primeros días "
+                f"de este SKU podrían no ser reales."),
+        })
+    return alertas
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--horizonte", type=int, default=8, help="horizonte en semanas")
@@ -364,6 +470,73 @@ def main():
         rich['encabezado_sku'] = enc
     except Exception as e:
         log.warning(f'[6/8] no se pudo completar encabezado_sku fis/comp: {e}')
+
+    # ── 6c. Alertas de RECEPCIÓN PENDIENTE (29-07-2026) ──────────────────────
+    #
+    # SEMÁNTICA DE LAS OF APROBADAS (definida con Germán, 29-07-2026):
+    #   · `fecha_lanzamiento_real` = día en que se PRODUCE (turno 07:00-18:00).
+    #   · `fecha_entrada_real`     = día en que la producción YA ESTÁ EN EL STOCK y
+    #     por tanto disponible para despacho. La producción del día D se ingresa al
+    #     cierre de ese día ("terminal report") y aparece en el snapshot del ETL de
+    #     las 5 AM del día D+1 = `fecha_entrada_real`.
+    #
+    # POR QUÉ EL FILTRO DE entradas_fijas ES `fer > hoy_str` Y NO `>=`:
+    #   Una OF con `fecha_entrada_real == hoy` YA está contabilizada en el stock que
+    #   leímos hoy. Sumarla como entrada futura sería DOBLE CONTEO: el modelo creería
+    #   tener stock fantasma y produciría de menos -> quiebre real más adelante.
+    #   NO CAMBIAR a `>=`. (Se evaluó y descartó explícitamente el 29-07-2026.)
+    #
+    # EL CASO QUE ESTA ALERTA CUBRE:
+    #   Si al cerrar el turno el equipo de calidad no está disponible, el terminal
+    #   report queda para el día siguiente y esa producción NO aparece en el snapshot
+    #   de las 5 AM. El plan entonces ve menos stock del que físicamente hay y reporta
+    #   QUIEBRE en los primeros días del horizonte — un quiebre que probablemente NO
+    #   es real. El cálculo NO se toca (no inventamos stock que no podemos confirmar);
+    #   sólo se emite una alerta informativa para que el usuario lo interprete.
+    #
+    # ALCANCE: SÓLO EL ÚLTIMO DÍA HÁBIL (decisión de Germán, 29-07-2026):
+    #   La alerta mira únicamente las OF lanzadas el último día hábil anterior. Si al
+    #   día D+2 la recepción sigue sin detectarse, el sistema ASUME QUE LA OF NO SE
+    #   EJECUTÓ: no se alerta más y no entra en ningún cálculo (el filtro
+    #   `fer > hoy_str` ya la excluye de entradas_fijas por tener fecha pasada).
+    #   Día HÁBIL y no calendario: un lunes hay que mirar el viernes, o la alerta
+    #   nunca se dispararía los lunes.
+    #
+    # DETECCIÓN (balance de inventario entre dos snapshots):
+    #   esperado(hoy) = stock(D) + OF_lanzadas(D) - entregas(D .. hoy-1)
+    #   faltante      = esperado - stock_real(hoy)
+    #   donde D = último día hábil anterior. Las entregas se acumulan sobre todo el
+    #   rango porque entre el lanzamiento y hoy pudo haber despachos (el sábado hay
+    #   facturación: ~376 líneas en 60 días).
+    #   Se alerta sólo si faltante >= UMBRAL_RECEP (80%) de la OF: los faltantes
+    #   parciales suelen ser producción incompleta o sesgo del método, no terminal
+    #   report pendiente. Validado el 29-07: con umbral 80% dispara 1 de 16 casos.
+    #
+    # SESGOS CONOCIDOS del método (por eso la alerta lleva los números crudos):
+    #   · `dbo.ventas` filtra Segmento='COMERCIAL' y no excluye bodegas -> las
+    #     entregas pueden quedar subestimadas y el faltante verse mayor.
+    #   · Las notas de crédito (devoluciones) no se cuentan.
+    #
+    # PENDIENTE (backlog): leer el estado real de recepción desde SAP en vez de
+    # inferirlo. Hoy las OF de este sistema no se sincronizan con SAP.
+    UMBRAL_RECEP = 0.80
+    try:
+        _alertas_recep = _detectar_recepcion_pendiente(
+            aprobadas=aprobadas_db, unidades_por_caja=unidades_por_caja,
+            hoy=hoy, umbral=UMBRAL_RECEP)
+        if _alertas_recep:
+            rich.setdefault('alertas', []).extend(_alertas_recep)
+            log.warning(f"[6/8] RECEPCION PENDIENTE: {len(_alertas_recep)} SKU con OF "
+                        f"lanzada ayer que no se refleja en el stock de hoy "
+                        f"-> los quiebres de los primeros dias pueden no ser reales.")
+            for a in _alertas_recep:
+                log.warning(f"    {a['sku']}: OF {a['of_cj']:.0f} cj ({a['numero_of']}), "
+                            f"esperado {a['esperado_cj']:.0f} cj, real {a['real_cj']:.0f} cj, "
+                            f"faltan {a['faltante_cj']:.0f} cj")
+        else:
+            log.info("[6/8] recepción de OF de ayer: sin faltantes relevantes.")
+    except Exception as e:
+        log.warning(f"[6/8] no se pudo evaluar recepción pendiente: {e}")
 
     # ── 7. GATE ──────────────────────────────────────────────────────────────
     from persistencia import evaluar_gate_n1, persistir_plan, promover_plan
