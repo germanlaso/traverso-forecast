@@ -21,6 +21,7 @@ from mrp import (load_params_from_excel, load_params_from_db, generar_plan_compl
 from stock import (fetch_and_save_stock, load_stock_parquet,
                    calcular_stock_disponible, stock_summary)
 from ordenes import router as ordenes_router
+from campanas_api import router as campanas_router
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
@@ -59,6 +60,7 @@ app = FastAPI(
 )
 
 app.include_router(ordenes_router)
+app.include_router(campanas_router)   # V6: campanas de granel
 
 app.add_middleware(
     CORSMiddleware,

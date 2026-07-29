@@ -7,6 +7,7 @@ import ProgramacionDiaria from './components/ProgramacionDiaria';
 import StockDiario from './components/StockDiario';
 import Faltantes from './components/Faltantes';
 import ParametrosDiagnostico from './components/ParametrosDiagnostico';
+import Campanas from './components/Campanas';
 
 const API = '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -24,7 +25,7 @@ const BACKEND_URL = (() => {
 // gráficos conservan el tope de 1100 px: una línea de ~1900 px se lee mal y los
 // gráficos de altura fija (330 px) se achatan al estirarse.
 // Para volver al comportamiento anterior, dejar TABS_ANCHAS vacío.
-const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion']);
+const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion','campanas']);
 const MAIN_MAXW_ANCHO = 1800;
 
 const C = {
@@ -631,7 +632,7 @@ export default function App() {
 
       {/* Tabs */}
       <div className="no-print" style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
-        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU'],['stockdiario','📊 Stock Diario'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria'],['faltantes','📉 Faltantes'],['parametros','⚙️ Parámetros']].map(([tab,label]) => (
+        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU'],['stockdiario','📊 Stock Diario'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria'],['faltantes','📉 Faltantes'],['campanas','🗓️ Campañas'],['parametros','⚙️ Parámetros']].map(([tab,label]) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:500,background:'transparent',color:activeTab===tab?C.teal:C.textMuted,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
             {label}
@@ -1218,6 +1219,7 @@ export default function App() {
           ordenesAprobadas={ordenesAprobadas}
         />}
         {activeTab === 'faltantes' && <Faltantes />}
+        {activeTab === 'campanas' && <Campanas />}
         {activeTab === 'parametros' && <ParametrosDiagnostico />}
       </div>
     </div>
