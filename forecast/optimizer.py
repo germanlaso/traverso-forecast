@@ -193,6 +193,12 @@ N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 CAMPANA_GRANEL_ENABLED = _os.environ.get("CAMPANA_GRANEL_ENABLED", "0") == "1"
 GRANEL_MODOS = ("ketchup", "mostaza")
 
+# Campana de FORMATO por linea (Caso 2). Independiente del granel para poder
+# medir su efecto por separado. v1 = SOLO PINS: las semanas sin pin las decide
+# el solver sin penalizacion de cambio (no forzamos campana en todo el horizonte,
+# que en una linea sin holgura sale caro).
+CAMPANA_FORMATO_ENABLED = _os.environ.get("CAMPANA_FORMATO_ENABLED", "0") == "1"
+
 
 def _time_limit_para(horizonte_semanas: int) -> int:
     """Devuelve el time-limit del solver (segundos) para un horizonte dado.
@@ -267,6 +273,8 @@ class _ModeloCPSAT:
         self.evento_qbr: dict[tuple[str, str], cp_model.IntVar] = {}    # binaria (sku, semana_iso)
         self.granel: dict[tuple[str, str], cp_model.IntVar] = {}       # V6 campaña: (semana_iso, modo)
         self.granel_pins: dict[str, str] = {}                           # V6: {semana_iso: modo} fijados
+        self.formato: dict[tuple[str, str, str], cp_model.IntVar] = {}  # V6: (linea, semana, formato)
+        self.formato_pins: dict[str, dict[str, str]] = {}               # V6: {linea: {semana: formato}}
         # Referencias para post-proceso
         self.skus: list[str] = []
         self.lineas: list[str] = []
@@ -798,6 +806,68 @@ def _construir_modelo(
         logger.info(f"[CAMPANA] granel ON: {len(_semanas_g)} semanas x "
                     f"{len(GRANEL_MODOS)} modos, {_n_acople} acoples asig<=granel")
 
+    # ─── Campana de FORMATO por linea (V6 · flag CAMPANA_FORMATO_ENABLED) ─────
+    # formato[(linea, semana, fmt)] binaria, <= max_modos por semana. Un SKU con
+    # ese formato solo puede producirse EN ESA LINEA si su formato esta activo.
+    # El acople va sobre asig[(d, s, linea)]: si el SKU corre en otra linea, el
+    # estado de formato de esta no lo limita.
+    if CAMPANA_FORMATO_ENABLED:
+        _reglas_f = []
+        try:
+            from db_mrp import get_campana_reglas, get_campana_pins_dict
+            for _r in get_campana_reglas():
+                if (_r.get("dimension") or "") == "formato" and _r.get("linea"):
+                    _reglas_f.append(_r)
+        except Exception as _e:
+            logger.warning(f"[CAMPANA] no se pudieron leer reglas de formato ({_e})")
+
+        _semanas_f = sorted({semana_iso_inicio(d).isoformat() for d in horizonte})
+        for _r in _reglas_f:
+            _lin = _r["linea"]
+            _modos = [str(x) for x in (_r.get("modos") or [])]
+            _maxm = int(_r.get("max_modos_semana") or 1)
+            if not _modos:
+                continue
+            for _w in _semanas_f:
+                for _fmt in _modos:
+                    m.formato[(_lin, _w, _fmt)] = m.model.NewBoolVar(
+                        f"fmt_{_lin}_{_w}_{_fmt}".replace(" ", "_"))
+                m.model.Add(
+                    sum(m.formato[(_lin, _w, _f)] for _f in _modos) <= _maxm)
+
+            # Pins: solo estas semanas quedan forzadas.
+            _pf = {}
+            try:
+                _pf = get_campana_pins_dict(_r["recurso"]) or {}
+            except Exception as _e:
+                logger.warning(f"[CAMPANA] sin pins de {_r['recurso']} ({_e})")
+            m.formato_pins[_lin] = dict(_pf)
+            _npf = 0
+            for _w, _fmt in _pf.items():
+                if _w not in _semanas_f:
+                    continue
+                if _fmt in _modos:
+                    m.model.Add(m.formato[(_lin, _w, _fmt)] == 1)
+                else:
+                    for _f in _modos:
+                        m.model.Add(m.formato[(_lin, _w, _f)] == 0)
+                _npf += 1
+
+            # Acople: produccion en esa linea solo si su formato esta activo.
+            _naf = 0
+            for d in horizonte:
+                _w = semana_iso_inicio(d).isoformat()
+                for s in skus:
+                    _fmt = str(sku_params[s].get("formato") or "").strip()
+                    if _fmt not in _modos:
+                        continue          # formato ajeno a la regla: sin acople
+                    if _lin not in m.pares_sku_linea.get(s, []):
+                        continue          # el SKU no corre en esa linea
+                    m.model.Add(m.asig[(d, s, _lin)] <= m.formato[(_lin, _w, _fmt)])
+                    _naf += 1
+            logger.info(f"[CAMPANA] formato ON {_lin}: modos={_modos} "
+                        f"{len(_semanas_f)} semanas, {_npf} pins, {_naf} acoples")
+
     # ─── Restricciones agregadas por (d, l) ──────────────────────────────────
 
     # V6.37: Pre-cómputo de ocupación por OFs aprobadas
@@ -1269,6 +1339,16 @@ def _post_procesar(
         _txt = " | ".join(f"{_w}:{_cal.get(_w, 'ninguno')}"
                           for _w in sorted({k[0] for k in m.granel}))
         logger.info(f"[CAMPANA] calendario granel -> {_txt}")
+    if CAMPANA_FORMATO_ENABLED and m.formato:
+        _lins = sorted({k[0] for k in m.formato})
+        for _lin in _lins:
+            _sem = sorted({k[1] for k in m.formato if k[0] == _lin})
+            _act = {}
+            for (_l, _w, _f), _v in m.formato.items():
+                if _l == _lin and solver.Value(_v) == 1:
+                    _act[_w] = _f
+            logger.info(f"[CAMPANA] calendario formato {_lin} -> "
+                        + " | ".join(f"{w}:{_act.get(w, 'libre')}" for w in _sem))
         # Persistir la propuesta (fijado=FALSE) para que el dashboard la muestre.
         # Las semanas con pin NO se tocan: su fila ya tiene fijado=TRUE y
         # sobrescribirla borraria la decision del planificador.

@@ -432,11 +432,19 @@ def crear_tablas_params():
             CREATE INDEX IF NOT EXISTS ix_campana_cal_semana
                 ON mrp_campana_calendario (semana);
 
+            -- `linea` NULL = estado de planta (granel). Con valor = campana
+            -- de esa linea (formato), y el acople aplica a la produccion EN
+            -- esa linea, no al linea_preferida del SKU.
+            ALTER TABLE mrp_campana_reglas
+                ADD COLUMN IF NOT EXISTS linea VARCHAR(40);
+
             INSERT INTO mrp_campana_reglas
-                (recurso, dimension, modos, max_modos_semana, peso_cambio, activo)
+                (recurso, dimension, modos, max_modos_semana, peso_cambio, activo, linea)
             VALUES
                 ('GRANEL_SALSAS', 'granel_grupo',
-                 '["ketchup","mostaza"]'::jsonb, 1, 0, TRUE)
+                 '["ketchup","mostaza"]'::jsonb, 1, 0, TRUE, NULL),
+                ('L1PET_LV', 'formato',
+                 '["1000","500"]'::jsonb, 1, 0, TRUE, 'L1Pet LV')
             ON CONFLICT (recurso) DO NOTHING;
         """))
         session.commit()
