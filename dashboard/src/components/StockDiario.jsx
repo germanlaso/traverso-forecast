@@ -3,7 +3,7 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine, Legend
 } from "recharts";
-import { useCampanas, bandasCampana, renderBandas, NotaCampana } from "../campanaBandas";
+import { useCampanas, bandasCampana, renderBandas, NotaCampana } from "./campanaBandas";
 
 // Pestaña "Stock Diario": apertura DIARIA del stock del plan vigente, diferenciando
 // la demanda por forecast vs pedidos (OV). Lee el backend como fuente de verdad

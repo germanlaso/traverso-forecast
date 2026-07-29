@@ -18,7 +18,7 @@ import {
   ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ReferenceLine,
 } from "recharts";
-import { useCampanas, bandasCampana, renderBandas, NotaCampana } from "../campanaBandas";
+import { useCampanas, bandasCampana, renderBandas, NotaCampana } from "./campanaBandas";
 
 const API = "";
 
