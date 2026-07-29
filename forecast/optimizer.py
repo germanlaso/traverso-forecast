@@ -1618,6 +1618,9 @@ def optimizar_plan(
             "cap_bodega_u": int(_attr(sp, "cap_bodega", 1_000_000) or 1_000_000),
             "linea_preferida": _attr(sp, "linea_preferida", ""),
             "descripcion": _attr(sp, "descripcion", ""),
+            # V6: granel_grupo debe viajar hasta _construir_modelo o el
+            # acoplamiento de campana queda en 0 acoples (fallo silencioso).
+            "granel_grupo": str(_attr(sp, "granel_grupo", "") or "").strip().lower(),
         }
 
     lineas_params_rich = {}

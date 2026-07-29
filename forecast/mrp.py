@@ -29,6 +29,7 @@ class SKUParams:
     pct_dia_max: float = 1.0
     mto: bool = False          # a pedido: sin forecast, SS 0, demanda solo OV
     formato: str = ""          # gramaje/envase (para regla de cambio de formato)
+    granel_grupo: str = ""     # V6: granel de salsa que habilita el envasado (ketchup/mostaza)
 
 
 @dataclass
@@ -140,6 +141,7 @@ def load_params_from_db():
             pct_dia_max         = float(row.get("pct_dia_max", 1.0) or 1.0),
             mto                 = bool(row.get("mto", False)),
             formato             = str(row.get("formato", "") or ""),
+            granel_grupo        = str(row.get("granel_grupo", "") or "").strip().lower(),
         )
         if linea_pref and linea_pref in lineas:
             sku_params[sku].linea_preferida = linea_pref
