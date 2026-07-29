@@ -186,6 +186,13 @@ N2_BARRERA_MODO = _os.environ.get("N2_BARRERA_MODO", "universal").strip().lower(
 N2_TL_A = int(_os.environ.get("N2_TL_A", "1800"))
 N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 
+# ─── Campaña de granel (V6 · 29-07) ──────────────────────────────────────────
+# Estado de planta semanal: a lo mas un granel de salsa (ketchup/mostaza) por
+# semana habilita el envasado de los SKU de ese grupo (granel_grupo en
+# mrp_sku_params). Flag OFF por default -> modelo identico al actual.
+CAMPANA_GRANEL_ENABLED = _os.environ.get("CAMPANA_GRANEL_ENABLED", "0") == "1"
+GRANEL_MODOS = ("ketchup", "mostaza")
+
 
 def _time_limit_para(horizonte_semanas: int) -> int:
     """Devuelve el time-limit del solver (segundos) para un horizonte dado.
@@ -258,6 +265,7 @@ class _ModeloCPSAT:
         self.coef_exc_leve: dict[tuple[date, str], int] = {}
         self.coef_exc_alto: dict[tuple[date, str], int] = {}
         self.evento_qbr: dict[tuple[str, str], cp_model.IntVar] = {}    # binaria (sku, semana_iso)
+        self.granel: dict[tuple[str, str], cp_model.IntVar] = {}       # V6 campaña: (semana_iso, modo)
         # Referencias para post-proceso
         self.skus: list[str] = []
         self.lineas: list[str] = []
@@ -738,6 +746,31 @@ def _construir_modelo(
                 # (inicio nunca 1 si asig=0). R4 (día 0 sin setup) queda
                 # subsumida por R12: si día 0 tiene N=1 SKU, Σ inicio = 0.
                 m.model.Add(inicio <= asig)
+
+    # ─── Acoplamiento de campaña de granel (V6 · flag CAMPANA_GRANEL_ENABLED) ─
+    # granel[(w, modo)] binaria, <=1 granel de salsa por semana. Un SKU con
+    # granel_grupo ketchup/mostaza solo puede producirse (asig=1) en semanas
+    # donde ESE granel esta activo. Acople DURO: forzar un modo NUNCA vuelve N1
+    # infactible — el faltante cae en quiebre penalizado (blando por diseño, ver
+    # STOCK_LOWER_BOUND_FACTOR). Independientes (grupo vacio) sin acople.
+    if CAMPANA_GRANEL_ENABLED:
+        _semanas_g = sorted({semana_iso_inicio(d).isoformat() for d in horizonte})
+        for _w in _semanas_g:
+            for _modo in GRANEL_MODOS:
+                m.granel[(_w, _modo)] = m.model.NewBoolVar(f"granel_{_w}_{_modo}")
+            m.model.Add(sum(m.granel[(_w, _modo)] for _modo in GRANEL_MODOS) <= 1)
+        _n_acople = 0
+        for d in horizonte:
+            _w = semana_iso_inicio(d).isoformat()
+            for s in skus:
+                _grupo = (sku_params[s].get("granel_grupo") or "").strip().lower()
+                if _grupo not in GRANEL_MODOS:
+                    continue
+                for l in m.pares_sku_linea[s]:
+                    m.model.Add(m.asig[(d, s, l)] <= m.granel[(_w, _grupo)])
+                    _n_acople += 1
+        logger.info(f"[CAMPANA] granel ON: {len(_semanas_g)} semanas x "
+                    f"{len(GRANEL_MODOS)} modos, {_n_acople} acoples asig<=granel")
 
     # ─── Restricciones agregadas por (d, l) ──────────────────────────────────
 
