@@ -39,7 +39,7 @@ export default function Campanas() {
   const [conteo, setConteo] = useState({});
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
-  const [abierta, setAbierta] = useState(null); // semana con el selector abierto
+  const [sel, setSel] = useState(null);          // semana seleccionada (panel de acciones)
   const [guardando, setGuardando] = useState("");
 
   const cargar = useCallback(async () => {
@@ -78,7 +78,7 @@ export default function Campanas() {
       setError(`No se pudo fijar ${semana}: ${(e.response && e.response.data && e.response.data.detail) || e.message}`);
     } finally {
       setGuardando("");
-      setAbierta(null);
+      setSel(null);
     }
   }
 
@@ -92,7 +92,7 @@ export default function Campanas() {
       setError(`No se pudo soltar ${semana}: ${(e.response && e.response.data && e.response.data.detail) || e.message}`);
     } finally {
       setGuardando("");
-      setAbierta(null);
+      setSel(null);
     }
   }
 
@@ -140,105 +140,88 @@ export default function Campanas() {
           Cargando calendario…
         </div>
       ) : (
-        <div style={{ overflowX: "auto", paddingBottom: 8 }}>
-          <table style={{ borderCollapse: "separate", borderSpacing: 4 }}>
-            <thead>
-              <tr>
-                <th style={{
-                  textAlign: "left", fontSize: 11, color: "#777",
-                  fontWeight: 600, padding: "2px 6px", minWidth: 120,
-                }}>
-                  Recurso
-                </th>
-                {cal.map((c) => (
-                  <th key={c.semana} style={{
-                    fontSize: 11, color: "#777", fontWeight: 600, minWidth: 86,
-                  }}>
-                    {fmtSemana(c.semana)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style={{ fontSize: 13, fontWeight: 600, padding: "2px 6px" }}>
-                  Granel salsas
-                </td>
-                {cal.map((c) => {
-                  const col = COLORES[c.modo] || COLORES[""];
-                  const esta = guardando === c.semana;
-                  return (
-                    <td key={c.semana} style={{ position: "relative" }}>
-                      <button
-                        onClick={() => setAbierta(abierta === c.semana ? null : c.semana)}
-                        disabled={esta}
-                        title={c.fijado
-                          ? `Fijado por ${c.autor || "planificador"}`
-                          : "Propuesta del optimizador — click para fijar"}
-                        style={{
-                          width: "100%", cursor: esta ? "wait" : "pointer",
-                          background: col.bg, color: col.fg,
-                          border: `${c.fijado ? 2 : 1}px ${c.fijado ? "solid" : "dashed"} ${col.br}`,
-                          borderRadius: 6, padding: "8px 4px",
-                          fontSize: 12, fontFamily: "inherit",
-                          opacity: esta ? 0.5 : 1,
-                        }}
-                      >
-                        {c.fijado ? "🔒 " : ""}
-                        {c.modo || "ninguno"}
-                      </button>
+        <>
+          {/* Grilla de semanas. CSS grid (no <table>) para que las celdas tengan
+              tamano predecible, y sin overflow que recorte nada. */}
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${Math.min(cal.length, 5)}, minmax(150px, 1fr))`,
+            gap: 8, marginBottom: 16,
+          }}>
+            {cal.map((c) => {
+              const col = COLORES[c.modo] || COLORES[""];
+              const activa = sel === c.semana;
+              return (
+                <button
+                  key={c.semana}
+                  onClick={() => setSel(activa ? null : c.semana)}
+                  disabled={guardando === c.semana}
+                  title={c.fijado ? `Fijado por ${c.autor || "planificador"}`
+                                  : "Propuesta del optimizador — click para fijar"}
+                  style={{
+                    textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+                    background: col.bg, color: col.fg,
+                    border: `${c.fijado ? 2 : 1}px ${c.fijado ? "solid" : "dashed"} ${col.br}`,
+                    outline: activa ? `2px solid ${NAVY}` : "none",
+                    outlineOffset: 1,
+                    borderRadius: 8, padding: "10px 12px",
+                    opacity: guardando === c.semana ? 0.5 : 1,
+                  }}
+                >
+                  <div style={{ fontSize: 11, opacity: 0.75, marginBottom: 3 }}>
+                    semana del {fmtSemana(c.semana)}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>
+                    {c.fijado ? "🔒 " : ""}{c.modo || "sin definir"}
+                  </div>
+                  <div style={{ fontSize: 10.5, opacity: 0.7, marginTop: 2 }}>
+                    {c.fijado ? "fijado" : (c.modo ? "propuesto por el plan" : "—")}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
 
-                      {abierta === c.semana && (
-                        <div style={{
-                          position: "absolute", zIndex: 20, top: "100%", left: 0,
-                          background: "#fff", border: "1px solid #ccc",
-                          borderRadius: 6, padding: 6, minWidth: 130,
-                          boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
-                        }}>
-                          {modosDisponibles.map((mo) => (
-                            <div
-                              key={mo}
-                              onClick={() => fijar(c.semana, mo)}
-                              style={{
-                                padding: "6px 8px", fontSize: 12, cursor: "pointer",
-                                borderRadius: 4, color: (COLORES[mo] || COLORES[""]).fg,
-                              }}
-                              onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F7FC")}
-                              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                            >
-                              Fijar {mo}
-                            </div>
-                          ))}
-                          <div
-                            onClick={() => fijar(c.semana, "")}
-                            style={{ padding: "6px 8px", fontSize: 12, cursor: "pointer",
-                                     borderRadius: 4, color: "#5F5E5A" }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F7FC")}
-                            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                          >
-                            Sin granel
-                          </div>
-                          {c.fijado && (
-                            <div
-                              onClick={() => soltar(c.semana)}
-                              style={{ padding: "6px 8px", fontSize: 12, cursor: "pointer",
-                                       borderRadius: 4, color: "#185FA5",
-                                       borderTop: "1px solid #eee", marginTop: 4 }}
-                              onMouseEnter={(e) => (e.currentTarget.style.background = "#F2F7FC")}
-                              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                            >
-                              Soltar (decide el solver)
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            </tbody>
-          </table>
-        </div>
+          {/* Panel de acciones de la semana seleccionada. Va DEBAJO de la grilla,
+              sin position:absolute, asi no puede quedar oculto por el contenedor. */}
+          {sel && (() => {
+            const c = cal.find((x) => x.semana === sel) || {};
+            const btn = {
+              fontFamily: "inherit", fontSize: 12.5, padding: "7px 14px",
+              borderRadius: 6, cursor: "pointer", border: "1px solid #bbb",
+              background: "#fff",
+            };
+            return (
+              <div style={{
+                background: "#F7F7F4", border: "1px solid #DDD", borderRadius: 8,
+                padding: "12px 14px", marginBottom: 14,
+                display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+              }}>
+                <strong style={{ fontSize: 13 }}>Semana del {fmtSemana(sel)}:</strong>
+                {modosDisponibles.map((mo) => (
+                  <button key={mo} onClick={() => fijar(sel, mo)}
+                    style={{ ...btn,
+                      background: (COLORES[mo] || COLORES[""]).bg,
+                      color: (COLORES[mo] || COLORES[""]).fg,
+                      borderColor: (COLORES[mo] || COLORES[""]).br }}>
+                    Fijar {mo}
+                  </button>
+                ))}
+                <button onClick={() => fijar(sel, "")} style={btn}>Sin granel</button>
+                {c.fijado && (
+                  <button onClick={() => soltar(sel)}
+                    style={{ ...btn, color: "#185FA5", borderColor: "#9CC4EA" }}>
+                    Soltar (decide el plan)
+                  </button>
+                )}
+                <button onClick={() => setSel(null)}
+                  style={{ ...btn, border: "none", background: "transparent", color: "#777" }}>
+                  Cancelar
+                </button>
+              </div>
+            );
+          })()}
+        </>
       )}
 
       <div style={{ display: "flex", gap: 18, flexWrap: "wrap",
@@ -247,13 +230,13 @@ export default function Campanas() {
           <span style={{ display: "inline-block", width: 22, height: 12,
                          border: "2px solid #888", borderRadius: 3,
                          verticalAlign: "-1px", marginRight: 4 }} />
-          🔒 fijado por el planificador
+          🔒 fijado por el planificador (el plan lo respeta)
         </span>
         <span>
           <span style={{ display: "inline-block", width: 22, height: 12,
                          border: "1px dashed #888", borderRadius: 3,
                          verticalAlign: "-1px", marginRight: 4 }} />
-          propuesto por el optimizador
+          propuesto por el optimizador en la ultima corrida
         </span>
       </div>
 
