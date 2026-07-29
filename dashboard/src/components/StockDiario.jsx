@@ -188,11 +188,11 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
     entrada_cj: r.entrada_aprobada_u ? r.entrada_aprobada_u / upcSel : 0,
   })), [dias, upcSel]);
 
-  // Bandas de campaña de granel (solo SKU acoplados; independientes sin bandas).
-  const { calendario, grupoDeSku } = useCampanas();
-  const grupoSku = grupoDeSku(selSku);
+  // Bandas de campaña (granel de planta y formato de linea). Solo se dibujan
+  // para los SKU que la regla afecta; el resto queda igual que antes.
+  const { reglas, cals, infoDe } = useCampanas();
   const bandas = bandasCampana({
-    calendario, grupo: grupoSku,
+    reglas, cals, info: infoDe(selSku),
     puntos: chartData.map((r) => ({ iso: String(r.fecha).slice(0, 10), eje: r.name })),
   });
 
@@ -318,7 +318,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
               </ComposedChart>
             </ResponsiveContainer>
 
-            <NotaCampana grupo={grupoSku} hayBandas={bandas.length > 0} />
+            <NotaCampana hayBandas={bandas.length > 0} />
 
             <div style={{ ...s.tblWrap, marginTop: 14 }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>

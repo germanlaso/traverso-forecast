@@ -26,6 +26,7 @@ from db_mrp import (
     upsert_campana_pin,
     delete_campana_pin,
     get_all_sku_params,
+    get_all_sku_lineas,
 )
 
 router = APIRouter(prefix="/campanas", tags=["campanas"])
@@ -102,15 +103,40 @@ def soltar_pin(semana: date, recurso: str = RECURSO_GRANEL):
 
 @router.get("/skus")
 def skus_por_grupo():
-    """SKU agrupados por granel_grupo. Sirve para que el usuario vea el impacto
-    de fijar una semana: que productos quedan habilitados y cuales no."""
+    """Info por SKU para el impacto de las campanas.
+
+    - `grupos`/`conteo`: SKU agrupados por granel_grupo (que se habilita cada semana).
+    - `sku_info`: por SKU su granel_grupo, formato y las LINEAS en que puede correr.
+      Las lineas importan porque la campana de formato restringe la produccion EN esa
+      linea: si el SKU corre en otra, el formato de L1Pet LV no lo limita.
+    """
     grupos: dict[str, list[dict]] = {}
+    info: dict[str, dict] = {}
+
+    lineas_de: dict[str, list[str]] = {}
+    try:
+        for sl in get_all_sku_lineas():
+            d = sl if isinstance(sl, dict) else dict(sl)
+            lineas_de.setdefault(str(d.get("sku")), []).append(str(d.get("linea")))
+    except Exception:
+        pass  # sin pares sku-linea: se cae a linea_preferida
+
     for sp in get_all_sku_params():
+        sku = str(sp.get("sku"))
         g = (sp.get("granel_grupo") or "").strip().lower() or "(independiente)"
         grupos.setdefault(g, []).append({
-            "sku": sp.get("sku"),
+            "sku": sku,
             "descripcion": sp.get("descripcion", ""),
             "mto": bool(sp.get("mto", False)),
         })
+        lins = lineas_de.get(sku) or (
+            [sp.get("linea_preferida")] if sp.get("linea_preferida") else [])
+        info[sku] = {
+            "granel_grupo": (sp.get("granel_grupo") or "").strip().lower(),
+            "formato": str(sp.get("formato") or "").strip(),
+            "lineas": sorted({l for l in lins if l}),
+        }
+
     return {"grupos": {k: sorted(v, key=lambda x: x["sku"]) for k, v in grupos.items()},
-            "conteo": {k: len(v) for k, v in grupos.items()}}
+            "conteo": {k: len(v) for k, v in grupos.items()},
+            "sku_info": info}

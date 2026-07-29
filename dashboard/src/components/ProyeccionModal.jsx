@@ -65,7 +65,7 @@ function KPI({ label, value, color, sub, sub2, aviso }) {
    consulta por cada SKU que el usuario abra.                                */
 export default function ProyeccionModal({ sku, descripcion, onClose,
                                           lista, indice, onNavegar }) {
-  const { calendario, grupoDeSku } = useCampanas();
+  const { reglas, cals, infoDe } = useCampanas();
   const [d, setD]   = useState(null);
   const [err, setErr] = useState("");
   const [cargando, setCargando] = useState(true);
@@ -120,10 +120,10 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
     estado: x.estado,
   }));
 
-  // Bandas de campaña: solo para SKU acoplados a un granel (ketchup/mostaza).
-  const grupoSku = grupoDeSku(sku);
+  // Bandas de campaña (granel de planta y formato de linea), solo si la regla
+  // afecta a este SKU.
   const bandas = bandasCampana({
-    calendario, grupo: grupoSku,
+    reglas, cals, info: infoDe(sku),
     puntos: dias.map((x) => ({ iso: String(x.fecha).slice(0, 10), eje: String(x.fecha).slice(5) })),
   });
 
@@ -247,7 +247,7 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                 </ResponsiveContainer>
               </div>
 
-              <NotaCampana grupo={grupoSku} hayBandas={bandas.length > 0} />
+              <NotaCampana hayBandas={bandas.length > 0} />
 
               <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 8 }}>
                 Mismos datos que la pestaña Stock Diario (endpoint reactivo: recalcula el balance
