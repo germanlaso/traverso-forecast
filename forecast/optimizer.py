@@ -1232,6 +1232,18 @@ def _post_procesar(
                 })
                 oft_por_dia.setdefault((s, d.isoformat()), []).append(cajas_v)
 
+    # ─── (V6) Calendario de granel elegido ───────────────────────────────────
+    # Volcado al log para comparar reproducibilidad entre corridas (Paso 1). Sin
+    # esto el modo semanal es invisible: el solver lo decide y no queda rastro.
+    if CAMPANA_GRANEL_ENABLED and m.granel:
+        _cal = {}
+        for (_w, _modo), _v in m.granel.items():
+            if solver.Value(_v) == 1:
+                _cal[_w] = _modo
+        _txt = " | ".join(f"{_w}:{_cal.get(_w, 'ninguno')}"
+                          for _w in sorted({k[0] for k in m.granel}))
+        logger.info(f"[CAMPANA] calendario granel -> {_txt}")
+
     # ─── Stock visible y alertas ─────────────────────────────────────────────
     for s in m.skus:
         stock_diario[s] = {}
