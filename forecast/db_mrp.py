@@ -401,8 +401,116 @@ def crear_tablas_params():
             );
             CREATE INDEX IF NOT EXISTS ix_faltantes_expl_fecha
                 ON mrp_faltantes_explicaciones (fecha);
+
+            -- ── V6 (29-07) Campanas de linea ─────────────────────────────────
+            -- Reglas por recurso (que dimension y modos maneja) y calendario
+            -- semanal con pins del planificador. `recurso` generaliza: hoy
+            -- GRANEL_SALSAS (estado de planta), a futuro una linea por formato.
+            CREATE TABLE IF NOT EXISTS mrp_campana_reglas (
+                recurso            VARCHAR(40)  PRIMARY KEY,
+                dimension          VARCHAR(30)  NOT NULL,
+                modos              JSONB        NOT NULL DEFAULT '[]'::jsonb,
+                max_modos_semana   INTEGER      NOT NULL DEFAULT 1,
+                peso_cambio        INTEGER      NOT NULL DEFAULT 0,
+                activo             BOOLEAN      NOT NULL DEFAULT TRUE,
+                updated_at         TIMESTAMP    DEFAULT NOW()
+            );
+
+            -- semana = inicio ISO de la semana (mismo criterio que
+            -- calendario.semana_iso_inicio). modo vacio o "ninguno" = semana sin
+            -- granel. Solo las filas con fijado=TRUE son pins duros; el resto es
+            -- registro de lo que propuso el solver.
+            CREATE TABLE IF NOT EXISTS mrp_campana_calendario (
+                recurso     VARCHAR(40)  NOT NULL,
+                semana      DATE         NOT NULL,
+                modo        VARCHAR(30)  NOT NULL DEFAULT '',
+                fijado      BOOLEAN      NOT NULL DEFAULT FALSE,
+                autor       VARCHAR(120) DEFAULT '',
+                updated_at  TIMESTAMP    DEFAULT NOW(),
+                PRIMARY KEY (recurso, semana)
+            );
+            CREATE INDEX IF NOT EXISTS ix_campana_cal_semana
+                ON mrp_campana_calendario (semana);
+
+            INSERT INTO mrp_campana_reglas
+                (recurso, dimension, modos, max_modos_semana, peso_cambio, activo)
+            VALUES
+                ('GRANEL_SALSAS', 'granel_grupo',
+                 '["ketchup","mostaza"]'::jsonb, 1, 0, TRUE)
+            ON CONFLICT (recurso) DO NOTHING;
         """))
         session.commit()
+
+
+# ─── V6 Campanas de linea ────────────────────────────────────────────────────
+
+def get_campana_reglas() -> list[dict]:
+    """Reglas de campana activas (una por recurso)."""
+    with get_session() as session:
+        rows = session.execute(text(
+            "SELECT * FROM mrp_campana_reglas WHERE activo = TRUE ORDER BY recurso"
+        )).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
+def get_campana_calendario(recurso: str | None = None,
+                           desde=None, hasta=None) -> list[dict]:
+    """Calendario de campana. Filtra por recurso y rango de semanas si se indica."""
+    q = "SELECT * FROM mrp_campana_calendario WHERE 1=1"
+    p: dict = {}
+    if recurso:
+        q += " AND recurso = :recurso"; p["recurso"] = recurso
+    if desde:
+        q += " AND semana >= :desde";   p["desde"] = desde
+    if hasta:
+        q += " AND semana <= :hasta";   p["hasta"] = hasta
+    q += " ORDER BY recurso, semana"
+    with get_session() as session:
+        rows = session.execute(text(q), p).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
+def upsert_campana_pin(recurso: str, semana, modo: str,
+                       fijado: bool = True, autor: str = "") -> dict:
+    """Fija (o registra) el modo de una semana. modo vacio = sin granel."""
+    rec = {"recurso": recurso, "semana": semana,
+           "modo": (modo or "").strip().lower(),
+           "fijado": bool(fijado), "autor": autor or ""}
+    with get_session() as session:
+        session.execute(text("""
+            INSERT INTO mrp_campana_calendario
+                (recurso, semana, modo, fijado, autor, updated_at)
+            VALUES (:recurso, :semana, :modo, :fijado, :autor, NOW())
+            ON CONFLICT (recurso, semana) DO UPDATE SET
+                modo       = EXCLUDED.modo,
+                fijado     = EXCLUDED.fijado,
+                autor      = EXCLUDED.autor,
+                updated_at = NOW()
+        """), rec)
+        session.commit()
+    return rec
+
+
+def delete_campana_pin(recurso: str, semana) -> int:
+    """Suelta una semana (borra el pin). Devuelve filas borradas."""
+    with get_session() as session:
+        r = session.execute(text(
+            "DELETE FROM mrp_campana_calendario "
+            "WHERE recurso = :recurso AND semana = :semana"
+        ), {"recurso": recurso, "semana": semana})
+        session.commit()
+        return r.rowcount or 0
+
+
+def get_campana_pins_dict(recurso: str = "GRANEL_SALSAS") -> dict:
+    """{semana_iso: modo} SOLO de los pins duros. Consumido por el optimizer."""
+    out = {}
+    for row in get_campana_calendario(recurso=recurso):
+        if row.get("fijado"):
+            sem = row["semana"]
+            key = sem.isoformat() if hasattr(sem, "isoformat") else str(sem)
+            out[key] = (row.get("modo") or "").strip().lower()
+    return out
 
 
 def upsert_linea(linea: dict):

@@ -266,6 +266,7 @@ class _ModeloCPSAT:
         self.coef_exc_alto: dict[tuple[date, str], int] = {}
         self.evento_qbr: dict[tuple[str, str], cp_model.IntVar] = {}    # binaria (sku, semana_iso)
         self.granel: dict[tuple[str, str], cp_model.IntVar] = {}       # V6 campaña: (semana_iso, modo)
+        self.granel_pins: dict[str, str] = {}                           # V6: {semana_iso: modo} fijados
         # Referencias para post-proceso
         self.skus: list[str] = []
         self.lineas: list[str] = []
@@ -759,6 +760,31 @@ def _construir_modelo(
             for _modo in GRANEL_MODOS:
                 m.granel[(_w, _modo)] = m.model.NewBoolVar(f"granel_{_w}_{_modo}")
             m.model.Add(sum(m.granel[(_w, _modo)] for _modo in GRANEL_MODOS) <= 1)
+        # Pins del planificador (mrp_campana_calendario, fijado=TRUE). Import lazy:
+        # si la BD no responde, degrada a "el solver decide" en vez de romper el plan.
+        _pins = {}
+        try:
+            from db_mrp import get_campana_pins_dict
+            _pins = get_campana_pins_dict("GRANEL_SALSAS") or {}
+        except Exception as _e:
+            logger.warning(f"[CAMPANA] no se pudieron leer pins ({_e}) -> solver decide")
+        m.granel_pins = dict(_pins)   # visible en el post-solve (otra funcion)
+        _n_pin = 0
+        for _w, _modo_pin in _pins.items():
+            if _w not in _semanas_g:
+                continue  # pin fuera del horizonte actual: se ignora
+            if _modo_pin in GRANEL_MODOS:
+                m.model.Add(m.granel[(_w, _modo_pin)] == 1)
+            else:
+                # "" / "ninguno" -> semana sin granel de salsa
+                for _modo in GRANEL_MODOS:
+                    m.model.Add(m.granel[(_w, _modo)] == 0)
+            _n_pin += 1
+        if _n_pin:
+            logger.info(f"[CAMPANA] {_n_pin} semanas FIJADAS por pin: "
+                        + ", ".join(f"{w}={_pins[w] or 'ninguno'}"
+                                    for w in sorted(_pins) if w in _semanas_g))
+
         _n_acople = 0
         for d in horizonte:
             _w = semana_iso_inicio(d).isoformat()
@@ -1243,6 +1269,20 @@ def _post_procesar(
         _txt = " | ".join(f"{_w}:{_cal.get(_w, 'ninguno')}"
                           for _w in sorted({k[0] for k in m.granel}))
         logger.info(f"[CAMPANA] calendario granel -> {_txt}")
+        # Persistir la propuesta (fijado=FALSE) para que el dashboard la muestre.
+        # Las semanas con pin NO se tocan: su fila ya tiene fijado=TRUE y
+        # sobrescribirla borraria la decision del planificador.
+        try:
+            from db_mrp import upsert_campana_pin
+            from datetime import date as _date
+            _ya_fijadas = set(getattr(m, "granel_pins", {}) or {})
+            for _w in sorted({k[0] for k in m.granel}):
+                if _w in _ya_fijadas:
+                    continue
+                upsert_campana_pin("GRANEL_SALSAS", _date.fromisoformat(_w),
+                                   _cal.get(_w, ""), fijado=False, autor="solver")
+        except Exception as _e:
+            logger.warning(f"[CAMPANA] no se pudo persistir el calendario ({_e})")
 
     # ─── Stock visible y alertas ─────────────────────────────────────────────
     for s in m.skus:
