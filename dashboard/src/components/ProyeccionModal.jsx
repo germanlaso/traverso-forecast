@@ -28,6 +28,9 @@ const C = {
   red:     "#E24B4A", redLt:   "#FCEBEB",
   gray:    "#5F5E5A", grayLt:  "#F1EFE8",
   border:  "#D3D1C7", text:    "#2C2C2A", textMuted: "#888780",
+  blue:    "#378ADD",
+  // naranja dedicado a la OFT propuesta (amber ya se usa en la línea de SS)
+  orange:  "#E8862B",
 };
 
 const fmtN = (n) => (n === null || n === undefined ? "—" : Math.round(n).toLocaleString("es-CL"));
@@ -96,12 +99,22 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
   }, [sku]);
 
   const dias = d?.dias ?? [];
+// (29-07-2026) PRODUCCIÓN EN EL GRÁFICO: dos series distintas, no una.
+//   · oft_cj     = OFT PROPUESTA por el optimizador (aún sin aprobar) -> NARANJA.
+//   · entrada_cj = OF / OFM ya APROBADA (entrada_aprobada_u del endpoint) -> VERDE.
+// Al aprobar una OFT el optimizador deja de proponerla: `oft_cajas` pasa a null y la
+// cantidad se mueve a `entrada_aprobada_u`. El gráfico dibujaba sólo `oft_cajas`, así
+// que la barra DESAPARECÍA al aprobar aunque el balance de stock la siguiera contando.
+// Lo APROBADO manda para el cálculo; lo propuesto queda como referencia visual (barra
+// más tenue, con borde punteado).
   const serie = dias.map((x) => ({
     fecha: String(x.fecha).slice(5),          // MM-DD
     stock: x.stock_fin_cj,
     ss: x.ss_u != null && d?.upc ? x.ss_u / d.upc : null,
     demanda: x.demanda_corr_cj,
-    oft: x.oft_cajas || 0,
+    pedidos: x.pedidos_cj || 0,               // OV: faltaba en el modal
+    oft: x.oft_cajas || 0,                    // propuesta (referencia)
+    aprobada: x.entrada_aprobada_u && d?.upc ? x.entrada_aprobada_u / d.upc : 0,
     estado: x.estado,
   }));
 
@@ -119,7 +132,10 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
 
   const nQuiebre = dias.filter((x) => x.estado === "QUIEBRE").length;
   const nBajoSS  = dias.filter((x) => x.estado === "BAJO_SS").length;
-  const nOft     = dias.filter((x) => (x.oft_cajas || 0) > 0).length;
+  // cuenta días con producción de CUALQUIER origen: si todo está aprobado,
+  // `oft_cajas` es null y el KPI mostraría 0 aunque haya producción planificada.
+  const nOft     = dias.filter((x) => (x.oft_cajas || 0) > 0
+                                   || (x.entrada_aprobada_u || 0) > 0).length;
   const stockMin = dias.length ? Math.min(...dias.map((x) => x.stock_fin_cj ?? 0)) : null;
   const stockFin = dias.length ? dias[dias.length - 1].stock_fin_cj : null;
 
@@ -190,7 +206,7 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                      color={stockMin < 0 ? C.red : stockMin === 0 ? C.amber : C.text} />
                 <KPI label="Días en quiebre" value={nQuiebre} color={nQuiebre ? C.red : C.teal} />
                 <KPI label="Días bajo SS" value={nBajoSS} color={nBajoSS ? C.amber : C.teal} />
-                <KPI label="Días con OFT" value={nOft} sub={`${dias.length} días`} />
+                <KPI label="Días con producción" value={nOft} sub={`${dias.length} días`} />
               </div>
 
               {/* Gráfico */}
@@ -205,9 +221,13 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                              contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.border}` }} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     <ReferenceLine y={0} stroke={C.red} strokeWidth={1} />
-                    <Bar dataKey="oft" name="OFT (producción)" fill={C.tealMid} fillOpacity={0.30}
-                         stroke={C.teal} barSize={9} />
+                    <Bar dataKey="oft" name="OFT propuesta" fill={C.orange} fillOpacity={0.35}
+                         stroke={C.orange} strokeDasharray="3 2" barSize={10} />
+                    <Bar dataKey="aprobada" name="OF aprobada / OFM" fill={C.teal} fillOpacity={0.75}
+                         stroke={C.tealMid} barSize={10} />
                     <Bar dataKey="demanda" name="Demanda" fill="#B85C5C" fillOpacity={0.42}
+                         barSize={5} />
+                    <Bar dataKey="pedidos" name="Pedidos (OV)" fill={C.purple} fillOpacity={0.65}
                          barSize={5} />
                     <Line type="monotone" dataKey="stock" name="Stock final" stroke={C.purple}
                           strokeWidth={2} dot={false} />

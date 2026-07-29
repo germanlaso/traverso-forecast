@@ -18,6 +18,8 @@ const C = {
   red:     "#E24B4A", redLt:   "#FCEBEB",
   gray:    "#5F5E5A", grayLt:  "#F1EFE8",
   border:  "#D3D1C7", text:    "#2C2C2A", textMuted: "#888780",
+  // naranja dedicado a la OFT propuesta (amber ya se usa en la línea de SS)
+  orange:  "#E8862B",
 };
 
 const fmtN  = (n) => Math.round(n ?? 0).toLocaleString("es-CL");
@@ -39,6 +41,11 @@ function CustomTooltip({ active, payload, label }) {
       {line("Forecast", row.forecast_cj, "#F09595")}
       {line("Pedidos (OV)", row.pedidos_cj, C.purple)}
       {line("Demanda (corr.)", row.demanda_corr_cj, C.gray)}
+      {(row.oft_cj > 0 || row.entrada_cj > 0) && (
+        <div style={{ borderTop: `0.5px solid ${C.border}`, margin: "5px 0" }} />
+      )}
+      {row.oft_cj > 0     && line("OFT propuesta", row.oft_cj, C.orange)}
+      {row.entrada_cj > 0 && line("OF aprobada / OFM", row.entrada_cj, C.teal)}
       <div style={{ borderTop: `0.5px solid ${C.border}`, margin: "5px 0" }} />
       {row.stock_fin_cj != null && line("Stock final", row.stock_fin_cj, C.blue)}
       {row.ss_cj > 0 && line("Stock seguridad", row.ss_cj, C.amber)}
@@ -164,11 +171,21 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
   }, [ordenesPlan, ordenesAprobadas, selSku]);
   // u_por_caja del SKU seleccionado, para convertir entrada_aprobada_u (unidades) a cajas.
   const upcSel = (skuList.find((x) => x.sku === selSku)?.u_por_caja) || 1;
+// (29-07-2026) PRODUCCIÓN EN EL GRÁFICO: dos series distintas, no una.
+//   · oft_cj     = OFT PROPUESTA por el optimizador (aún sin aprobar) -> NARANJA.
+//   · entrada_cj = OF / OFM ya APROBADA (entrada_aprobada_u del endpoint) -> VERDE.
+// Al aprobar una OFT el optimizador deja de proponerla: `oft_cajas` pasa a null y la
+// cantidad se mueve a `entrada_aprobada_u`. El gráfico dibujaba sólo `oft_cajas`, así
+// que la barra DESAPARECÍA al aprobar aunque el balance de stock la siguiera contando.
+// Lo APROBADO manda para el cálculo; lo propuesto queda como referencia visual (barra
+// más tenue, con borde punteado).
   const chartData = useMemo(() => dias.map((r) => ({
     name: fmtDs(r.fecha), fecha: r.fecha,
     forecast_cj: r.forecast_cj, pedidos_cj: r.pedidos_cj,
     demanda_corr_cj: r.demanda_corr_cj, stock_fin_cj: r.stock_fin_cj, ss_cj: r.ss_cj,
-  })), [dias]);
+    oft_cj: r.oft_cajas || 0,
+    entrada_cj: r.entrada_aprobada_u ? r.entrada_aprobada_u / upcSel : 0,
+  })), [dias, upcSel]);
 
   // Totales para tarjetas (demanda del horizonte)
   const totFc   = dias.reduce((sum, r) => sum + (r.forecast_cj || 0), 0);
@@ -256,6 +273,8 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
             <div style={s.leg}>
               <span style={s.legItem}><span style={s.legSq("#F09595")} />Forecast</span>
               <span style={s.legItem}><span style={s.legSq(C.purple)} />Pedidos (OV)</span>
+              <span style={s.legItem}><span style={s.legSq(C.orange)} />OFT propuesta</span>
+              <span style={s.legItem}><span style={s.legSq(C.teal)} />OF aprobada / OFM</span>
               <span style={s.legItem}><span style={{ width: 14, height: 2, background: C.blue, display: "inline-block" }} />Stock final</span>
               <span style={s.legItem}><span style={{ width: 14, height: 2, background: C.amber, display: "inline-block" }} />Stock seguridad</span>
               <span style={s.legItem}><span style={{ width: 14, height: 2, background: C.gray, display: "inline-block" }} />Demanda corr.</span>
@@ -272,6 +291,11 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
                 {/* Demanda: forecast y pedidos LADO A LADO (no apilados: demanda = max, no suma) */}
                 <Bar dataKey="forecast_cj" name="Forecast (cj)" fill="#F09595" barSize={9} radius={[2,2,0,0]} />
                 <Bar dataKey="pedidos_cj"  name="Pedidos OV (cj)" fill={C.purple} barSize={9} radius={[2,2,0,0]} />
+                {/* Producción: propuesta (referencia, tenue) vs aprobada (manda) */}
+                <Bar dataKey="oft_cj" name="OFT propuesta (cj)" fill={C.orange} fillOpacity={0.35}
+                     stroke={C.orange} strokeDasharray="3 2" barSize={11} radius={[2,2,0,0]} />
+                <Bar dataKey="entrada_cj" name="OF aprobada / OFM (cj)" fill={C.teal} fillOpacity={0.75}
+                     stroke={C.tealMid} barSize={11} radius={[2,2,0,0]} />
                 {/* Demanda corregida (max) como línea fina de referencia */}
                 <Line dataKey="demanda_corr_cj" name="Demanda corr. (cj)" stroke={C.gray}
                   strokeWidth={1} dot={false} strokeDasharray="2 2" />
