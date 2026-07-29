@@ -1738,9 +1738,13 @@ def optimizar_plan(
             "cap_bodega_u": int(_attr(sp, "cap_bodega", 1_000_000) or 1_000_000),
             "linea_preferida": _attr(sp, "linea_preferida", ""),
             "descripcion": _attr(sp, "descripcion", ""),
-            # V6: granel_grupo debe viajar hasta _construir_modelo o el
-            # acoplamiento de campana queda en 0 acoples (fallo silencioso).
+            # V6: granel_grupo y formato deben viajar hasta _construir_modelo o
+            # el acoplamiento de campana queda en 0 acoples (fallo silencioso).
+            # Este dict es una lista CERRADA de claves: lo que no se copia aca,
+            # el modelo lo lee como None y la restriccion no se agrega.
             "granel_grupo": str(_attr(sp, "granel_grupo", "") or "").strip().lower(),
+            "formato": str(_attr(sp, "formato", "") or "").strip(),
+            "mto": bool(_attr(sp, "mto", False)),
         }
 
     lineas_params_rich = {}
