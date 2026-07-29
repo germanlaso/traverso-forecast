@@ -275,6 +275,7 @@ class _ModeloCPSAT:
         self.granel_pins: dict[str, str] = {}                           # V6: {semana_iso: modo} fijados
         self.formato: dict[tuple[str, str, str], cp_model.IntVar] = {}  # V6: (linea, semana, formato)
         self.formato_pins: dict[str, dict[str, str]] = {}               # V6: {linea: {semana: formato}}
+        self.formato_recurso: dict[str, str] = {}                       # V6: {linea: recurso de la regla}
         # Referencias para post-proceso
         self.skus: list[str] = []
         self.lineas: list[str] = []
@@ -842,6 +843,7 @@ def _construir_modelo(
             except Exception as _e:
                 logger.warning(f"[CAMPANA] sin pins de {_r['recurso']} ({_e})")
             m.formato_pins[_lin] = dict(_pf)
+            m.formato_recurso[_lin] = _r["recurso"]
             _npf = 0
             for _w, _fmt in _pf.items():
                 if _w not in _semanas_f:
@@ -1349,6 +1351,21 @@ def _post_procesar(
                     _act[_w] = _f
             logger.info(f"[CAMPANA] calendario formato {_lin} -> "
                         + " | ".join(f"{w}:{_act.get(w, 'libre')}" for w in _sem))
+            # Persistir la propuesta (fijado=FALSE) para el dashboard, sin tocar
+            # las semanas con pin: su fila ya tiene fijado=TRUE.
+            _rec = m.formato_recurso.get(_lin)
+            if _rec:
+                try:
+                    from db_mrp import upsert_campana_pin as _upin
+                    from datetime import date as _d2
+                    _fij = set(m.formato_pins.get(_lin, {}) or {})
+                    for _w in _sem:
+                        if _w in _fij:
+                            continue
+                        _upin(_rec, _d2.fromisoformat(_w), _act.get(_w, ""),
+                              fijado=False, autor="solver")
+                except Exception as _e:
+                    logger.warning(f"[CAMPANA] no se pudo persistir formato {_lin} ({_e})")
         # Persistir la propuesta (fijado=FALSE) para que el dashboard la muestre.
         # Las semanas con pin NO se tocan: su fila ya tiene fijado=TRUE y
         # sobrescribirla borraria la decision del planificador.
