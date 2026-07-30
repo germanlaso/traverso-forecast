@@ -432,6 +432,22 @@ def crear_tablas_params():
             CREATE INDEX IF NOT EXISTS ix_campana_cal_semana
                 ON mrp_campana_calendario (semana);
 
+            -- ── V6 (30-07) Vigía de OV: estado de las alertas ya notificadas ──
+            -- Anti-spam: una fila por tramo de quiebre (sku, desde). Si el tramo ya
+            -- fue notificado no se repite, salvo que empeore materialmente o escale
+            -- a CRITICO. Sin esto un quiebre que dura 4 días generaría 40 correos.
+            CREATE TABLE IF NOT EXISTS mrp_vigia_alertas (
+                sku             VARCHAR(30) NOT NULL,
+                desde           DATE        NOT NULL,
+                hasta           DATE,
+                clase           VARCHAR(20) NOT NULL DEFAULT '',
+                deficit_max_cj  NUMERIC     NOT NULL DEFAULT 0,
+                plan_id         BIGINT,
+                n_avisos        INTEGER     NOT NULL DEFAULT 1,
+                alertado_at     TIMESTAMP   DEFAULT NOW(),
+                PRIMARY KEY (sku, desde)
+            );
+
             -- `linea` NULL = estado de planta (granel). Con valor = campana
             -- de esa linea (formato), y el acople aplica a la produccion EN
             -- esa linea, no al linea_preferida del SKU.
@@ -451,6 +467,51 @@ def crear_tablas_params():
 
 
 # ─── V6 Campanas de linea ────────────────────────────────────────────────────
+
+# ─── V6 Vigía de OV ──────────────────────────────────────────────────────────
+
+def get_vigia_alertas() -> dict:
+    """{(sku, desde_iso): fila} de las alertas ya notificadas."""
+    with get_session() as session:
+        rows = session.execute(text("SELECT * FROM mrp_vigia_alertas")).fetchall()
+    out = {}
+    for r in rows:
+        d = dict(r._mapping)
+        k = (str(d["sku"]), d["desde"].isoformat() if hasattr(d["desde"], "isoformat")
+             else str(d["desde"]))
+        out[k] = d
+    return out
+
+
+def upsert_vigia_alerta(sku: str, desde, hasta, clase: str,
+                        deficit_max_cj: float, plan_id=None) -> None:
+    """Registra (o actualiza) el estado de un tramo notificado."""
+    with get_session() as session:
+        session.execute(text("""
+            INSERT INTO mrp_vigia_alertas
+                (sku, desde, hasta, clase, deficit_max_cj, plan_id, n_avisos, alertado_at)
+            VALUES (:sku, :desde, :hasta, :clase, :def_cj, :plan_id, 1, NOW())
+            ON CONFLICT (sku, desde) DO UPDATE SET
+                hasta          = EXCLUDED.hasta,
+                clase          = EXCLUDED.clase,
+                deficit_max_cj = EXCLUDED.deficit_max_cj,
+                plan_id        = EXCLUDED.plan_id,
+                n_avisos       = mrp_vigia_alertas.n_avisos + 1,
+                alertado_at    = NOW()
+        """), {"sku": sku, "desde": desde, "hasta": hasta, "clase": clase,
+               "def_cj": float(deficit_max_cj or 0), "plan_id": plan_id})
+        session.commit()
+
+
+def limpiar_vigia_alertas(dias: int = 30) -> int:
+    """Borra tramos cuyo `hasta` ya pasó hace más de `dias`. Devuelve filas borradas."""
+    with get_session() as session:
+        r = session.execute(text(
+            "DELETE FROM mrp_vigia_alertas "
+            "WHERE COALESCE(hasta, desde) < CURRENT_DATE - :d"), {"d": dias})
+        session.commit()
+        return r.rowcount or 0
+
 
 def get_campana_reglas() -> list[dict]:
     """Reglas de campana activas (una por recurso)."""
