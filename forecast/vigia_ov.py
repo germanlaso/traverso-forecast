@@ -23,11 +23,20 @@ CÓMO PROYECTA (mismas reglas que el optimizer y el dashboard)
     DEMANDA, no en el stock. Un despacho posterior al plan no se ve.
     -> Backlog: lectura de stock en vivo desde SAP (requiere TI).
 
-DOS VISTAS (se reportan ambas)
-  · "plan"     = con OFT propuestas + OF aprobadas. Es lo que muestra el dashboard.
-                 Con esta vista se DISPARA la alerta (consistencia con la pantalla).
-  · "aprobado" = sólo con OF/OFM ya aprobadas. Dice si la cobertura depende de
-                 aprobar una OFT que todavía nadie aprobó.
+CRITERIO DE DISPARO (definido 30-07)
+El vigía existe para detectar UNA cosa: quiebres que aparecen por OV cargadas DESPUÉS
+de que corrió el plan. Los quiebres propios del plan ya se ven en el dashboard y en sus
+alertas; re-alertarlos sería ruido. Entonces se exige:
+
+  1. FILTRO — el quiebre NO existía con la demanda original del plan. Si con esa
+     demanda ya quebraba, no es cosa del vigía.
+  2. DISPARO — las órdenes APROBADAS (OF/OFM) no alcanzan a cubrir. Un OFT es una
+     propuesta: nadie se comprometió a producirlo y tiene lead time, así que no
+     cuenta como cobertura.
+  3. INFORMACIÓN — si el plan ya propuso una OFT que cubriría el hueco, se indica:
+       · "APROBAR_OFT" -> alcanza con aprobar la OFT que ya está propuesta.
+       · "CRITICO"     -> quiebra incluso contando la OFT: hay que decidir algo
+                          (OFM express, mover carga, avisar al cliente).
 
 DÍA 0
 No se alerta sobre el día de hoy: a esa altura ya no hay nada que hacer. Pero el
@@ -151,43 +160,50 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
                 continue                      # fuera del horizonte del plan
             ped_u[k] = ped_u.get(k, 0.0) + float(cajas) * upc
 
-        # Proyección: dos vistas en paralelo.
-        stock_plan = None
-        stock_aprob = None
+        # Tres proyecciones en paralelo:
+        #   aprob_live -> sólo aprobadas + OV en vivo   (DISPARA la alerta)
+        #   plan_live  -> con OFT + OV en vivo          (clasifica: CRITICO o no)
+        #   aprob_plan -> sólo aprobadas + demanda ORIGINAL del plan
+        #                 (si acá ya quebraba, el quiebre no lo trajeron las OV de hoy)
+        s_aprob_live = s_plan_live = s_aprob_plan = None
         eventos = []
         for f in fechas:
             c = por_fecha[f]
             fc = float(c.get("forecast_u") or 0)
             oft_u = float(c.get("oft_cajas") or 0) * upc
             ent = float((entradas_vivas.get(sku) or {}).get(f, 0.0))
-            dem = max(fc, ped_u.get(f, 0.0))          # regla del optimizer
+            dem_live = max(fc, ped_u.get(f, 0.0))          # regla del optimizer
+            dem_plan = float(c.get("demanda_corr_u") or 0)  # ya es max(fcst, ped) del plan
 
-            ini = float(c.get("stock_ini_disp_u") or 0) if stock_plan is None else stock_plan
-            stock_plan = ini + oft_u + ent - dem
-            base_ap = ini if stock_aprob is None else stock_aprob
-            stock_aprob = base_ap + ent - dem          # sin OFT
+            ini = float(c.get("stock_ini_disp_u") or 0)
+            b_al = ini if s_aprob_live is None else s_aprob_live
+            b_pl = ini if s_plan_live is None else s_plan_live
+            b_ap = ini if s_aprob_plan is None else s_aprob_plan
+            s_aprob_live = b_al + ent - dem_live
+            s_plan_live = b_pl + oft_u + ent - dem_live
+            s_aprob_plan = b_ap + ent - dem_plan
 
             if f < v_ini.isoformat() or f > v_fin.isoformat():
-                continue                               # fuera de la ventana de alerta
-            if stock_plan < 0:
-                eventos.append({
-                    "fecha": f,
-                    "deficit_u": int(round(-stock_plan)),
-                    "deficit_cj": round(-stock_plan / upc, 1),
-                    "deficit_solo_aprobado_u": int(round(max(0.0, -stock_aprob))),
-                    "deficit_solo_aprobado_cj": round(max(0.0, -stock_aprob) / upc, 1),
-                    "demanda_u": int(round(dem)),
-                    "pedido_u": int(round(ped_u.get(f, 0.0))),
-                    "forecast_u": int(round(fc)),
-                })
+                continue                                   # fuera de la ventana
+            if s_aprob_live >= 0:
+                continue                                   # no dispara
+            eventos.append({
+                "fecha": f,
+                "clase": "CRITICO" if s_plan_live < 0 else "APROBAR_OFT",
+                "deficit_cj": round(-s_aprob_live / upc, 1),
+                "deficit_u": int(round(-s_aprob_live)),
+                "con_oft_cj": round(s_plan_live / upc, 1),
+                "oft_propuesta_cj": round(oft_u / upc, 1),
+                "por_ov_nueva": s_aprob_plan >= 0,          # antes no quebraba
+                "demanda_cj": round(dem_live / upc, 1),
+                "pedido_cj": round(ped_u.get(f, 0.0) / upc, 1),
+                "forecast_cj": round(fc / upc, 1),
+            })
+
+        # FILTRO: sólo los quiebres que NO existían con la demanda original del plan.
+        eventos = [e for e in eventos if e["por_ov_nueva"]]
 
         if eventos:
-            # ¿el quiebre lo trae el plan o es nuevo por las OV de hoy?
-            ya_en_plan = {
-                f for f in por_fecha
-                if float(por_fecha[f].get("stock_fin_u") or 0) < 0
-                and v_ini.isoformat() <= f <= v_fin.isoformat()
-            }
             resultados.append({
                 "sku": sku,
                 "descripcion": params.get(sku, {}).get("descripcion", ""),
@@ -195,47 +211,55 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
                 "upc": upc,
                 "arrastre_ov_vencida_u": int(round(arrastre_u)),
                 "eventos": eventos,
-                "nuevos": [e for e in eventos if e["fecha"] not in ya_en_plan],
+                "criticos": [e for e in eventos if e["clase"] == "CRITICO"],
             })
 
-    nuevos = [r for r in resultados if r["nuevos"]]
+    criticos = [r for r in resultados if r["criticos"]]
     return {
         "ok": True,
         "hoy": hoy.isoformat(),
         "ventana": [v_ini.isoformat(), v_fin.isoformat()],
         "plan_id": plan_id,
         "plan_generado": str(plan_ts),
+        "criterio": ("quiebres causados por OV posteriores al plan, evaluados sólo "
+                     "con órdenes APROBADAS (los OFT no cuentan como cobertura)"),
         "n_sku_con_ov": len(ov),
-        "total_con_quiebre": len(resultados),
-        "total_nuevos": len(nuevos),
-        "sku_nuevos": nuevos,
-        "sku_todos": resultados,
+        "total_alertas": len(resultados),
+        "total_criticos": len(criticos),
+        "sku_alerta": resultados,
+        "sku_criticos": criticos,
     }
 
 
 def _imprimir(rep: dict, todos: bool = False):
-    print(f"\n{'='*78}")
+    print(f"\n{'='*88}")
     print(f"VIGÍA DE OV — {rep['hoy']} · ventana {rep['ventana'][0]} a {rep['ventana'][1]}")
     print(f"Plan vigente #{rep['plan_id']} (generado {rep['plan_generado']})")
     print(f"HANA: {rep['n_sku_con_ov']} SKU con pedido abierto")
-    print(f"{'='*78}")
-    print(f"SKU con quiebre en la ventana : {rep['total_con_quiebre']}")
-    print(f"  de los cuales NUEVOS (no estaban en el plan): {rep['total_nuevos']}")
+    print(f"{'='*88}")
+    print(f"ALERTAS (quiebre nuevo por OV posterior al plan) : {rep['total_alertas']}")
+    print(f"  · de los cuales CRÍTICOS (la OFT no alcanza)   : {rep['total_criticos']}")
 
-    lista = rep["sku_todos"] if todos else rep["sku_nuevos"]
-    if not lista:
-        print("\nSin quiebres nuevos. Nada que alertar.")
+    if not rep["sku_alerta"]:
+        print("\nSin alertas: ninguna OV nueva genera quiebre en la ventana.")
         return
-    for r in sorted(lista, key=lambda x: -sum(e["deficit_u"] for e in x["eventos"])):
-        marca = "  ⚠ARRASTRE OV VENCIDA" if r["arrastre_ov_vencida_u"] > 0 else ""
-        print(f"\n{r['sku']}  {r['descripcion'][:44]}  [{r['linea']}]{marca}")
-        for e in (r["nuevos"] if not todos else r["eventos"]):
-            extra = ""
-            if e["deficit_solo_aprobado_cj"] > e["deficit_cj"]:
-                extra = f"   (sólo con lo aprobado: −{e['deficit_solo_aprobado_cj']:,.0f} cj)"
-            print(f"    {e['fecha']}  déficit −{e['deficit_cj']:>8,.1f} cj"
-                  f"   demanda {e['demanda_u']:>7,} u"
-                  f" (pedido {e['pedido_u']:,} / fcst {e['forecast_u']:,}){extra}")
+
+    for r in sorted(rep["sku_alerta"], key=lambda x: -max(e["deficit_cj"] for e in x["eventos"])):
+        marca = "   ⚠ARRASTRE OV VENCIDA" if r["arrastre_ov_vencida_u"] > 0 else ""
+        print(f"\n{r['sku']}  {r['descripcion'][:42]}  [{r['linea']}]{marca}")
+        for e in r["eventos"]:
+            if e["clase"] == "CRITICO":
+                etq = "🔴 CRÍTICO"
+                det = (f"la OFT propuesta ({e['oft_propuesta_cj']:,.0f} cj) NO alcanza: "
+                       f"quedaría {e['con_oft_cj']:,.0f} cj")
+            else:
+                etq = "🟡 APROBAR OFT"
+                det = (f"aprobando la OFT de {e['oft_propuesta_cj']:,.0f} cj "
+                       f"quedaría {e['con_oft_cj']:,.0f} cj")
+            print(f"    {e['fecha']}  {etq}  déficit −{e['deficit_cj']:,.0f} cj"
+                  f"  | demanda {e['demanda_cj']:,.0f} cj "
+                  f"(pedido {e['pedido_cj']:,.0f} / fcst {e['forecast_cj']:,.0f})")
+            print(f"                 {det}")
     print()
 
 
@@ -244,8 +268,6 @@ def main():
     ap.add_argument("--dias", type=int, default=DIAS_HABILES_DEFAULT,
                     help="días hábiles hacia adelante (default 5)")
     ap.add_argument("--json", action="store_true", help="salida JSON")
-    ap.add_argument("--todos", action="store_true",
-                    help="incluye los quiebres que ya venían en el plan")
     args = ap.parse_args()
     try:
         rep = evaluar(n_dias=args.dias)
@@ -257,7 +279,7 @@ def main():
     if args.json:
         print(json.dumps(rep, ensure_ascii=False, default=str))
     else:
-        _imprimir(rep, todos=args.todos)
+        _imprimir(rep)
 
 
 if __name__ == "__main__":
