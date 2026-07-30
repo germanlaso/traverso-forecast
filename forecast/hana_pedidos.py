@@ -83,6 +83,11 @@ COL_CANT_ENT      = "Cant Ent"         # cantidad entregada (parcial, 1 por entr
 # cliente es lo que hace accionable la alerta. El resto del módulo sigue sin PII.
 COL_COD_CLIENTE   = "Cod Cliente"
 COL_NOM_CLIENTE   = "Nom Cliente"
+# (30-07) Fecha/hora de CREACIÓN de la NV. "Fecha NV" trae sólo la fecha (00:00) y
+# "DocTime" es un ENTERO HHMM (1708 = 17:08). Juntos dan el timestamp exacto, que es
+# lo que permite saber si una OV se cargó ANTES o DESPUÉS de que corrió el plan.
+COL_FECHA_NV      = "Fecha NV"
+COL_DOCTIME       = "DocTime"
 COL_ESTADO        = "Estado NV"        # solo se consideran las "Abierto"
 ESTADO_ABIERTO    = "Abierto"
 COLUMNAS_REQUERIDAS = [COL_NUMERO_DOC, COL_ARTICULO, COL_FECHA_ENTREGA,
@@ -162,8 +167,30 @@ def conectar(password: str | None = None) -> dbapi.Connection:
 # Lectura de una fuente (un schema)
 # =============================================================================
 
+def _ts_creacion(fila, i_fecha, i_doctime):
+    """Fecha NV (date) + DocTime (entero HHMM) -> datetime. None si no se puede."""
+    if i_fecha is None:
+        return None
+    f = fila[i_fecha]
+    if isinstance(f, datetime):
+        f = f.date()
+    if f is None:
+        return None
+    hh = mm = 0
+    if i_doctime is not None:
+        try:
+            t = int(fila[i_doctime] or 0)
+            hh, mm = divmod(t, 100)
+            if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                hh = mm = 0        # DocTime raro -> se degrada a medianoche
+        except Exception:
+            hh = mm = 0
+    return datetime(f.year, f.month, f.day, hh, mm)
+
+
 def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str,
-                 incluir_cliente: bool = False) -> list[dict]:
+                 incluir_cliente: bool = False,
+                 incluir_creacion: bool = False) -> list[dict]:
     """Ejecuta el SP de un schema y devuelve filas proyectadas a lo mínimo.
 
     Cada fila: {"bd", "doc", "sku", "fecha" (date|None), "cantidad" (Decimal)}.
@@ -172,6 +199,9 @@ def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str,
     incluir_cliente=True agrega "cod_cliente" y "nom_cliente" (opt-in explícito:
     es PII). Lo usa el vigía de OV, donde saber QUÉ cliente pidió es lo que hace
     accionable la alerta. Default False -> comportamiento histórico sin PII.
+
+    incluir_creacion=True agrega "creado" (datetime): Fecha NV + DocTime (HHMM).
+    Permite distinguir las OV cargadas DESPUÉS de una corrida del plan.
     """
     cur = conn.cursor()
     try:
@@ -202,6 +232,8 @@ def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str,
         i_estado  = cols.index(COL_ESTADO)
         i_cod_cli = cols.index(COL_COD_CLIENTE) if (incluir_cliente and COL_COD_CLIENTE in cols) else None
         i_nom_cli = cols.index(COL_NOM_CLIENTE) if (incluir_cliente and COL_NOM_CLIENTE in cols) else None
+        i_f_nv    = cols.index(COL_FECHA_NV) if (incluir_creacion and COL_FECHA_NV in cols) else None
+        i_dtime   = cols.index(COL_DOCTIME) if (incluir_creacion and COL_DOCTIME in cols) else None
 
         # El SP da 1 fila por entrega de cada línea de NV. Agregamos por (NV, SKU):
         #   Cant NV  -> una vez (se repite idéntico; max defensivo)
@@ -226,7 +258,8 @@ def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str,
             if g is None:
                 grupos[clave] = {"cant_nv": cant_nv, "ent": cant_e, "fecha": fecha,
                                  "cod_cli": (str(r[i_cod_cli]).strip() if i_cod_cli is not None else ""),
-                                 "nom_cli": (str(r[i_nom_cli]).strip() if i_nom_cli is not None else "")}
+                                 "nom_cli": (str(r[i_nom_cli]).strip() if i_nom_cli is not None else ""),
+                                 "creado": _ts_creacion(r, i_f_nv, i_dtime)}
             else:
                 if cant_nv > g["cant_nv"]:
                     g["cant_nv"] = cant_nv          # idénticos; max defensivo
@@ -249,6 +282,8 @@ def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str,
             if incluir_cliente:
                 fila["cod_cliente"] = g.get("cod_cli", "")
                 fila["nom_cliente"] = g.get("nom_cli", "")
+            if incluir_creacion:
+                fila["creado"] = g.get("creado")
             filas.append(fila)
         logger.info("Fuente %s (%s): %d filas Abierto -> %d líneas con saldo pendiente.",
                     etiqueta_bd, schema, n_raw, len(filas))

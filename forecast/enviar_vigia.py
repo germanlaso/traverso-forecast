@@ -63,6 +63,9 @@ def _bloque_sku(r):
             accion = (f"Se cubre aprobando las OFT que el plan ya propuso "
                       f"({t['oft_acum_cj']:,.0f} cj acumuladas): quedaría "
                       f"{t['con_oft_cj']:,.0f} cj.")
+        if t.get("bloqueo_campana"):
+            accion += (f"<br><span style='color:#0F6E56'>⚑ Campaña de granel: "
+                       f"{t['bloqueo_campana']}</span>")
         filas_tr.append(
             f"<tr><td style='padding:4px 10px'>{rango}</td>"
             f"<td style='padding:4px 10px'>{etq}</td>"
@@ -70,32 +73,58 @@ def _bloque_sku(r):
             f"<b>−{t['deficit_max_cj']:,.0f} cj</b></td>"
             f"<td style='padding:4px 10px;font-size:11.5px'>{accion}</td></tr>")
 
-    filas_ov = []
+    # El snapshot del plan guarda el agregado diario, no el detalle por OV: no se puede
+    # saber QUÉ OV es nueva. Se informa el AUMENTO (exacto) y las OV de ese día como
+    # referencia para buscarlas en SAP. Etiquetar esto mal haría creer que las 20 OV
+    # listadas son todas nuevas.
+    # Sólo las OV creadas DESPUÉS de que corrió el plan (Fecha NV + DocTime): son las
+    # que el plan no vio. Las preexistentes no se listan para no confundir.
+    MAX_OV = 6
+    filas_ov, resumen = [], []
     for inc in r.get("incrementos", []):
-        for o in inc["ovs"]:
-            v = " <span style='color:#888'>(vencida, arrastrada a hoy)</span>" if o["vencida"] else ""
+        resumen.append(f"{_f(inc['fecha'])}: <b>+{inc['extra_cj']:,.0f} cj</b>")
+        nuevas = [o for o in inc["ovs"] if o.get("nueva")]
+        for o in nuevas[:MAX_OV]:
+            v = (" <span style='color:#888'>(vencida→hoy)</span>" if o["vencida"] else "")
+            h = ""
+            try:
+                h = f" <span style='color:#888'>{o['creado'].strftime('%H:%M')}</span>"
+            except Exception:
+                pass
             filas_ov.append(
                 f"<tr><td style='padding:3px 10px'>{_f(inc['fecha'])}</td>"
-                f"<td style='padding:3px 10px'>OV {o['doc']} <span style='color:#888'>"
-                f"[{o['bd']}]</span></td>"
+                f"<td style='padding:3px 10px'>OV {o['doc']}{h} <span style='color:#888'>"
+                f"[{o['bd']}]</span>{v}</td>"
                 f"<td style='padding:3px 10px'>{o.get('cliente', '')}</td>"
                 f"<td style='padding:3px 10px;text-align:right'>{o['cajas']:,.0f} cj</td>"
-                f"</tr>{v}")
-    tabla_ov = ""
+                f"</tr>")
+        if len(nuevas) > MAX_OV:
+            resto = sum(x["cajas"] for x in nuevas[MAX_OV:])
+            filas_ov.append(
+                f"<tr><td style='padding:3px 10px'>{_f(inc['fecha'])}</td>"
+                f"<td colspan='2' style='padding:3px 10px;color:#888'>… y "
+                f"{len(nuevas)-MAX_OV} OV más creadas después del plan</td>"
+                f"<td style='padding:3px 10px;text-align:right;color:#888'>"
+                f"{resto:,.0f} cj</td></tr>")
+
     if filas_ov:
         tabla_ov = f"""
-        <p style="margin:8px 0 2px;font-size:12px"><b>Pedidos nuevos respecto al plan:</b></p>
+        <p style="margin:8px 0 2px;font-size:12px">
+          <b>Aumento de demanda respecto al plan:</b> {' · '.join(resumen)}</p>
         <table style="border-collapse:collapse;font-size:12px">
           <tr style="background:{CELESTE}">
             <th style="padding:3px 10px;text-align:left">Entrega</th>
-            <th style="padding:3px 10px;text-align:left">OV</th>
+            <th style="padding:3px 10px;text-align:left">OV (hora de carga)</th>
             <th style="padding:3px 10px;text-align:left">Cliente</th>
             <th style="padding:3px 10px;text-align:right">Cantidad</th></tr>
           {''.join(filas_ov)}
-        </table>"""
+        </table>
+        <p style="margin:3px 0;font-size:11px;color:#888">Sólo se listan las OV creadas
+          después de generarse el plan. Si una OV anterior fue modificada (cambio de
+          cantidad) no aparece acá: SAP no expone la fecha de modificación.</p>"""
     else:
-        tabla_ov = ("<p style='margin:8px 0;font-size:11.5px;color:#888'>Sin pedidos "
-                    "nuevos en la ventana: el déficit viene del arrastre de OV anteriores.</p>")
+        tabla_ov = ("<p style='margin:8px 0;font-size:11.5px;color:#888'>Sin aumento de "
+                    "demanda en la ventana: el déficit viene del arrastre de OV anteriores.</p>")
 
     aviso = ""
     if r["arrastre_ov_vencida_u"] > 0:

@@ -62,6 +62,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("vigia_ov")
 
 DIAS_HABILES_DEFAULT = 5
+# Cuántas OV se listan por día antes de resumir. Un día puede tener 20+ OV chicas y
+# el correo se vuelve ilegible.
+MAX_OV_LISTADAS = 6
 
 
 def _dias_habiles(desde: date, n: int) -> list[date]:
@@ -79,7 +82,7 @@ def _dias_habiles(desde: date, n: int) -> list[date]:
     return out
 
 
-def _detalle_por_ov(conn, hoy: date, skus: set[str]) -> dict:
+def _detalle_por_ov(conn, hoy: date, skus: set[str], corte=None) -> dict:
     """{sku: {fecha_iso: [{doc, bd, cajas}]}} con el detalle por nota de venta.
 
     Las funciones públicas de hana_pedidos AGREGAN por fecha y descartan el documento.
@@ -88,11 +91,19 @@ def _detalle_por_ov(conn, hoy: date, skus: set[str]) -> dict:
     Es privada: si cambia su forma, esto degrada a alerta sin detalle de OV (no falla).
 
     Mismo tratamiento de fechas que el conector: fecha nula o vencida -> día 0.
+
+    `corte` = timestamp en que corrió el plan. Cada OV se marca `nueva=True` si se
+    creó DESPUÉS (Fecha NV + DocTime, que es HHMM). Eso permite señalar exactamente
+    qué pedidos el plan no vio, en vez de listar todos los del día.
+
+    LIMITACIÓN: si una OV vieja se MODIFICÓ hoy (cambio de cantidad), su fecha de
+    creación no cambia y se clasifica como preexistente. El SP no expone UpdateDate.
     """
     import hana_pedidos as hp
     out: dict[str, dict[str, list]] = {}
     for schema, etiqueta in hp.FUENTES:
-        for r in hp._leer_fuente(conn, schema, etiqueta, incluir_cliente=True):
+        for r in hp._leer_fuente(conn, schema, etiqueta,
+                                 incluir_cliente=True, incluir_creacion=True):
             sku = str(r.get("sku") or "")
             if not sku or (skus and sku not in skus):
                 continue
@@ -110,6 +121,8 @@ def _detalle_por_ov(conn, hoy: date, skus: set[str]) -> dict:
                 "vencida": bool(vencida),
                 "cliente": str(r.get("nom_cliente") or "").strip(),
                 "cod_cliente": str(r.get("cod_cliente") or "").strip(),
+                "creado": r.get("creado"),
+                "nueva": bool(corte and r.get("creado") and r["creado"] > corte),
             })
     return out
 
@@ -168,7 +181,15 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
     try:
         ov = hp.obtener_pedidos_abiertos(conn, hoy=hoy, skus_validos=set(params))
         try:
-            ov_det = _detalle_por_ov(conn, hoy, set(params))
+            # Corte = momento en que corrió el plan, en hora LOCAL (DocTime de HANA es
+            # hora local). created_at viene tz-aware en UTC -> astimezone() usa el TZ
+            # del container, que está en hora Chile.
+            corte = plan_ts
+            try:
+                corte = plan_ts.astimezone().replace(tzinfo=None)
+            except Exception:
+                pass
+            ov_det = _detalle_por_ov(conn, hoy, set(params), corte=corte)
         except Exception as e:
             logger.warning("Sin detalle por OV (%s): la alerta va sin número de NV.", e)
             ov_det = {}
@@ -180,6 +201,19 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
     logger.info("HANA: %d SKU con pedido abierto.", len(ov))
 
     entradas_vivas = _entradas_aprobadas_vivas(upc_de)
+
+    # Calendario de granel: si un SKU acoplado quiebra en una semana de OTRO granel,
+    # el plan NO puede proponer producción — y eso cambia la acción (la OFM manual
+    # está exenta de la campaña). Sin esto la alerta dice "crítico" sin explicar por qué.
+    cal_granel = {}
+    try:
+        from db_mrp import get_campana_calendario
+        for row in get_campana_calendario(recurso="GRANEL_SALSAS"):
+            sem = row["semana"]
+            cal_granel[sem.isoformat() if hasattr(sem, "isoformat") else str(sem)] = (
+                (row.get("modo") or "").strip().lower())
+    except Exception as e:
+        logger.warning("Sin calendario de granel (%s): la alerta va sin ese contexto.", e)
 
     resultados = []
     for sku, por_fecha in detalle.items():
@@ -231,7 +265,7 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
                     "fecha": f,
                     "extra_cj": round((dem_live - dem_plan) / upc, 1),
                     "ovs": sorted((ov_det.get(sku) or {}).get(f, []),
-                                  key=lambda x: -x["cajas"]),
+                                  key=lambda x: (not x.get("nueva"), -x["cajas"])),
                 })
 
             dias.append({
@@ -269,6 +303,21 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
                 tramos.append(actual); actual = None
         if actual is not None:
             tramos.append(actual)
+
+        # ¿el tramo cae en una semana cuyo granel NO es el de este SKU?
+        grupo = (params.get(sku, {}).get("granel_grupo") or "").strip().lower()
+        for t in tramos:
+            t["bloqueo_campana"] = ""
+            if not grupo or not cal_granel:
+                continue
+            d0 = date.fromisoformat(t["desde"])
+            lun = (d0 - timedelta(days=d0.weekday())).isoformat()
+            modo = cal_granel.get(lun, "")
+            if modo and modo != grupo:
+                t["bloqueo_campana"] = (
+                    f"la semana del {lun} es de granel {modo} y este SKU es {grupo}: "
+                    f"el plan no puede proponer producción. Una OFM manual sí "
+                    f"(está exenta de la campaña).")
 
         if tramos:
             resultados.append({
@@ -332,19 +381,36 @@ def _imprimir(rep: dict, todos: bool = False):
                        f"quedaría {t['con_oft_cj']:,.0f} cj")
             print(f"    {rango}  {etq}  déficit máx −{t['deficit_max_cj']:,.0f} cj")
             print(f"       {det}")
+            if t.get("bloqueo_campana"):
+                print(f"       ⚑ CAMPAÑA: {t['bloqueo_campana']}")
 
-        # OV que causaron el aumento de demanda (pueden ser de días anteriores)
+        # Aumento de demanda respecto al plan. IMPORTANTE: el snapshot del plan guarda
+        # el agregado diario, NO el detalle por OV, así que no se puede saber cuál OV
+        # específica es nueva. Se muestra el AUMENTO (que sí es exacto) y las OV con
+        # entrega ese día como referencia para buscarlas en SAP.
         if r["incrementos"]:
-            print(f"       OV nuevas respecto al plan:")
             for inc in r["incrementos"]:
-                print(f"         {inc['fecha']}  +{inc['extra_cj']:,.0f} cj")
-                for o in inc["ovs"]:
-                    cli = f" — {o['cliente']}" if o.get("cliente") else ""
-                    v = " (VENCIDA→hoy)" if o["vencida"] else ""
-                    print(f"           · OV {o['doc']} [{o['bd']}] "
-                          f"{o['cajas']:,.0f} cj{cli}{v}")
+                print(f"       Aumento de demanda el {inc['fecha']}: "
+                      f"+{inc['extra_cj']:,.0f} cj sobre lo que veía el plan")
+                nuevas = [o for o in inc["ovs"] if o.get("nueva")]
+                if nuevas:
+                    tot = sum(o["cajas"] for o in nuevas)
+                    print(f"         OV cargadas DESPUÉS del plan ({tot:,.0f} cj):")
+                    for o in nuevas[:MAX_OV_LISTADAS]:
+                        cli = f" — {o['cliente'][:38]}" if o.get("cliente") else ""
+                        v = " (VENCIDA→hoy)" if o["vencida"] else ""
+                        h = o["creado"].strftime(" %H:%M") if o.get("creado") else ""
+                        print(f"           · OV {o['doc']}{h} [{o['bd']}] "
+                              f"{o['cajas']:,.0f} cj{cli}{v}")
+                    if len(nuevas) > MAX_OV_LISTADAS:
+                        r2 = sum(o["cajas"] for o in nuevas[MAX_OV_LISTADAS:])
+                        print(f"           · … y {len(nuevas)-MAX_OV_LISTADAS} más "
+                              f"({r2:,.0f} cj)")
+                else:
+                    print(f"         (ninguna OV de ese día se creó después del plan: "
+                          f"puede ser una OV modificada)")
         else:
-            print(f"       (sin OV nuevas en la ventana: el déficit viene del arrastre)")
+            print(f"       (sin aumento de demanda en la ventana: viene del arrastre)")
     print()
 
 
