@@ -206,7 +206,9 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
         #   aprob_plan -> sólo aprobadas + demanda ORIGINAL del plan
         #                 (si acá ya quebraba, el quiebre no lo trajeron las OV de hoy)
         s_aprob_live = s_plan_live = s_aprob_plan = None
-        eventos = []
+        oft_acum = 0.0
+        dias = []          # una entrada por día del horizonte del plan
+        incrementos = []   # días donde la demanda SUBIÓ respecto al plan
         for f in fechas:
             c = por_fecha[f]
             fc = float(c.get("forecast_u") or 0)
@@ -215,46 +217,71 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
             dem_live = max(fc, ped_u.get(f, 0.0))          # regla del optimizer
             dem_plan = float(c.get("demanda_corr_u") or 0)  # ya es max(fcst, ped) del plan
 
-            ini = float(c.get("stock_ini_disp_u") or 0)
-            b_al = ini if s_aprob_live is None else s_aprob_live
-            b_pl = ini if s_plan_live is None else s_plan_live
-            b_ap = ini if s_aprob_plan is None else s_aprob_plan
+            ini_u = float(c.get("stock_ini_disp_u") or 0)
+            b_al = ini_u if s_aprob_live is None else s_aprob_live
+            b_pl = ini_u if s_plan_live is None else s_plan_live
+            b_ap = ini_u if s_aprob_plan is None else s_aprob_plan
             s_aprob_live = b_al + ent - dem_live
             s_plan_live = b_pl + oft_u + ent - dem_live
             s_aprob_plan = b_ap + ent - dem_plan
+            oft_acum += oft_u
 
-            if f < v_ini.isoformat() or f > v_fin.isoformat():
-                continue                                   # fuera de la ventana
-            if s_aprob_live >= 0:
-                continue                                   # no dispara
-            eventos.append({
+            if dem_live > dem_plan + 0.5:
+                incrementos.append({
+                    "fecha": f,
+                    "extra_cj": round((dem_live - dem_plan) / upc, 1),
+                    "ovs": sorted((ov_det.get(sku) or {}).get(f, []),
+                                  key=lambda x: -x["cajas"]),
+                })
+
+            dias.append({
                 "fecha": f,
-                "clase": "CRITICO" if s_plan_live < 0 else "APROBAR_OFT",
-                "deficit_cj": round(-s_aprob_live / upc, 1),
-                "deficit_u": int(round(-s_aprob_live)),
+                "quiebra": s_aprob_live < 0,
+                "deficit_cj": round(max(0.0, -s_aprob_live) / upc, 1),
                 "con_oft_cj": round(s_plan_live / upc, 1),
-                "oft_propuesta_cj": round(oft_u / upc, 1),
-                "por_ov_nueva": s_aprob_plan >= 0,          # antes no quebraba
-                "demanda_cj": round(dem_live / upc, 1),
-                "pedido_cj": round(ped_u.get(f, 0.0) / upc, 1),
-                "forecast_cj": round(fc / upc, 1),
-                # OV con entrega ese día (las que gatillan la alerta)
-                "ovs": sorted((ov_det.get(sku) or {}).get(f, []),
-                              key=lambda x: -x["cajas"]),
+                "oft_acum_cj": round(oft_acum / upc, 1),
+                "critico": s_plan_live < 0,
+                "por_ov_nueva": s_aprob_plan >= 0,
+                "en_ventana": v_ini.isoformat() <= f <= v_fin.isoformat(),
             })
 
-        # FILTRO: sólo los quiebres que NO existían con la demanda original del plan.
-        eventos = [e for e in eventos if e["por_ov_nueva"]]
+        # TRAMOS: días consecutivos en quiebre se colapsan en un solo evento. Un hueco
+        # que dura 4 días es UN problema, no cuatro alertas.
+        tramos, actual = [], None
+        for d in dias:
+            elegible = d["quiebra"] and d["en_ventana"] and d["por_ov_nueva"]
+            if elegible:
+                if actual is None:
+                    actual = {"desde": d["fecha"], "hasta": d["fecha"], "dias": 1,
+                              "deficit_max_cj": d["deficit_cj"],
+                              "con_oft_cj": d["con_oft_cj"],
+                              "oft_acum_cj": d["oft_acum_cj"],
+                              "clase": "CRITICO" if d["critico"] else "APROBAR_OFT"}
+                else:
+                    actual["hasta"] = d["fecha"]
+                    actual["dias"] += 1
+                    actual["deficit_max_cj"] = max(actual["deficit_max_cj"], d["deficit_cj"])
+                    actual["con_oft_cj"] = min(actual["con_oft_cj"], d["con_oft_cj"])
+                    actual["oft_acum_cj"] = d["oft_acum_cj"]
+                    if d["critico"]:
+                        actual["clase"] = "CRITICO"
+            elif actual is not None:
+                tramos.append(actual); actual = None
+        if actual is not None:
+            tramos.append(actual)
 
-        if eventos:
+        if tramos:
             resultados.append({
                 "sku": sku,
                 "descripcion": params.get(sku, {}).get("descripcion", ""),
                 "linea": params.get(sku, {}).get("linea_preferida", ""),
                 "upc": upc,
                 "arrastre_ov_vencida_u": int(round(arrastre_u)),
-                "eventos": eventos,
-                "criticos": [e for e in eventos if e["clase"] == "CRITICO"],
+                "tramos": tramos,
+                # OV que causan el aumento de demanda respecto al plan: son las que
+                # gatillan la alerta, aunque entreguen ANTES del día del quiebre.
+                "incrementos": incrementos,
+                "criticos": [t for t in tramos if t["clase"] == "CRITICO"],
             })
 
     criticos = [r for r in resultados if r["criticos"]]
@@ -287,27 +314,37 @@ def _imprimir(rep: dict, todos: bool = False):
         print("\nSin alertas: ninguna OV nueva genera quiebre en la ventana.")
         return
 
-    for r in sorted(rep["sku_alerta"], key=lambda x: -max(e["deficit_cj"] for e in x["eventos"])):
+    for r in sorted(rep["sku_alerta"],
+                    key=lambda x: -max(t["deficit_max_cj"] for t in x["tramos"])):
         marca = "   ⚠ARRASTRE OV VENCIDA" if r["arrastre_ov_vencida_u"] > 0 else ""
         print(f"\n{r['sku']}  {r['descripcion'][:42]}  [{r['linea']}]{marca}")
-        for e in r["eventos"]:
-            if e["clase"] == "CRITICO":
+
+        for t in r["tramos"]:
+            rango = (t["desde"] if t["dias"] == 1
+                     else f"{t['desde']} a {t['hasta']} ({t['dias']} días)")
+            if t["clase"] == "CRITICO":
                 etq = "🔴 CRÍTICO"
-                det = (f"la OFT propuesta ({e['oft_propuesta_cj']:,.0f} cj) NO alcanza: "
-                       f"quedaría {e['con_oft_cj']:,.0f} cj")
+                det = (f"ni con las OFT propuestas alcanza "
+                       f"({t['oft_acum_cj']:,.0f} cj): quedaría {t['con_oft_cj']:,.0f} cj")
             else:
                 etq = "🟡 APROBAR OFT"
-                det = (f"aprobando la OFT de {e['oft_propuesta_cj']:,.0f} cj "
-                       f"quedaría {e['con_oft_cj']:,.0f} cj")
-            print(f"    {e['fecha']}  {etq}  déficit −{e['deficit_cj']:,.0f} cj"
-                  f"  | demanda {e['demanda_cj']:,.0f} cj "
-                  f"(pedido {e['pedido_cj']:,.0f} / fcst {e['forecast_cj']:,.0f})")
-            print(f"                 {det}")
-            for o in e["ovs"]:
-                v = " (VENCIDA, arrastrada a hoy)" if o["vencida"] else ""
-                cli = f" — {o['cliente']}" if o.get("cliente") else ""
-                print(f"                 · OV {o['doc']} [{o['bd']}] "
-                      f"{o['cajas']:,.0f} cj{cli}{v}")
+                det = (f"aprobando las OFT del plan ({t['oft_acum_cj']:,.0f} cj acum.) "
+                       f"quedaría {t['con_oft_cj']:,.0f} cj")
+            print(f"    {rango}  {etq}  déficit máx −{t['deficit_max_cj']:,.0f} cj")
+            print(f"       {det}")
+
+        # OV que causaron el aumento de demanda (pueden ser de días anteriores)
+        if r["incrementos"]:
+            print(f"       OV nuevas respecto al plan:")
+            for inc in r["incrementos"]:
+                print(f"         {inc['fecha']}  +{inc['extra_cj']:,.0f} cj")
+                for o in inc["ovs"]:
+                    cli = f" — {o['cliente']}" if o.get("cliente") else ""
+                    v = " (VENCIDA→hoy)" if o["vencida"] else ""
+                    print(f"           · OV {o['doc']} [{o['bd']}] "
+                          f"{o['cajas']:,.0f} cj{cli}{v}")
+        else:
+            print(f"       (sin OV nuevas en la ventana: el déficit viene del arrastre)")
     print()
 
 
