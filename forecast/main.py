@@ -934,6 +934,45 @@ def get_proyeccion_diaria_live(sku: str):
     fechas = sorted(detalle.keys())
     plan_viejo_sin_campo = any("entrada_aprobada_u" not in detalle[f] for f in fechas)
 
+    # (30-07) LINEA por dia, para el tooltip de los graficos. Permite ver el
+    # traspaso de carga entre lineas: que linea produce y si es preferida o
+    # alternativa.
+    #   · OFT propuesta   -> se indexa por fecha_lanzamiento (verificado: las claves
+    #     de detalle_diario coinciden con fecha_lanzamiento, no con la de entrada).
+    #   · OF/OFM aprobada -> por fecha_entrada_real, que es como se grafica la barra
+    #     verde (entrada_aprobada_u).
+    _pref = {}
+    try:
+        from db_mrp import get_all_sku_lineas
+        for _sl in get_all_sku_lineas():
+            _d = _sl if isinstance(_sl, dict) else dict(_sl)
+            if str(_d.get("sku")) == sku:
+                _pref[str(_d.get("linea"))] = bool(_d.get("preferida"))
+    except Exception:
+        _pref = {}
+
+    _oft_lin, _apr_lin = {}, {}
+    for _o in (snap.get("ofts") or []):
+        if str(_o.get("sku", "")) != sku:
+            continue
+        _lin = str(_o.get("linea") or "")
+        _cjs = float(_o.get("cantidad_cajas") or 0)
+        if not _lin or _cjs <= 0:
+            continue
+        _item = {"linea": _lin, "cajas": _cjs,
+                 "preferida": _pref.get(_lin),
+                 "alternativa": (_pref.get(_lin) is False)}
+        if _o.get("aprobada"):
+            _k = str(_o.get("fecha_entrada_real") or "")[:10]
+            _item["numero_of"] = _o.get("numero_of")
+            _item["motivo"] = _o.get("motivo")
+            if _k:
+                _apr_lin.setdefault(_k, []).append(_item)
+        else:
+            _k = str(_o.get("fecha_lanzamiento") or "")[:10]
+            if _k:
+                _oft_lin.setdefault(_k, []).append(_item)
+
     dias = []
     stock_prev = None
     for fecha_iso in fechas:
@@ -973,6 +1012,9 @@ def get_proyeccion_diaria_live(sku: str):
             "ss_cj": _cj(c.get("ss_u")),
             "entrada_aprobada_u": entrada_viva,
             "estado": estado,
+            # lineas de produccion del dia (para el tooltip de los graficos)
+            "oft_lineas": _oft_lin.get(fecha_iso, []),
+            "aprob_lineas": _apr_lin.get(fecha_iso, []),
         })
         stock_prev = stock_fin
 

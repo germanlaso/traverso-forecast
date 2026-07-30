@@ -35,6 +35,15 @@ function CustomTooltip({ active, payload, label }) {
       <span>{nombre}</span><strong>{fmtN(val)} cj</strong>
     </div>
   );
+  // Lineas de produccion del dia. Un dia puede tener produccion en dos lineas
+  // (el optimizer puede partir), por eso se lista cada una con su cantidad.
+  const lineas = (arr, tag) => (arr || []).map((l, i) => (
+    <div key={`${tag}-${i}`} style={{ fontSize: 11, marginLeft: 10, color: C.textMuted }}>
+      ↳ {l.linea}
+      {l.preferida === true ? " (preferida)" : l.alternativa ? " (alternativa)" : ""}
+      {" · "}{fmtN(l.cajas)} cj{l.numero_of ? ` · ${l.numero_of}` : ""}
+    </div>
+  ));
   return (
     <div style={{ background: "#fff", border: `0.5px solid ${C.border}`,
       borderRadius: 8, padding: "10px 14px", fontSize: 12, minWidth: 210 }}>
@@ -46,7 +55,9 @@ function CustomTooltip({ active, payload, label }) {
         <div style={{ borderTop: `0.5px solid ${C.border}`, margin: "5px 0" }} />
       )}
       {row.oft_cj > 0     && line("OFT propuesta", row.oft_cj, C.orange)}
+      {lineas(row.oftLineas, "oft")}
       {row.entrada_cj > 0 && line("OF aprobada / OFM", row.entrada_cj, C.teal)}
+      {lineas(row.aprobLineas, "apr")}
       <div style={{ borderTop: `0.5px solid ${C.border}`, margin: "5px 0" }} />
       {row.stock_fin_cj != null && line("Stock final", row.stock_fin_cj, C.blue)}
       {row.ss_cj > 0 && line("Stock seguridad", row.ss_cj, C.amber)}
@@ -186,6 +197,10 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
     demanda_corr_cj: r.demanda_corr_cj, stock_fin_cj: r.stock_fin_cj, ss_cj: r.ss_cj,
     oft_cj: r.oft_cajas || 0,
     entrada_cj: r.entrada_aprobada_u ? r.entrada_aprobada_u / upcSel : 0,
+    // (30-07) lineas del dia: el tooltip muestra en que linea se produce y si
+    // es la preferida o una alternativa (traspaso de carga entre lineas).
+    oftLineas: r.oft_lineas || [],
+    aprobLineas: r.aprob_lineas || [],
   })), [dias, upcSel]);
 
   // Bandas de campaña (granel de planta y formato de linea). Solo se dibujan

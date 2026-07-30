@@ -43,6 +43,46 @@ const navBtn = {
   lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
 };
 
+/* Tooltip: agrega la LINEA de produccion a las series de OFT y OF aprobada.
+   Un mismo dia puede tener produccion en dos lineas (el optimizer puede partir),
+   por eso se lista cada una con su cantidad. */
+function TooltipLineas({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  const p = payload[0].payload || {};
+  const lineasDe = (arr, etiqueta) =>
+    (arr || []).map((l, i) => (
+      <div key={`${etiqueta}-${i}`} style={{ fontSize: 11, marginLeft: 8, color: C.textMuted }}>
+        ↳ {l.linea}
+        {l.preferida === true ? " (preferida)" : l.alternativa ? " (alternativa)" : ""}
+        {" · "}{fmt1(l.cajas)} cj
+        {l.numero_of ? ` · ${l.numero_of}` : ""}
+      </div>
+    ));
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 8,
+                  padding: "8px 10px", fontSize: 12, boxShadow: "0 2px 8px rgba(0,0,0,.12)" }}>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>{label}</div>
+      {payload.map((e) => (
+        <div key={e.dataKey} style={{ color: e.color }}>
+          {e.name}: {e.value == null ? "—" : `${fmt1(e.value)} cj`}
+        </div>
+      ))}
+      {p.oftLineas && p.oftLineas.length > 0 && (
+        <>
+          <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>OFT propuesta en:</div>
+          {lineasDe(p.oftLineas, "oft")}
+        </>
+      )}
+      {p.aprobLineas && p.aprobLineas.length > 0 && (
+        <>
+          <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>Aprobada en:</div>
+          {lineasDe(p.aprobLineas, "apr")}
+        </>
+      )}
+    </div>
+  );
+}
+
 function KPI({ label, value, color, sub, sub2, aviso }) {
   return (
     <div style={{ background: C.grayLt, borderRadius: 8, padding: "10px 14px", minWidth: 110 }}>
@@ -118,6 +158,10 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
     oft: x.oft_cajas || 0,                    // propuesta (referencia)
     aprobada: x.entrada_aprobada_u && d?.upc ? x.entrada_aprobada_u / d.upc : 0,
     estado: x.estado,
+    // (30-07) lineas del dia: el tooltip muestra en que linea se produce y si
+    // es la preferida o una alternativa (traspaso de carga entre lineas).
+    oftLineas: x.oft_lineas || [],
+    aprobLineas: x.aprob_lineas || [],
   }));
 
   // Bandas de campaña (granel de planta y formato de linea), solo si la regla
@@ -227,8 +271,7 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                     <XAxis dataKey="fecha" tick={{ fontSize: 10, fill: C.textMuted }} interval="preserveStartEnd" />
                     <YAxis tick={{ fontSize: 10, fill: C.textMuted }}
                            tickFormatter={(v) => v.toLocaleString("es-CL")} />
-                    <Tooltip formatter={(v, n) => [v == null ? "—" : `${fmt1(v)} cj`, n]}
-                             contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.border}` }} />
+                    <Tooltip content={<TooltipLineas />} />
                     <Legend wrapperStyle={{ fontSize: 11 }} />
                     <ReferenceLine y={0} stroke={C.red} strokeWidth={1} />
                     <Bar dataKey="oft" name="OFT propuesta" fill={C.orange} fillOpacity={0.35}
