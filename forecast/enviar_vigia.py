@@ -7,8 +7,13 @@ informe de faltantes.
 
 Config por entorno (reusa la del informe de faltantes si no se define aparte):
   SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PWD   (obligatoria la contraseña)
-  VIGIA_DEST    destinatarios del aviso   (fallback: FALTANTES_DEST)
-  VIGIA_ALERTA  destinatario de errores   (fallback: FALTANTES_ALERTA)
+  VIGIA_DEST    destinatarios del aviso — OBLIGATORIA, SIN fallback.
+                El público del vigía (planificación: aprobar OFT, crear OFM) NO es el
+                del informe de faltantes. Caer en FALTANTES_DEST mandaría la alerta a
+                quien no la puede accionar, y en silencio. Si falta, se falla y el
+                wrapper avisa al admin.
+  VIGIA_ALERTA  destinatario de errores    (fallback: FALTANTES_ALERTA — acá sí, el
+                destinatario natural es el admin en ambos casos)
 
 Uso directo (test, no pasa por el anti-spam):
     python3 -c "import vigia_ov, enviar_vigia; enviar_vigia.enviar(vigia_ov.evaluar())"
@@ -185,9 +190,14 @@ def enviar(rep, notificar=None, destinatarios=None):
     pwd = os.environ.get("SMTP_PWD")
     if not pwd:
         raise RuntimeError("Falta SMTP_PWD en el entorno.")
-    dest = destinatarios or _dest("VIGIA_DEST", "FALTANTES_DEST")
+    # SIN fallback a FALTANTES_DEST: son públicos distintos (ver docstring).
+    dest = destinatarios or _dest("VIGIA_DEST", "VIGIA_DEST")
     if not dest:
-        raise RuntimeError("Falta VIGIA_DEST/FALTANTES_DEST en el entorno.")
+        raise RuntimeError(
+            "Falta VIGIA_DEST en el entorno. El vigía NO usa los destinatarios del "
+            "informe de faltantes: son públicos distintos. Definir VIGIA_DEST en el "
+            ".env (lista separada por coma) y recrear el servicio con "
+            "'docker compose up -d forecast'.")
 
     n_crit = len([r for r in notificar if r["criticos"]])
     pref = "🔴 " if n_crit else "⚠ "
