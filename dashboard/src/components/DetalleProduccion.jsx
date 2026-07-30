@@ -439,7 +439,10 @@ export default function DetalleProduccion({
     axios.get(`${API}/plan/params`)
       .then(p=>{
         setLineas(p.data.lineas??[]);
-        const map={};(p.data.skus??[]).forEach(s=>{map[s.sku]={upj:s.u_por_caja,linea:s.linea_preferida,ss_dias:s.ss_dias,lead_time_sem:s.lead_time_sem??1,factor_velocidad:s.factor_velocidad??1};});
+        // (30-07) `descripcion` faltaba en este mapa: /plan/params SI la devuelve, pero
+        // al no copiarla los SKU sin ordenes en el plan quedaban sin nombre en el
+        // desplegable de OFM y en el tooltip de la OFM creada.
+        const map={};(p.data.skus??[]).forEach(s=>{map[s.sku]={upj:s.u_por_caja,descripcion:s.descripcion,linea:s.linea_preferida,ss_dias:s.ss_dias,lead_time_sem:s.lead_time_sem??1,factor_velocidad:s.factor_velocidad??1};});
         setParams(map);
       }).catch(e=>setError("Error cargando parámetros: "+(e.response?.data?.detail||e.message)));
   },[]);

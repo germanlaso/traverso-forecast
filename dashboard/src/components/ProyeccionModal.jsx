@@ -62,23 +62,17 @@ function TooltipLineas({ active, payload, label }) {
     <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 8,
                   padding: "8px 10px", fontSize: 12, boxShadow: "0 2px 8px rgba(0,0,0,.12)" }}>
       <div style={{ fontWeight: 700, marginBottom: 4 }}>{label}</div>
+      {/* Las lineas van INMEDIATAMENTE debajo de su serie, no al final, para que
+          se lea "OFT propuesta: 213 cj / ↳ L1Pet (alternativa) · 213 cj". */}
       {payload.map((e) => (
-        <div key={e.dataKey} style={{ color: e.color }}>
-          {e.name}: {e.value == null ? "—" : `${fmt1(e.value)} cj`}
-        </div>
+        <React.Fragment key={e.dataKey}>
+          <div style={{ color: e.color }}>
+            {e.name}: {e.value == null ? "—" : `${fmt1(e.value)} cj`}
+          </div>
+          {e.dataKey === "oft" && lineasDe(p.oftLineas, "oft")}
+          {e.dataKey === "aprobada" && lineasDe(p.aprobLineas, "apr")}
+        </React.Fragment>
       ))}
-      {p.oftLineas && p.oftLineas.length > 0 && (
-        <>
-          <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>OFT propuesta en:</div>
-          {lineasDe(p.oftLineas, "oft")}
-        </>
-      )}
-      {p.aprobLineas && p.aprobLineas.length > 0 && (
-        <>
-          <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>Aprobada en:</div>
-          {lineasDe(p.aprobLineas, "apr")}
-        </>
-      )}
     </div>
   );
 }

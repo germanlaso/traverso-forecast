@@ -876,6 +876,97 @@ def get_proyeccion_diaria(sku: str):
     }
 
 
+def _proyeccion_sin_demanda(sku, snap, row, _dd):
+    """Proyeccion para un SKU que NO entro al MRP (sin forecast ni OV).
+
+    No hay demanda que proyectar, asi que la curva es el stock actual mas las OF
+    aprobadas que tenga cargadas. Sirve para ver cobertura y entradas en vez de un
+    cartel de error. Se marca `sin_demanda=True` para que el front lo aclare.
+    """
+    from db_mrp import get_all_sku_params, listar_aprobadas_db
+
+    prm = next((p for p in get_all_sku_params() if str(p.get("sku")) == str(sku)), None)
+    if prm is None:
+        return {"disponible": False,
+                "mensaje": f"El SKU {sku} no esta en los parametros MRP.",
+                "plan_id": row["id"]}
+    upc = int(prm.get("u_por_caja", 1) or 1) or 1
+
+    # Fechas: las mismas del plan, para que el grafico use el mismo horizonte.
+    fechas = sorted(next(iter(_dd.values())).keys())
+
+    # Stock disponible actual (consolidado Traverso+Montaner, 3 bodegas).
+    # Firma real (misma que usa /plan): devuelve (stocks_actuales, alertas_vcto).
+    stock_ini_u = 0
+    try:
+        _df = load_stock_parquet()
+        _stocks, _ = calcular_stock_disponible(
+            df_raw=_df, unidades_por_caja={str(sku): upc})
+        _v = _stocks.get(str(sku)) if isinstance(_stocks, dict) else None
+        if isinstance(_v, dict):
+            stock_ini_u = int(round(float(
+                _v.get("disponible_u", _v.get("stock_u", 0)) or 0)))
+        elif _v is not None:
+            stock_ini_u = int(round(float(_v)))
+    except Exception as _e:
+        logger.warning(f"[proyeccion sin demanda] stock de {sku} no disponible: {_e}")
+
+    entradas = {}
+    try:
+        for ap in listar_aprobadas_db():
+            if str(ap.get("sku", "")) != str(sku):
+                continue
+            fer = str(ap.get("fecha_entrada_real") or "")[:10]
+            if not fer:
+                continue
+            u = ap.get("cantidad_real_u")
+            if u is None:
+                u = float(ap.get("cantidad_real_cj") or 0) * upc
+            entradas[fer] = entradas.get(fer, 0.0) + float(u or 0)
+    except Exception:
+        entradas = {}
+
+    def _cj(u):
+        return round(u / upc, 1) if (u is not None and upc) else None
+
+    dias, stock = [], stock_ini_u
+    for f in fechas:
+        ent = int(round(entradas.get(f, 0.0)))
+        ini = stock
+        stock = ini + ent
+        dias.append({
+            "fecha": f, "oft_cajas": None,
+            "stock_ini_disp_u": ini, "stock_ini_disp_cj": _cj(ini),
+            "pedidos_u": 0, "pedidos_cj": 0.0,
+            "pedidos_crudos_u": 0, "pedidos_crudos_cj": 0.0,
+            "demanda_corr_u": 0, "demanda_corr_cj": 0.0,
+            "forecast_u": 0, "forecast_cj": 0.0,
+            "stock_fin_u": stock, "stock_fin_cj": _cj(stock),
+            "ss_u": 0, "ss_cj": 0.0,
+            "entrada_aprobada_u": ent,
+            "estado": "OK",
+            "oft_lineas": [], "aprob_lineas": [],
+        })
+
+    sf = [d["stock_fin_u"] for d in dias] or [0]
+    return {
+        "disponible": True, "sin_demanda": True, "plan_id": row["id"], "sku": sku,
+        "upc": upc, "descripcion": prm.get("descripcion", ""),
+        "mensaje": ("Este SKU no entro al plan: no tiene forecast ni pedidos, asi que "
+                    "no hay demanda que proyectar. La curva muestra el stock actual y "
+                    "las OF aprobadas."),
+        "dias": dias,
+        "encabezado": {
+            "stock_fisico_u": stock_ini_u, "stock_fisico_cj": _cj(stock_ini_u),
+            "comprometido_u": 0, "comprometido_cj": 0.0,
+            "disponible_inicial_u": stock_ini_u, "disponible_inicial_cj": _cj(stock_ini_u),
+            "stock_final_u": sf[-1], "stock_final_cj": _cj(sf[-1]),
+            "stock_min_u": min(sf), "stock_min_cj": _cj(min(sf)),
+            "ss_dias": prm.get("ss_dias"), "u_por_caja": upc,
+        },
+    }
+
+
 @app.get("/plan/proyeccion_diaria_live/{sku}", tags=["Plan de Produccion"])
 def get_proyeccion_diaria_live(sku: str):
     """
@@ -903,9 +994,19 @@ def get_proyeccion_diaria_live(sku: str):
     detalle = (snap.get("detalle_diario") or {}).get(sku)
     encab = (snap.get("encabezado_sku") or {}).get(sku)
     if detalle is None or encab is None:
-        return {"disponible": False, "plan_viejo": True,
-                "mensaje": "El plan vigente es anterior al detalle diario. Regenera el plan.",
-                "plan_id": row["id"]}
+        # (30-07) Distinguir DOS casos que antes se reportaban igual ("plan viejo"):
+        #  a) el snapshot no tiene detalle_diario -> si, plan viejo.
+        #  b) el snapshot lo tiene pero ESTE SKU no entro al MRP: sin forecast y sin
+        #     OV no hay demanda, asi que el optimizer no lo planifica (los 33 MTO sin
+        #     pedido y los pocos de PRODUCCION sin forecast). El plan es correcto; el
+        #     SKU simplemente no tiene filas. Para esos se arma una proyeccion plana
+        #     desde el stock actual + las OF aprobadas, que es informacion util.
+        _dd = snap.get("detalle_diario") or {}
+        if not _dd:
+            return {"disponible": False, "plan_viejo": True,
+                    "mensaje": "El plan vigente es anterior al detalle diario. Regenera el plan.",
+                    "plan_id": row["id"]}
+        return _proyeccion_sin_demanda(sku, snap, row, _dd)
 
     upc = int(encab.get("u_por_caja", 1) or 1)
     def _cj(u):
