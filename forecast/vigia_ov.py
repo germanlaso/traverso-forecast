@@ -79,6 +79,41 @@ def _dias_habiles(desde: date, n: int) -> list[date]:
     return out
 
 
+def _detalle_por_ov(conn, hoy: date, skus: set[str]) -> dict:
+    """{sku: {fecha_iso: [{doc, bd, cajas}]}} con el detalle por nota de venta.
+
+    Las funciones públicas de hana_pedidos AGREGAN por fecha y descartan el documento.
+    Para decir en la alerta CUÁL OV y de QUÉ cliente se usa `_leer_fuente` con
+    incluir_cliente=True (opt-in; el módulo sigue sin PII para todo lo demás).
+    Es privada: si cambia su forma, esto degrada a alerta sin detalle de OV (no falla).
+
+    Mismo tratamiento de fechas que el conector: fecha nula o vencida -> día 0.
+    """
+    import hana_pedidos as hp
+    out: dict[str, dict[str, list]] = {}
+    for schema, etiqueta in hp.FUENTES:
+        for r in hp._leer_fuente(conn, schema, etiqueta, incluir_cliente=True):
+            sku = str(r.get("sku") or "")
+            if not sku or (skus and sku not in skus):
+                continue
+            cj = float(r.get("cantidad") or 0)
+            if cj <= 0:
+                continue
+            f = r.get("fecha")
+            vencida = f is None or f < hoy
+            fe = hoy if vencida else f
+            k = fe.isoformat() if hasattr(fe, "isoformat") else str(fe)[:10]
+            out.setdefault(sku, {}).setdefault(k, []).append({
+                "doc": str(r.get("doc") or ""),
+                "bd": etiqueta,
+                "cajas": round(cj, 1),
+                "vencida": bool(vencida),
+                "cliente": str(r.get("nom_cliente") or "").strip(),
+                "cod_cliente": str(r.get("cod_cliente") or "").strip(),
+            })
+    return out
+
+
 def _plan_vigente():
     from db_mrp import get_session
     from sqlalchemy import text
@@ -132,6 +167,11 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
     conn = hp.conectar(os.environ.get("HANA_PWD"))
     try:
         ov = hp.obtener_pedidos_abiertos(conn, hoy=hoy, skus_validos=set(params))
+        try:
+            ov_det = _detalle_por_ov(conn, hoy, set(params))
+        except Exception as e:
+            logger.warning("Sin detalle por OV (%s): la alerta va sin número de NV.", e)
+            ov_det = {}
     finally:
         try:
             conn.close()
@@ -198,6 +238,9 @@ def evaluar(n_dias: int = DIAS_HABILES_DEFAULT, hoy: date | None = None) -> dict
                 "demanda_cj": round(dem_live / upc, 1),
                 "pedido_cj": round(ped_u.get(f, 0.0) / upc, 1),
                 "forecast_cj": round(fc / upc, 1),
+                # OV con entrega ese día (las que gatillan la alerta)
+                "ovs": sorted((ov_det.get(sku) or {}).get(f, []),
+                              key=lambda x: -x["cajas"]),
             })
 
         # FILTRO: sólo los quiebres que NO existían con la demanda original del plan.
@@ -260,6 +303,11 @@ def _imprimir(rep: dict, todos: bool = False):
                   f"  | demanda {e['demanda_cj']:,.0f} cj "
                   f"(pedido {e['pedido_cj']:,.0f} / fcst {e['forecast_cj']:,.0f})")
             print(f"                 {det}")
+            for o in e["ovs"]:
+                v = " (VENCIDA, arrastrada a hoy)" if o["vencida"] else ""
+                cli = f" — {o['cliente']}" if o.get("cliente") else ""
+                print(f"                 · OV {o['doc']} [{o['bd']}] "
+                      f"{o['cajas']:,.0f} cj{cli}{v}")
     print()
 
 

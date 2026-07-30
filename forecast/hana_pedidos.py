@@ -78,6 +78,11 @@ COL_ARTICULO      = "Codigo SAP"       # SKU (SIEMPRE Codigo SAP, no Codigo Flex
 COL_FECHA_ENTREGA = "Fecha Entrega NV" # fecha comprometida de entrega
 COL_CANT_NV       = "Cant NV"          # cantidad pedida (bruto, se repite por fila)
 COL_CANT_ENT      = "Cant Ent"         # cantidad entregada (parcial, 1 por entrega)
+# (30-07) Cliente: el SP lo devuelve y por diseño se descartaba como PII. Se expone
+# SOLO con incluir_cliente=True (opt-in) para el vigía de OV, donde el nombre del
+# cliente es lo que hace accionable la alerta. El resto del módulo sigue sin PII.
+COL_COD_CLIENTE   = "Cod Cliente"
+COL_NOM_CLIENTE   = "Nom Cliente"
 COL_ESTADO        = "Estado NV"        # solo se consideran las "Abierto"
 ESTADO_ABIERTO    = "Abierto"
 COLUMNAS_REQUERIDAS = [COL_NUMERO_DOC, COL_ARTICULO, COL_FECHA_ENTREGA,
@@ -157,11 +162,16 @@ def conectar(password: str | None = None) -> dbapi.Connection:
 # Lectura de una fuente (un schema)
 # =============================================================================
 
-def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str) -> list[dict]:
+def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str,
+                 incluir_cliente: bool = False) -> list[dict]:
     """Ejecuta el SP de un schema y devuelve filas proyectadas a lo mínimo.
 
     Cada fila: {"bd", "doc", "sku", "fecha" (date|None), "cantidad" (Decimal)}.
     Descarta todas las demás columnas (PII incluida).
+
+    incluir_cliente=True agrega "cod_cliente" y "nom_cliente" (opt-in explícito:
+    es PII). Lo usa el vigía de OV, donde saber QUÉ cliente pidió es lo que hace
+    accionable la alerta. Default False -> comportamiento histórico sin PII.
     """
     cur = conn.cursor()
     try:
@@ -190,6 +200,8 @@ def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str) -> list[
         i_cant_nv = cols.index(COL_CANT_NV)
         i_cant_e  = cols.index(COL_CANT_ENT)
         i_estado  = cols.index(COL_ESTADO)
+        i_cod_cli = cols.index(COL_COD_CLIENTE) if (incluir_cliente and COL_COD_CLIENTE in cols) else None
+        i_nom_cli = cols.index(COL_NOM_CLIENTE) if (incluir_cliente and COL_NOM_CLIENTE in cols) else None
 
         # El SP da 1 fila por entrega de cada línea de NV. Agregamos por (NV, SKU):
         #   Cant NV  -> una vez (se repite idéntico; max defensivo)
@@ -212,7 +224,9 @@ def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str) -> list[
             clave = (r[i_doc], sku)
             g = grupos.get(clave)
             if g is None:
-                grupos[clave] = {"cant_nv": cant_nv, "ent": cant_e, "fecha": fecha}
+                grupos[clave] = {"cant_nv": cant_nv, "ent": cant_e, "fecha": fecha,
+                                 "cod_cli": (str(r[i_cod_cli]).strip() if i_cod_cli is not None else ""),
+                                 "nom_cli": (str(r[i_nom_cli]).strip() if i_nom_cli is not None else "")}
             else:
                 if cant_nv > g["cant_nv"]:
                     g["cant_nv"] = cant_nv          # idénticos; max defensivo
@@ -225,13 +239,17 @@ def _leer_fuente(conn: dbapi.Connection, schema: str, etiqueta_bd: str) -> list[
             saldo = g["cant_nv"] - g["ent"]
             if saldo <= 0:
                 continue                            # entregado completo -> sin pendiente
-            filas.append({
+            fila = {
                 "bd":       etiqueta_bd,
                 "doc":      doc,
                 "sku":      sku,
                 "fecha":    g["fecha"],             # date | None
                 "cantidad": saldo,
-            })
+            }
+            if incluir_cliente:
+                fila["cod_cliente"] = g.get("cod_cli", "")
+                fila["nom_cliente"] = g.get("nom_cli", "")
+            filas.append(fila)
         logger.info("Fuente %s (%s): %d filas Abierto -> %d líneas con saldo pendiente.",
                     etiqueta_bd, schema, n_raw, len(filas))
         return filas
