@@ -459,6 +459,23 @@ export default function DetalleProduccion({
       }).catch(e=>setError("Error cargando parámetros: "+(e.response?.data?.detail||e.message)));
   },[]);
 
+  // (31-07) stock inicial y SS por SKU del plan vigente. Las OF aprobadas entran
+  // como entradas_fijas y el optimizer NO las re-emite como OFT: el objeto que se
+  // inyecta en `huerfanas` no trae stock_inicial_cajas ni ss_cajas, y la tabla
+  // mostraba "Stock ini. 0" y "Cobertura —" en TODAS las aprobadas.
+  // Semantica verificada: stock_inicial_cajas (OFT) == disponible_inicial_u/upc.
+  const [stockSku,setStockSku]=useState({});
+  useEffect(()=>{
+    axios.get(`${API}/plan/stock_sku`)
+      .then(r=>setStockSku(r.data?.skus??{}))
+      .catch(e=>{
+        // (31-07) NO fallar silencioso: la falta de este dato deja la tabla en 0
+        // sin ninguna pista. Loguear para que se vea en consola.
+        console.warn("[Detalle] /plan/stock_sku fallo:", e?.message||e);
+        setStockSku({});
+      });
+  },[]);
+
   // Sincronizar órdenes con el plan que viene del padre (App.js es la única
   // fuente de verdad de /plan: garantiza correlativos OFT consistentes entre
   // pestañas). Sin fallback de fetch propio.
@@ -817,13 +834,18 @@ export default function DetalleProduccion({
                       // V6.14 v2 / P21: leer campo numerico del backend (post-V6.14 v1).
                       // Antes parseaba regex 'Stock:N' del campo 'motivo', que solo
                       // existia para ordenes del MRP clasico (no para OFTs del optimizer).
-                      const stockIni = o.stock_inicial_cajas ?? 0;
+                      // (31-07) fallback a /plan/stock_sku para las OF aprobadas.
+                      const stockIni = o.stock_inicial_cajas
+                        ?? stockSku[o.sku]?.stock_inicial_cajas
+                        ?? 0;
                       // Cobertura = días que dura el stock a la demanda diaria promedio.
                       // La demanda diaria se deriva del SS (ss_cajas = demanda_diaria * ss_dias),
                       // NO del forecast del día de lanzamiento (que suele ser 0 en la semana en
                       // curso y hacía dar "—" casi siempre). MTO/baja rotación (ss=0) -> "—".
                       const ssDias = params[o.sku]?.ss_dias ?? 0;
-                      const demDiaria = (o.ss_cajas > 0 && ssDias > 0) ? (o.ss_cajas / ssDias) : 0;
+                      // (31-07) ss_cajas tambien falta en las aprobadas -> fallback
+                      const ssCj = o.ss_cajas ?? stockSku[o.sku]?.ss_cajas ?? 0;
+                      const demDiaria = (ssCj > 0 && ssDias > 0) ? (ssCj / ssDias) : 0;
                       const cobDias = demDiaria > 0 ? Math.max(0, Math.round(stockIni / demDiaria)) : "—";
                       const rowBg=aprobada?"#F0FAF5":pasada?"#FFF5F5":i%2===0?"#fff":C.grayLt;
                       return(
