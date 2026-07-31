@@ -1432,6 +1432,60 @@ def get_quiebres_grid():
         "lineas": lineas_out,
     }
 
+@app.get("/plan/stock_sku", tags=["Plan de Produccion"])
+def get_stock_sku():
+    """Stock inicial y SS por SKU del plan vigente, en CAJAS. Payload liviano.
+
+    Para la tabla de Detalle Produccion: las OF aprobadas entran al plan como
+    entradas_fijas y el optimizer NO las re-emite como OFT, por lo que el objeto
+    que el frontend inyecta no trae stock_inicial_cajas ni ss_cajas y la tabla
+    mostraba "Stock ini. 0" y "Cobertura —" en todas las aprobadas (31-07-2026).
+
+    Semantica verificada 31-07-2026: stock_inicial_cajas de las OFT coincide
+    exactamente con disponible_inicial_u/u_por_caja del encabezado (8/8 SKU).
+    ss_cajas se toma del PRIMER dia de detalle_diario (ss_u varia por dia).
+    """
+    from sqlalchemy import text as _sql
+    from db_mrp import SessionLocal
+    import json as _json
+
+    with SessionLocal() as s:
+        row = s.execute(_sql(
+            "SELECT id, snapshot FROM mrp_planes WHERE vigente LIMIT 1"
+        )).mappings().first()
+    if row is None:
+        return {"disponible": False, "skus": {}}
+
+    snap = row["snapshot"] or {}
+    if isinstance(snap, str):
+        snap = _json.loads(snap)
+    enc = snap.get("encabezado_sku") or {}
+    dd = snap.get("detalle_diario") or {}
+
+    out = {}
+    for sku, e in enc.items():
+        try:
+            upc = float(e.get("u_por_caja") or 1) or 1.0
+            di = e.get("disponible_inicial_u")
+            stock_cj = round(float(di) / upc, 1) if di is not None else None
+            ss_cj = None
+            serie = dd.get(sku)
+            if serie:
+                f0 = min(serie.keys())
+                ssu = (serie.get(f0) or {}).get("ss_u")
+                if ssu is not None:
+                    ss_cj = round(float(ssu) / upc, 1)
+            out[str(sku)] = {
+                "stock_inicial_cajas": stock_cj,
+                "ss_cajas": ss_cj,
+                "ss_dias": e.get("ss_dias"),
+            }
+        except Exception:
+            continue
+
+    return {"disponible": True, "plan_id": row["id"], "skus": out}
+
+
 # ── Endpoints: Parámetros MRP (CRUD desde BD) ────────────────────────────────
 
 @app.get("/params/lineas")
