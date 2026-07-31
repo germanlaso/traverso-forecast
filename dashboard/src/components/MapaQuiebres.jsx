@@ -150,7 +150,13 @@ export default function MapaQuiebres({ onOpenSku }) {
               }}
             >
               <span style={{ fontSize: 12, color: "#888", width: 12 }}>{col ? "▸" : "▾"}</span>
-              <span style={{ fontWeight: 600, fontSize: 14 }}>{ln.nombre}</span>
+              {/* (31-07) linea.nombre es la CATEGORIA (LIQUIDOS, SALSAS...), no la linea:
+                  varios codigos comparten nombre y los grupos se veian repetidos. El
+                  identificador util es el codigo. Mismo formato que DetalleProduccion. */}
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{ln.codigo}</span>
+              {ln.nombre && ln.nombre !== ln.codigo && (
+                <span style={{ fontSize: 12, color: "#888" }}>— {ln.nombre}</span>
+              )}
               <span style={{ fontSize: 12, color: "#999" }}>{ln.resumen.n_skus} SKU</span>
               <div style={{ display: "flex", gap: 5, marginLeft: "auto" }}>
                 {ln.resumen.n_quiebre > 0 && <Pill n={ln.resumen.n_quiebre} sev={3} />}
@@ -255,12 +261,14 @@ function DiaDetalle({ s, wk, nSem }) {
   for (let i = 0; i < 7; i++) {
     const iso = addDaysISO(wk, i);
     const d = s.dias[iso];
-    dias.push({ dow: DOW[i], iso, sev: d ? d.sev : 0, def: d ? d.def_cj : 0 });
+    // (31-07) dm = dia/mes para que el drill-down muestre la fecha, no solo el dia
+    const dm = iso.slice(8, 10) + "/" + iso.slice(5, 7);
+    dias.push({ dow: DOW[i], dm, iso, sev: d ? d.sev : 0, def: d ? d.def_cj : 0 });
   }
   return (
     <React.Fragment>
       <div style={{ gridColumn: "1", display: "flex", alignItems: "center", fontSize: 11, color: "#777", padding: "2px 8px" }}>
-        {s.sku} · detalle diario
+        {s.sku} · semana del {wk.slice(8, 10)}/{wk.slice(5, 7)}
       </div>
       <div style={{ gridColumn: `2 / span ${nSem}`, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3, padding: "2px 0 8px" }}>
         {dias.map((d) => {
@@ -272,7 +280,9 @@ function DiaDetalle({ s, wk, nSem }) {
               background: c.bg, color: c.fg,
               border: "0.5px solid " + (d.sev === 0 ? c.bd : "transparent"),
             }}>
-              <span style={{ fontSize: 10, color: d.sev >= 2 ? c.fg : "#999" }}>{d.dow}</span>
+              <span style={{ fontSize: 9.5, color: d.sev >= 2 ? c.fg : "#999", whiteSpace: "nowrap" }}>
+                {d.dow} {d.dm}
+              </span>
               {d.sev === 3 && <span style={{ fontSize: 10, fontWeight: 600 }}>-{d.def}</span>}
             </div>
           );
