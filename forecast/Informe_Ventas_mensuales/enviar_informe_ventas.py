@@ -46,6 +46,10 @@ NAVY = "#1A2D4D"
 CELESTE = "#C0DCF0"
 AMBAR = "#B87309"
 
+# Fuera de la f-string a propósito: Python < 3.12 no admite backslashes dentro de la
+# expresión de una f-string, y el container corre una versión anterior.
+_EN_CURSO = ' <span style="color:#888">(en curso)</span>'
+
 
 def _fecha_txt(iso):
     p = str(iso).split("-")
@@ -81,7 +85,7 @@ def _cuerpo_html(rep):
     ult = meses[-3:]
     filas_mes = "".join(
         f"<tr><td style='padding:3px 10px'>{m}"
-        f"{' <span style=\"color:#888\">(en curso)</span>' if m == meses[-1] else ''}</td>"
+        f"{_EN_CURSO if m == meses[-1] else ''}</td>"
         f"<td style='padding:3px 10px;text-align:right'>{int(df[m].sum()):,}</td></tr>"
         for m in ult)
 
