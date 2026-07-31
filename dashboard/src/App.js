@@ -8,6 +8,7 @@ import StockDiario from './components/StockDiario';
 import Faltantes from './components/Faltantes';
 import ParametrosDiagnostico from './components/ParametrosDiagnostico';
 import Campanas from './components/Campanas';
+import MapaQuiebres from './components/MapaQuiebres';
 
 const API = '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -632,7 +633,7 @@ export default function App() {
 
       {/* Tabs */}
       <div className="no-print" style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
-        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stock','📦 Stock por SKU'],['stockdiario','📊 Stock Diario'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria'],['faltantes','📉 Faltantes'],['campanas','🗓️ Campañas'],['parametros','⚙️ Parámetros']].map(([tab,label]) => (
+        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stockdiario','📊 Stock Diario'],['quiebres','🔴 Mapa de Quiebres'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria'],['faltantes','📉 Faltantes'],['campanas','🗓️ Campañas'],['parametros','⚙️ Parámetros']].map(([tab,label]) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:500,background:'transparent',color:activeTab===tab?C.teal:C.textMuted,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
             {label}
@@ -1173,6 +1174,7 @@ export default function App() {
           initialSku={stockSku}
           ordenesAprobadas={ordenesAprobadas}
         />}
+        {activeTab === 'quiebres' && <MapaQuiebres onOpenSku={irAStock} />}
         {activeTab === 'detalle' && <DetalleProduccion
           ordenesPlan={plan?.ordenes ?? []}
           ordenesAprobadas={ordenesAprobadas}

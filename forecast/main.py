@@ -1249,6 +1249,185 @@ def get_mrp_params():
 
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Endpoint: GET /plan/quiebres_grid  —  Mapa de Quiebres y Riesgo (SKU x semana)
+#
+# PARA REVISION. Pegar dentro de main.py, junto al resto de endpoints
+# "@app.get('/plan/...')". Es un LECTOR PURO: no recalcula stock, toma
+# stock_fin_u / ss_u / estado ya persistidos en detalle_diario del snapshot
+# vigente. Agrupa por linea_preferida (campo de params, igual que el grid de
+# Detalle). Marca los SKU con RECEPCION_PENDIENTE (quiebre de primeros dias
+# puede ser falso).
+#
+# Severidad por dia:
+#   estado OK                                   -> 0  (no entra al mapa)
+#   estado BAJO_SS y stock_fin_u  > 10% de SS   -> 1  (bajo SS)
+#   estado BAJO_SS y stock_fin_u <= 10% de SS   -> 2  (riesgo)
+#   estado QUIEBRE (stock_fin_u < 0)            -> 3  (quiebre; nº = cajas faltantes)
+#
+# OJO bucket de semana: se usa semana_viz_inicio (DOMINGO-sabado), la MISMA
+# convencion de visualizacion que DetalleProduccion y el resto del dashboard.
+# NO semana_iso_inicio (ese arranca LUNES, alineado a Prophet/evento_qbr): si se
+# usara, las columnas del heatmap no cuadrarian con lo que el usuario ya ve.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/plan/quiebres_grid", tags=["Plan de Produccion"])
+def get_quiebres_grid():
+    from sqlalchemy import text as _sql
+    from db_mrp import SessionLocal
+    from datetime import date as _date, timedelta as _td
+    import math
+    import mrp as _mrp_params
+
+    # 1) snapshot vigente
+    with SessionLocal() as s:
+        row = s.execute(_sql(
+            "SELECT id, horizonte_sem, created_at, snapshot "
+            "FROM mrp_planes WHERE vigente LIMIT 1"
+        )).mappings().first()
+    if row is None:
+        return {"disponible": False,
+                "mensaje": "No hay plan vigente. El cron aun no genero uno, o ninguno paso el gate."}
+
+    snap = row["snapshot"] or {}
+    if isinstance(snap, str):
+        import json as _json
+        snap = _json.loads(snap)
+
+    dd = snap.get("detalle_diario") or {}
+    encab_all = snap.get("encabezado_sku") or {}
+    alertas = snap.get("alertas") or []
+
+    # SKU con recepcion pendiente (marca "posible falso" en los primeros dias)
+    rp_skus = {a.get("sku") for a in alertas
+               if a.get("tipo") == "RECEPCION_PENDIENTE" and a.get("sku")}
+
+    # 2) params: linea_preferida (agrupacion) + descripcion / upc de respaldo
+    try:
+        sku_params, lineas, _ = _mrp_params.load_params_from_db()
+        if not sku_params:
+            raise ValueError("BD vacia")
+    except Exception as _e:
+        logger.warning(f"quiebres_grid: fallback Excel params: {_e}")
+        sku_params, lineas, _ = _mrp_params.load_params_from_excel(MRP_EXCEL_PATH)
+    linea_nombre = {l.codigo: l.nombre for l in lineas.values()}
+
+    # 3) helper de semana de VISUALIZACION (domingo-sabado) = semana_viz_inicio,
+    #    la misma que usa DetalleProduccion. El fallback replica su formula exacta.
+    try:
+        from calendario import semana_viz_inicio as _sem_ini
+    except Exception:
+        def _sem_ini(d):
+            return d - _td(days=(d.weekday() + 1) % 7)          # domingo (= semana_viz)
+
+    NIVELES = ("OK", "BAJO_SS", "RIESGO", "QUIEBRE")
+
+    def _sev(estado, stock_fin_u, ss_u):
+        if estado == "QUIEBRE":
+            return 3
+        if estado == "BAJO_SS":
+            if ss_u and ss_u > 0 and stock_fin_u is not None and stock_fin_u <= 0.10 * ss_u:
+                return 2
+            return 1
+        return 0
+
+    # 4) recorrer SKU con >= 1 dia en problema
+    semanas_set = {}
+    lineas_map = {}
+
+    for sku, serie in dd.items():
+        peor = 0
+        dias = {}
+        for fecha_iso, c in serie.items():
+            sev = _sev(c.get("estado"), c.get("stock_fin_u"), c.get("ss_u"))
+            dias[fecha_iso] = {"sev": sev,
+                               "stock_fin_u": c.get("stock_fin_u"),
+                               "ss_u": c.get("ss_u")}
+            if sev > peor:
+                peor = sev
+        if peor == 0:
+            continue  # sin problema -> fuera del mapa
+
+        p = sku_params.get(sku)
+        upc = int((getattr(p, "unidades_por_caja", None) or
+                   (encab_all.get(sku) or {}).get("u_por_caja") or 1))
+        desc = (getattr(p, "descripcion", None) or
+                (encab_all.get(sku) or {}).get("descripcion") or "")
+        cod_linea = getattr(p, "linea_preferida", None) or "SIN_LINEA"
+
+        # cajas faltantes por dia en quiebre
+        for _f, dc in dias.items():
+            if dc["sev"] == 3 and dc["stock_fin_u"] is not None and upc:
+                dc["def_cj"] = int(math.ceil(abs(dc["stock_fin_u"]) / upc))
+            else:
+                dc["def_cj"] = 0
+
+        # agregacion por semana viz: peor severidad + nº dias en ese estado + max def
+        semanas_sku = {}
+        for fecha_iso, dc in dias.items():
+            wk = _sem_ini(_date.fromisoformat(fecha_iso)).isoformat()
+            semanas_set[wk] = True
+            w = semanas_sku.setdefault(wk, {"sev": 0, "dias": 0, "def_cj": 0})
+            if dc["sev"] > w["sev"]:
+                w["sev"] = dc["sev"]
+                w["dias"] = 0
+            if dc["sev"] == w["sev"] and dc["sev"] > 0:
+                w["dias"] += 1
+            if dc["def_cj"] > w["def_cj"]:
+                w["def_cj"] = dc["def_cj"]
+
+        item = {
+            "sku": sku,
+            "descripcion": desc,
+            "upc": upc,
+            "linea_preferida": cod_linea,
+            "recepcion_pendiente": sku in rp_skus,
+            "peor_sev": peor,
+            "peor_nivel": NIVELES[peor],
+            "semanas": semanas_sku,   # keyed por semana iso
+            "dias": dias,             # keyed por fecha iso (drill-down)
+        }
+        grp = lineas_map.setdefault(cod_linea, {
+            "codigo": cod_linea,
+            "nombre": linea_nombre.get(cod_linea, cod_linea),
+            "skus": [],
+        })
+        grp["skus"].append(item)
+
+    # 5) semanas ordenadas + label "dd mmm"
+    _MESES = ["ene", "feb", "mar", "abr", "may", "jun",
+              "jul", "ago", "sep", "oct", "nov", "dic"]
+    semanas = []
+    for wk in sorted(semanas_set.keys()):
+        d = _date.fromisoformat(wk)
+        semanas.append({"iso": wk, "label": f"{d.day:02d} {_MESES[d.month - 1]}"})
+
+    # 6) resumen por linea + orden (mas quiebres primero; dentro, peor_sev desc)
+    lineas_out = []
+    for _cod, grp in lineas_map.items():
+        grp["skus"].sort(key=lambda x: (-x["peor_sev"], x["sku"]))
+        res = {"n_skus": len(grp["skus"]), "n_quiebre": 0, "n_riesgo": 0, "n_bajo_ss": 0}
+        for it in grp["skus"]:
+            if it["peor_sev"] == 3:
+                res["n_quiebre"] += 1
+            elif it["peor_sev"] == 2:
+                res["n_riesgo"] += 1
+            elif it["peor_sev"] == 1:
+                res["n_bajo_ss"] += 1
+        grp["resumen"] = res
+        lineas_out.append(grp)
+    lineas_out.sort(key=lambda g: (-g["resumen"]["n_quiebre"],
+                                   -g["resumen"]["n_riesgo"], g["codigo"]))
+
+    return {
+        "disponible": True,
+        "plan_id": row["id"],
+        "fecha_inicio": row["created_at"].date().isoformat() if row["created_at"] else None,
+        "horizonte_dias": int(row["horizonte_sem"] or 8) * 7,
+        "semanas": semanas,
+        "lineas": lineas_out,
+    }
+
 # ── Endpoints: Parámetros MRP (CRUD desde BD) ────────────────────────────────
 
 @app.get("/params/lineas")
