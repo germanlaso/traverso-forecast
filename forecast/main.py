@@ -919,9 +919,11 @@ def _proyeccion_sin_demanda(sku, snap, row, _dd):
             fer = str(ap.get("fecha_entrada_real") or "")[:10]
             if not fer:
                 continue
-            u = ap.get("cantidad_real_u")
-            if u is None:
-                u = float(ap.get("cantidad_real_cj") or 0) * upc
+            # V6.46: cantidad_real_u puede venir SUCIO (cajas en lugar de unidades)
+            # cuando la OF se aprobo/edito sin u_por_caja en el request. El dato que
+            # ingresa el operario y que usa el optimizer es cantidad_real_cj:
+            # derivar SIEMPRE de ahi. Auditado 31-07-2026: 22 de 24 OF editadas mal.
+            u = float(ap.get("cantidad_real_cj") or 0) * upc
             entradas[fer] = entradas.get(fer, 0.0) + float(u or 0)
     except Exception:
         entradas = {}
@@ -1021,9 +1023,11 @@ def get_proyeccion_diaria_live(sku: str):
             fer = str(ap.get("fecha_entrada_real") or "")[:10]
             if not fer:
                 continue
-            u = ap.get("cantidad_real_u")
-            if u is None:
-                u = float(ap.get("cantidad_real_cj") or 0) * upc
+            # V6.46: cantidad_real_u puede venir SUCIO (cajas en lugar de unidades)
+            # cuando la OF se aprobo/edito sin u_por_caja en el request. El dato que
+            # ingresa el operario y que usa el optimizer es cantidad_real_cj:
+            # derivar SIEMPRE de ahi. Auditado 31-07-2026: 22 de 24 OF editadas mal.
+            u = float(ap.get("cantidad_real_cj") or 0) * upc
             entradas_vivas[fer] = entradas_vivas.get(fer, 0.0) + float(u or 0)
     except Exception:
         entradas_vivas = {}

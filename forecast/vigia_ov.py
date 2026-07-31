@@ -152,9 +152,10 @@ def _entradas_aprobadas_vivas(upc_de: dict) -> dict:
         fer = str(ap.get("fecha_entrada_real") or "")[:10]
         if not sku or not fer:
             continue
-        u = ap.get("cantidad_real_u")
-        if u is None:
-            u = float(ap.get("cantidad_real_cj") or 0) * (upc_de.get(sku, 1) or 1)
+        # V6.46: cantidad_real_u puede venir SUCIO (cajas en lugar de unidades) si
+        # la OF se aprobo/edito sin u_por_caja en el request. cantidad_real_cj es el
+        # dato del operario y el que usa el optimizer: derivar SIEMPRE de ahi.
+        u = float(ap.get("cantidad_real_cj") or 0) * (upc_de.get(sku, 1) or 1)
         out.setdefault(sku, {})[fer] = out.setdefault(sku, {}).get(fer, 0.0) + float(u or 0)
     return out
 

@@ -446,7 +446,10 @@ export default function App() {
         semana_necesidad:       modalOrden.semana_necesidad,
         cantidad_sugerida_cj:   modalOrden.cantidad_cajas,
         cantidad_real_cj:       Number(aprobForm.cantidad_real_cj),
-        u_por_caja:             modalOrden.u_por_caja || 1,
+        // V6.46: NO usar `|| 1` (falsy-coalescing): al editar una OF ya aprobada
+        // modalOrden no trae u_por_caja y se enviaba 1, dejando cantidad_real_u en
+        // CAJAS. El backend resuelve el upc real desde parametros MRP si va null.
+        u_por_caja:             modalOrden.u_por_caja ?? null,
         responsable:            aprobForm.responsable,
         comentario:             aprobForm.comentario || '',
         linea:                  modalOrden.linea || '',

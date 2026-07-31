@@ -4,6 +4,7 @@ Persistencia: PostgreSQL (traverso_mrp_db)
 """
 import logging
 import math
+from typing import Optional
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
@@ -30,6 +31,59 @@ try:
 except Exception as e:
     logger.warning(f"[ORDENES] No se pudo inicializar DB MRP: {e}")
 
+# ── V6.46 · u_por_caja: fuente unica = parametros MRP ────────────────────────
+# El request NO es confiable. El frontend enviaba `modalOrden.u_por_caja || 1`;
+# al EDITAR una OF ya aprobada el objeto del modal no traia el campo, llegaba
+# u_por_caja=1 y cantidad_real_u quedaba guardado en CAJAS en vez de unidades.
+# Auditoria 31-07-2026: 22 de 24 OF editadas (version>=2) afectadas; 0 de 164
+# sin editar. Los lectores (main.py, vigia_ov.py) ya derivan de cantidad_real_cj,
+# esto corta el origen. Hermano del bug `0 or 15` (falsy-coalescing).
+_UPC_CACHE: dict[str, float] = {}
+_UPC_CARGADO = False
+
+
+def _cargar_upc() -> None:
+    """Carga unidades_por_caja de todos los SKU desde parametros MRP (BD, con
+    fallback a Excel). Se cachea a nivel modulo: el upc no cambia en runtime."""
+    global _UPC_CARGADO
+    _UPC_CARGADO = True   # marcar antes: un fallo no debe reintentar en loop
+    try:
+        import mrp as _mrp
+        try:
+            sku_params, _, _ = _mrp.load_params_from_db()
+            if not sku_params:
+                raise ValueError("parametros de BD vacios")
+        except Exception:
+            sku_params, _, _ = _mrp.load_params_from_excel(
+                "/app/data/Traverso_Parametros_MRP.xlsx")
+        _UPC_CACHE.clear()
+        for _k, _v in sku_params.items():
+            _u = getattr(_v, "unidades_por_caja", None)
+            if _u:
+                _UPC_CACHE[str(_k)] = float(_u)
+        logger.info(f"[ORDENES] u_por_caja cargado desde parametros MRP: "
+                    f"{len(_UPC_CACHE)} SKU")
+    except Exception as e:
+        logger.warning(f"[ORDENES] no se pudo cargar u_por_caja desde MRP: {e}")
+
+
+def _upc_real(sku: str, upc_request: Optional[float] = None) -> float:
+    """u_por_caja real del SKU. Prioriza SIEMPRE los parametros MRP; el valor
+    del request es solo fallback y se loguea si difiere."""
+    sku = str(sku)
+    if not _UPC_CARGADO:
+        _cargar_upc()
+    upc = _UPC_CACHE.get(sku)
+    if upc:
+        if upc_request and abs(float(upc_request) - upc) > 0.01:
+            logger.warning(f"[ORDENES] {sku}: u_por_caja del request="
+                           f"{upc_request} != MRP={upc}. Se usa el de MRP.")
+        return upc
+    fb = float(upc_request or 1.0)
+    logger.warning(f"[ORDENES] {sku}: sin u_por_caja en parametros MRP; "
+                   f"se usa el del request ({fb}). Revisar carga de parametros.")
+    return fb
+
 
 class OrdenAprobar(BaseModel):
     sku:                    str
@@ -39,7 +93,7 @@ class OrdenAprobar(BaseModel):
     semana_necesidad:       str
     cantidad_sugerida_cj:   float
     cantidad_real_cj:       float
-    u_por_caja:             float = 1.0
+    u_por_caja:             Optional[float] = None   # V6.46: NO confiable; se resuelve desde params MRP
     responsable:            str
     comentario:             str   = ""
     linea:                  str   = ""
@@ -110,6 +164,7 @@ def _calcular_fecha_entrada(fecha_manual, fecha_lanz, cantidad_cj, sku, fallback
 @router.post("/aprobar")
 def aprobar_orden(req: OrdenAprobar):
     try:
+        _upc = _upc_real(req.sku, req.u_por_caja)   # V6.46
         sn = req.semana_necesidad[:10]
         se = req.semana_emision[:10]
         # F3 (12/05/2026): clave logica es (sku, fecha_lanzamiento, linea).
@@ -136,15 +191,15 @@ def aprobar_orden(req: OrdenAprobar):
             "semana_necesidad":     _parse_date(sn),
             "fecha_lanzamiento":    _parse_date(fl_str),
             "cantidad_sugerida_cj": req.cantidad_sugerida_cj,
-            "cantidad_sugerida_u":  req.cantidad_sugerida_cj * req.u_por_caja,
-            "u_por_caja":           req.u_por_caja,
+            "cantidad_sugerida_u":  req.cantidad_sugerida_cj * _upc,
+            "u_por_caja":           _upc,
             "linea":                req.linea,
         })
 
         aprobacion = aprobar_orden_db(numero_of, {
             "sku":                    req.sku,
             "cantidad_real_cj":       req.cantidad_real_cj,
-            "cantidad_real_u":        round(req.cantidad_real_cj * req.u_por_caja),
+            "cantidad_real_u":        round(req.cantidad_real_cj * _upc),
             "fecha_lanzamiento_real": _parse_date(req.fecha_lanzamiento_real or se),
             "fecha_entrada_real":     _parse_date(_calcular_fecha_entrada(
                 req.fecha_entrada_real or None, req.fecha_lanzamiento_real or se,
@@ -168,7 +223,7 @@ def aprobar_orden(req: OrdenAprobar):
             "semana_necesidad":       sn,
             "cantidad_sugerida_cj":   req.cantidad_sugerida_cj,
             "cantidad_real_cj":       req.cantidad_real_cj,
-            "cantidad_real_u":        round(req.cantidad_real_cj * req.u_por_caja),
+            "cantidad_real_u":        round(req.cantidad_real_cj * _upc),
             "fecha_lanzamiento_real": req.fecha_lanzamiento_real or se,
             "fecha_entrada_real":     req.fecha_entrada_real or sn,
             "responsable":            req.responsable,
@@ -188,7 +243,7 @@ class OrdenManual(BaseModel):
     descripcion:       str   = ""
     linea:             str
     cantidad_cj:       float
-    u_por_caja:        float = 1.0
+    u_por_caja:        Optional[float] = None   # V6.46: NO confiable; se resuelve desde params MRP
     fecha_lanzamiento: str            # día en la línea (grid Detalle Producción)
     fecha_entrada:     str   = ""     # opcional; si vacío se calcula por lead time
     responsable:       str   = ""
@@ -204,6 +259,7 @@ def crear_orden_manual(req: OrdenManual):
     superpone. Se distingue por el prefijo OFM- en numero_of.
     """
     try:
+        _upc = _upc_real(req.sku, req.u_por_caja)   # V6.46
         fl = req.fecha_lanzamiento[:10]
         fe = _calcular_fecha_entrada(
             req.fecha_entrada or None, fl, req.cantidad_cj, req.sku, fl
@@ -226,8 +282,8 @@ def crear_orden_manual(req: OrdenManual):
             "semana_necesidad":     _parse_date(fe),   # informativo
             "fecha_lanzamiento":    _parse_date(fl),   # clave lógica + capacidad
             "cantidad_sugerida_cj": req.cantidad_cj,   # manual: sugerido = real
-            "cantidad_sugerida_u":  round(req.cantidad_cj * req.u_por_caja),
-            "u_por_caja":           req.u_por_caja,
+            "cantidad_sugerida_u":  round(req.cantidad_cj * _upc),
+            "u_por_caja":           _upc,
             "linea":                req.linea,
             "motivo":               "MANUAL",
         })
@@ -235,7 +291,7 @@ def crear_orden_manual(req: OrdenManual):
         aprobacion = aprobar_orden_db(numero_of, {
             "sku":                    req.sku,
             "cantidad_real_cj":       req.cantidad_cj,
-            "cantidad_real_u":        round(req.cantidad_cj * req.u_por_caja),
+            "cantidad_real_u":        round(req.cantidad_cj * _upc),
             "fecha_lanzamiento_real": _parse_date(fl),
             "fecha_entrada_real":     _parse_date(fe),
             "responsable":            req.responsable or "Manual",
@@ -254,7 +310,7 @@ def crear_orden_manual(req: OrdenManual):
             "tipo":                   "PRODUCCION",
             "linea":                  req.linea,
             "cantidad_real_cj":       req.cantidad_cj,
-            "cantidad_real_u":        round(req.cantidad_cj * req.u_por_caja),
+            "cantidad_real_u":        round(req.cantidad_cj * _upc),
             "fecha_lanzamiento_real": fl,
             "fecha_entrada_real":     fe,
             "responsable":            req.responsable or "Manual",
