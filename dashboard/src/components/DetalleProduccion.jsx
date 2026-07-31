@@ -43,7 +43,7 @@ function CapBar({uso}){
     <div style={{height:6,width:`${pct*100}%`,background:color,borderRadius:3}}/></div>);
 }
 
-function OrdenBadge({orden,esPreferida,estaAprobada,onClick}){
+function OrdenBadge({orden,esPreferida,estaAprobada,onClick,desc}){
   const esDesborde=orden.esDesborde;
   // estaAprobada viene del aprobMap del padre (fuente de verdad: /ordenes/aprobadas).
   // Usar esto en vez de orden.aprobada evita un parpadeo ámbar→verde mientras
@@ -77,6 +77,14 @@ function OrdenBadge({orden,esPreferida,estaAprobada,onClick}){
           {orden.paga_setup?" ⚙":""}
         </span>
       </div>
+      {/* (31-07) nombre del producto en la tarjeta: hasta 2 lineas, luego elipsis */}
+      {(desc||orden.descripcion)&&(
+        <div style={{fontSize:8,lineHeight:1.2,marginTop:1,opacity:.9,
+                     display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",
+                     overflow:"hidden",wordBreak:"break-word"}}>
+          {desc||orden.descripcion}
+        </div>
+      )}
       <div style={{fontSize:8.5,color:esDesborde?C.red:C.tealMid,marginTop:1}}>
         {fmtN(orden.uProduccion)} u · {fmtPct(orden.usoPct)}
       </div>
@@ -351,8 +359,11 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
   // (junto con otros SKUs si hay multi-SKU intra-día). El frontend NO
   // redistribuye: dibuja la OFT en su fecha_lanzamiento exacta.
   const capDia=linea.cap_u_semana/5;
-  const mapa={};const capUsada={};
-  diasExt.forEach(d=>{mapa[d.fecha]=[];capUsada[d.fecha]=0;});
+  // (31-07) capUsadaAprob: misma formula que capUsada pero solo OF/OFM aprobadas.
+  // Es la capacidad YA COMPROMETIDA: el optimizer no puede usarla (ver warning
+  // V6.37 del cron: "(linea,dia) saturados solo por OFs aprobadas").
+  const mapa={};const capUsada={};const capUsadaAprob={};
+  diasExt.forEach(d=>{mapa[d.fecha]=[];capUsada[d.fecha]=0;capUsadaAprob[d.fecha]=0;});
 
   ordenesLinea.forEach(o=>{
     // v1.2: lookup por numero_of (estable). Si la orden está aprobada,
@@ -389,8 +400,9 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
       fechaEntradaCalc:o.fecha_entrada_real||o.semana_necesidad,
     });
     capUsada[fechaIni]=(capUsada[fechaIni]||0)+usoPctReal;
+    if(aprobacion) capUsadaAprob[fechaIni]=(capUsadaAprob[fechaIni]||0)+usoPctReal;
   });
-  return{mapa,capUsada};
+  return{mapa,capUsada,capUsadaAprob};
 }
 
 export default function DetalleProduccion({
@@ -652,7 +664,7 @@ export default function DetalleProduccion({
 
       {lineas.filter(linea=>!lineaFiltro||linea.codigo===lineaFiltro).map(linea=>{
         const ordenesLinea=getOrdenesLinea(linea);
-        const{mapa:ordenesXDia,capUsada}=distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea);
+        const{mapa:ordenesXDia,capUsada,capUsadaAprob}=distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea);
         const pendientes=ordenesLinea.filter(o=>!aprobMap[o.numero_of]);
         const aprobadas_lin=ordenesLinea.filter(o=>!!aprobMap[o.numero_of]);
         // Fechas de la semana visible: dom→sáb
@@ -731,6 +743,7 @@ export default function DetalleProduccion({
               {dias.map(dia=>{
                 const ords=ordenesXDia[dia.fecha]??[];
                 const uso=capUsada[dia.fecha]??0;
+                const usoAprob=capUsadaAprob?.[dia.fecha]??0;   // (31-07) ya comprometido
                 const desborde=uso>1;
                 const capDia=linea.cap_u_semana/5;
                 const setupUDia=ords.reduce((s,o)=>s+(o.setup_unidades||0),0);
@@ -746,6 +759,7 @@ export default function DetalleProduccion({
                         const aprobacion=aprobMap[o.numero_of];
                         const esPreferida=params[o.sku]?.linea===linea.codigo;
                         return(<OrdenBadge key={i} orden={o} esPreferida={esPreferida}
+                          desc={o.descripcion||params[o.sku]?.descripcion||""}
                           estaAprobada={!!aprobacion}
                           onClick={()=>{
                             // V6.39: simetria con la tabla. Aprobada -> editar/desaprobar.
@@ -764,6 +778,13 @@ export default function DetalleProduccion({
                       <span style={{color:desborde?C.red:C.text}}>{desborde?`⚠ ${fmtPct(uso)}`:fmtPct(uso)}</span>
                       <span style={{color:uso>0.9?C.red:C.tealMid}}>{fmtPct(Math.max(0,1-uso))} libre</span>
                     </div>
+                    {usoAprob>0&&(
+                      <div style={{fontSize:8.5,color:C.tealMid,marginTop:1,textAlign:"center"}}
+                        title={`Capacidad ya comprometida por OF/OFM aprobadas: ${fmtPct(usoAprob)}. `+
+                               `El optimizer solo puede planificar sobre el resto.`}>
+                        ✓ {fmtPct(usoAprob)} aprobado
+                      </div>
+                    )}
                     {setupUDia>0&&(
                       <div style={{fontSize:8.5,color:"#7B5C1A",marginTop:2,textAlign:"center"}}
                         title={`Setup en este día: ${fmtN(setupUDia)} u`}>
