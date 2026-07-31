@@ -105,3 +105,5 @@ forecast/_diag_*
 # Carpetas de trabajo/logs de sesion
 forecast/_ayer/
 forecast/_ovtest/
+forecast/Informe_Ventas_mensuales/Parametros_Informe_Ventas.xlsx
+forecast/Informe_Ventas_mensuales/salida/
