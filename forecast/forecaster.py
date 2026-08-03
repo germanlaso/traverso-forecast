@@ -112,7 +112,8 @@ def _apply_regressors(model: Prophet,
 def train_model(prophet_df: pd.DataFrame,
                 regressors: list[dict] | None    = None,
                 extra_events: list[dict] | None  = None,
-                changepoint_prior_scale: float   = 0.05) -> Prophet:
+                changepoint_prior_scale: float   = 0.05,
+                overrides: dict | None           = None) -> Prophet:
     """
     Entrena un modelo Prophet semanal.
 
@@ -121,8 +122,20 @@ def train_model(prophet_df: pd.DataFrame,
         regressors:             Regressores automáticos de estacionalidad (de seasonality.py)
         extra_events:           Eventos comerciales adicionales ingresados manualmente
         changepoint_prior_scale: Flexibilidad de tendencia (0.01=rígida, 0.5=flexible)
+        overrides:              (03-08-2026) kwargs de Prophet a sobrescribir, para
+                                experimentos controlados. ADITIVO: sin overrides el
+                                comportamiento es identico al de produccion.
+                                Llave especial no-Prophet:
+                                  "_country_holidays": False -> no llama
+                                  add_country_holidays (los feriados CL son fechas
+                                  exactas y los ds son domingos, ver
+                                  DISENO_fix_tendencia_forecast.md H4)
+                                Ver DISENO_fix_tendencia_forecast.md §5.2
     """
-    model = Prophet(
+    _ov = dict(overrides or {})
+    _usar_holidays_cl = _ov.pop("_country_holidays", True)
+
+    _kwargs = dict(
         yearly_seasonality="auto", # <2 años de historia -> Prophet desactiva anual (evita onda espuria en SKU nuevos). Estacionalidad de negocio via regresores.
         weekly_seasonality=True,
         daily_seasonality=False,
@@ -131,7 +144,10 @@ def train_model(prophet_df: pd.DataFrame,
         interval_width=0.90,
         seasonality_mode="multiplicative",
     )
-    model.add_country_holidays(country_name="CL")
+    _kwargs.update(_ov)
+    model = Prophet(**_kwargs)
+    if _usar_holidays_cl:
+        model.add_country_holidays(country_name="CL")
 
     df_train = prophet_df.copy()
 
