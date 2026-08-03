@@ -30,10 +30,10 @@ NO ESCRIBE NADA: no guarda modelos ni toca /app/models. Es solo lectura.
 
 Uso:
     # primera vez (paga la carga del datalake, ~1-11 min segun la hora)
-    python3 /app/exp_tendencia_fase1.py --cache-ventas /tmp/ventas_exp.parquet
+    python3 /app/exp_tendencia_fase1.py --cache-ventas /tmp/ventas_exp.pkl
 
-    # siguientes iteraciones (reusa el parquet, arranca en segundos)
-    python3 /app/exp_tendencia_fase1.py --cache-ventas /tmp/ventas_exp.parquet
+    # siguientes iteraciones (reusa el cache, arranca en segundos)
+    python3 /app/exp_tendencia_fase1.py --cache-ventas /tmp/ventas_exp.pkl
 
     # solo los 3 testigos, una variante
     python3 /app/exp_tendencia_fase1.py --skus 230010255,119010520,251010100 --variantes V0,V1
@@ -92,7 +92,8 @@ def main() -> int:
     ap.add_argument("--variantes", type=str, default=None,
                     help="subconjunto, ej. V0,V1 (por prefijo)")
     ap.add_argument("--cache-ventas", type=str, default=None,
-                    help="parquet para cachear el df de ventas entre corridas")
+                    help="pickle para cachear el df de ventas entre corridas "
+                         "(pyarrow no esta instalado en el container)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--csv", type=str, default=None, help="volcar el detalle a CSV")
     args = ap.parse_args()
@@ -108,7 +109,7 @@ def main() -> int:
 
     # ── ventas (con cache opcional: la carga puede tardar minutos) ───────────
     if args.cache_ventas and os.path.exists(args.cache_ventas):
-        df_sales = pd.read_parquet(args.cache_ventas)
+        df_sales = pd.read_pickle(args.cache_ventas)
         log.info(f"ventas desde cache {args.cache_ventas}: {len(df_sales)} filas")
     else:
         from main import get_sales_df
@@ -117,7 +118,7 @@ def main() -> int:
         log.info(f"ventas cargadas: {len(df_sales)} filas")
         if args.cache_ventas:
             try:
-                df_sales.to_parquet(args.cache_ventas)
+                df_sales.to_pickle(args.cache_ventas)
                 log.info(f"cache guardado en {args.cache_ventas}")
             except Exception as e:
                 log.warning(f"no se pudo guardar el cache: {e}")
