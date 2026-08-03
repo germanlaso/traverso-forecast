@@ -85,6 +85,20 @@ h2{font-size:15px;font-weight:650;margin:30px 0 12px;padding-bottom:7px;
 .blk span{font-size:9.5px;color:#fff;font-weight:600;white-space:nowrap;
           text-shadow:0 1px 1px rgba(0,0,0,.25);padding:0 2px}
 .cut{width:3px;background:#dc2626;flex:none}
+.day{width:1px;background:#fff;flex:none;opacity:.85}
+.dayhdr{display:flex;font-size:9.5px;color:#94a3b8;margin-bottom:2px}
+.dayhdr div{text-align:center;border-left:1px solid #e2e8f0;padding-left:2px}
+.mx{border-collapse:collapse;font-size:11.5px;margin-top:9px;width:100%}
+.mx th{background:transparent;color:#64748b;font-size:10px;padding:3px 4px;
+       text-transform:none;letter-spacing:0;font-weight:600;text-align:center}
+.mx th.sk{text-align:left;font-family:ui-monospace,monospace;font-size:11px}
+.mx td{border:none;padding:2px 3px;text-align:center}
+.mx td.sk{text-align:left;font-family:ui-monospace,monospace;color:#334155;
+          white-space:nowrap;padding-right:9px}
+.mx .cell{display:block;height:17px;border-radius:3px;background:#f1f5f9;
+          line-height:17px;font-size:9.5px;color:#fff;font-weight:600}
+.mx tr.multi td.sk{color:#b91c1c;font-weight:650}
+.mx .n{color:#b91c1c;font-weight:650;font-size:11px}
 .cut.f{background:#f59e0b}
 .cut.g{background:#cbd5e1}
 .lg{display:flex;gap:15px;flex-wrap:wrap;margin:10px 0 0;font-size:11.5px;color:#475569}
@@ -138,6 +152,68 @@ def bloques_html(seq, total_min, niveles_activos):
             f'<span>{lbl}</span><div class="fam" style="background:{fam}"></div></div>')
         prev = o
     return "".join(out)
+
+
+def barra_dias(seq, total_min):
+    """Barra cronologica: bloques en el orden REAL del plan, con separador de dia."""
+    out = []
+    prev = None
+    for o in seq:
+        if prev is not None:
+            if prev["fecha"] != o["fecha"]:
+                out.append('<div class="day" title="cambio de dia"></div>')
+            if prev["embalaje"] != o["embalaje"]:
+                out.append('<div class="cut" title="cambio de EMBALAJE"></div>')
+            elif prev["familia"] != o["familia"]:
+                out.append('<div class="cut f" title="cambio de FAMILIA"></div>')
+            elif prev["granel"] != o["granel"]:
+                out.append('<div class="cut g" title="cambio de sub-granel"></div>')
+        pct = (o["min"] / total_min * 100) if total_min else 0
+        col = COLOR_EMB.get(o["embalaje"], "#94a3b8")
+        fam = COLOR_FAM.get(o["familia"], "#94a3b8")
+        lbl = f'{o["min"]:.0f}\u2032' if pct > 3.2 else ""
+        tip = (f'{o["sku"]} · {o["desc"]} · emb {o["embalaje"]} · {o["familia"]}'
+               f' · {o["granel"]} · {o["cajas"]:.0f} cj · {o["min"]:.0f} min'
+               f' · {o["fecha"]}')
+        out.append(
+            f'<div class="blk" style="width:{pct:.3f}%;background:{col}" title="{esc(tip)}">'
+            f'<span>{lbl}</span><div class="fam" style="background:{fam}"></div></div>')
+        prev = o
+    return "".join(out)
+
+
+def matriz_goteo(ofts):
+    """Matriz SKU x dia: hace visible el goteo (mismo SKU partido en varios dias)."""
+    dias = sorted({o["fecha"] for o in ofts})
+    por = defaultdict(dict)
+    for o in ofts:
+        c = por[o["sku"]].get(o["fecha"])
+        por[o["sku"]][o["fecha"]] = (c or 0) + o["min"]
+    ordenado = sorted(por.items(), key=lambda x: (-len(x[1]), x[0]))
+    H = ["<table class='mx'><tr><th class='sk'>SKU</th>"]
+    for d in dias:
+        H.append(f"<th>{esc(d[-2:])}</th>")
+    H.append("<th>días</th></tr>")
+    for sku, celdas in ordenado:
+        multi = len(celdas) > 1
+        H.append(f"<tr class='{'multi' if multi else ''}'>"
+                 f"<td class='sk'>{esc(sku)}</td>")
+        for d in dias:
+            if d in celdas:
+                mi = celdas[d]
+                H.append(f"<td><span class='cell' style='background:#4f46e5' "
+                         f"title='{esc(sku)} · {d} · {mi:.0f} min'>{mi:.0f}</span></td>")
+            else:
+                H.append("<td><span class='cell'></span></td>")
+        H.append(f"<td class='{'n' if multi else ''}'>{len(celdas)}</td></tr>")
+    H.append("</table>")
+    nm = sum(1 for _s, c in por.items() if len(c) > 1)
+    ex = sum(len(c) - 1 for c in por.values())
+    if ex:
+        H.append(f"<div class='sub'><b>{nm}</b> SKU se producen en más de un día "
+                 f"(<b>{ex}</b> arranques de más). Cada fila roja es un SKU "
+                 f"partido: mismo producto, misma semana, varias puestas en marcha.</div>")
+    return "".join(H)
 
 
 def transiciones(seq):
@@ -272,15 +348,18 @@ def main() -> int:
         ("Uso de línea", f"{tot_min/60/(cap_dia_h*5*len(sem))*100:.0f}%",
          f"{cap_dia_h*5*len(sem):.0f} h disponibles"),
         ("Cambios de embalaje", f"{ta['embalaje']}", f"mínimo posible: {tb['embalaje']}"),
-        ("Evitables", f"{ev}", "reordenando, sin producir menos"),
+        ("Mín. teórico embalaje", f"{tb['embalaje']}", f"hoy {ta['embalaje']} · requiere reasignar días"),
         ("Batches repetidos", f"{dup}", "mismo SKU 2+ veces por semana"),
     ]:
         H.append(f"<div class='card'><div class='k'>{esc(k)}</div>"
                  f"<div class='v'>{esc(v)}</div><div class='n'>{esc(n)}</div></div>")
     H.append("</div>")
 
-    # comparacion por semana
-    H.append("<h2>Secuencia por semana — actual contra propuesta</h2>")
+    # secuencia real por semana
+    H.append("<h2>Secuencia real del plan, semana por semana</h2>")
+    H.append("<div class='sub'>Orden cronológico tal como el plan lo propone. "
+             "Los bloques NO se reordenan: agrupar exige mover producción entre "
+             "días, y eso lo decide el optimizador, no una vista.</div>")
     H.append("<div class='lg'>"
              + "".join(f"<span><i style='background:{c}'></i>embalaje {k}</span>"
                        for k, c in COLOR_EMB.items() if k)
@@ -290,6 +369,7 @@ def main() -> int:
              + "<span><i style='background:#dc2626;width:4px'></i>cambio de embalaje</span>"
                "<span><i style='background:#f59e0b;width:4px'></i>cambio de familia</span>"
                "<span><i style='background:#cbd5e1;width:4px'></i>cambio de sub-granel</span>"
+               "<span><i style='background:#fff;width:3px;border:1px solid #cbd5e1'></i>fin de día</span>"
              + "</div>")
 
     for lun, ofts, act, prop, a, b in bloques:
@@ -301,26 +381,24 @@ def main() -> int:
                  f"{d0.strftime('%d-%m')}</div>"
                  f"<div class='meta'>{len(ofts)} corridas · {tmin/60:.1f} h · "
                  f"formato {esc('/'.join(fmts) or '-')}</div></div>")
-        dif = a["embalaje"] - b["embalaje"]
-        cls = "bad" if dif > 0 else "ok"
-        H.append(f"<div class='row'><div class='lab'><span>Plan actual "
-                 f"(orden cronológico)</span><b class='{cls}'>"
-                 f"{a['embalaje']} cambios de embalaje</b></div>"
-                 f"<div class='seq'>{bloques_html(act, tmin, nivel_keys)}</div></div>")
-        H.append(f"<div class='row'><div class='lab'><span>Propuesta "
-                 f"(agrupada por niveles)</span><b class='ok'>"
-                 f"{b['embalaje']} cambios de embalaje</b></div>"
-                 f"<div class='seq'>{bloques_html(prop, tmin, nivel_keys)}</div></div>")
-        if dif > 0:
-            H.append(f"<div class='sub'>Evita {dif} cambio(s) de embalaje "
-                     f"produciendo exactamente lo mismo.</div>")
+        n_emb = len({o["embalaje"] for o in ofts})
+        H.append(f"<div class='row'><div class='lab'>"
+                 f"<span>Secuencia cronológica · las marcas blancas separan días</span>"
+                 f"<b class='bad'>{a['embalaje']} cambios de embalaje</b></div>"
+                 f"<div class='seq'>{barra_dias(act, tmin)}</div></div>")
+        H.append(f"<div class='sub'>Mínimo teórico si los embalajes se produjeran "
+                 f"en bloques contiguos: <b>{max(0, n_emb-1)}</b> cambio(s). "
+                 f"Alcanzarlo requiere que el optimizador reasigne días, "
+                 f"no basta reordenar.</div>")
+        H.append(matriz_goteo(ofts))
         H.append("</div>")
 
     H.append("<div class='warn'><b>Cómo leer los bloques:</b> el ancho es "
              "proporcional a la duración de la corrida y las líneas verticales "
              "marcan los cambios. Muchos bloques angostos separados por líneas rojas "
              "significan corridas cortas con cambios costosos en medio. Pasar el mouse "
-             "sobre un bloque muestra el SKU, el granel y los minutos.</div>")
+             "sobre un bloque muestra el SKU, el granel y los minutos. La matriz "
+             "de abajo muestra qué SKU se parten en varios días.</div>")
 
     # catalogo
     H.append("<h2>Orden preferente de graneles</h2><table>"
@@ -366,7 +444,8 @@ def main() -> int:
 
     H.append("<footer>Vista de solo lectura generada desde el plan vigente. "
              "No modifica parámetros ni el plan. La propuesta es un reordenamiento "
-             "del mismo conjunto de corridas: no cambia qué ni cuánto se produce."
+             "Muestra el plan tal como es, sin reordenar: agrupar exige mover "
+             "producción entre días y eso lo resuelve el optimizador."
              "</footer></body></html>")
 
     with open(args.out, "w", encoding="utf-8") as f:
