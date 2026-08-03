@@ -193,6 +193,21 @@ N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 CAMPANA_GRANEL_ENABLED = _os.environ.get("CAMPANA_GRANEL_ENABLED", "0") == "1"
 GRANEL_MODOS = ("ketchup", "mostaza")
 
+# ── Secuenciacion (03-08-2026) ────────────────────────────────────────────────
+# Contiguidad de bloque por SKU: prohibe el goteo diario (producir, parar,
+# reanudar el mismo SKU dentro de la semana). Estructural, no ponderada: la
+# agrupacion se resuelve ANTES que la desviacion de SS, no compite con ella.
+# Ver DISENO_SECUENCIACION.md
+SECUENCIA_CONTIG_SKU = os.getenv("SECUENCIA_CONTIG_SKU", "0") == "1"
+SECUENCIA_CONTIG_LINEAS = os.getenv("SECUENCIA_CONTIG_LINEAS", "")   # vacio = todas
+SECUENCIA_MAX_BLOQUES = int(os.getenv("SECUENCIA_MAX_BLOQUES", "1") or 1)
+# Contiguidad por NIVEL de agrupacion (el caso importante): el grupo se produce
+# en UN bloque contiguo por semana. "embalaje" usa u_por_caja; "granel" usa
+# granel_grupo. Un cambio de embalaje (reconfigurar encajonadora) es mucho mas
+# caro que reanudar el mismo SKU, por eso este nivel pesa mas que la contiguidad
+# por SKU. Lista separada por comas, vacio = apagado.
+SECUENCIA_CONTIG_NIVELES = os.getenv("SECUENCIA_CONTIG_NIVELES", "")
+
 # Campana de FORMATO por linea (Caso 2). Independiente del granel para poder
 # medir su efecto por separado. v1 = SOLO PINS: las semanas sin pin las decide
 # el solver sin penalizacion de cambio (no forzamos campana en todo el horizonte,
@@ -869,6 +884,167 @@ def _construir_modelo(
                     _naf += 1
             logger.info(f"[CAMPANA] formato ON {_lin}: modos={_modos} "
                         f"{len(_semanas_f)} semanas, {_npf} pins, {_naf} acoples")
+
+    # ─── Contiguidad de bloque por SKU (03-08 · SECUENCIA_CONTIG_SKU) ────────
+    # PROBLEMA MEDIDO (plan #101, L1Pet LV semana 17-08): 20 batches de solo 6
+    # SKU distintos. El mismo SKU se produce todos los dias en cantidades chicas
+    # (111010290: 21+28+27+27+34 min en 5 dias). No es indiferencia del solver:
+    # es el optimo del objetivo tal como esta escrito. N2 minimiza la desviacion
+    # % del SS DIA POR DIA (W_EXC_LEVE=3, W_EXC_ALTO=8); concentrar la produccion
+    # deja el stock por encima del SS los dias siguientes -> exceso penalizado.
+    # Gotear lo mantiene pegado al SS. Y no hay contrapeso: W_SETUP=0 y
+    # t_cambio_hrs=0 en los 249 SKU.
+    #
+    # POR QUE ESTRUCTURAL Y NO PESO: un W_SETUP moderado NEGOCIA gradualmente
+    # con el exceso de SS (y ya se elimino en F1). La agrupacion debe resolverse
+    # ANTES que la desviacion de SS, no competir con ella: se impone como
+    # estructura y el SS se optimiza DENTRO del espacio restringido. Aplica a
+    # ambas pasadas: A encuentra los quiebres inevitables DADA la agrupacion y C
+    # optimiza SS dentro de ella.
+    #
+    # POR QUE DURA SIN RIESGO: mismo argumento que el acople de granel (ya en
+    # produccion). Si un SKU no puede producirse en bloque contiguo, produce
+    # menos y el faltante cae en QUIEBRE, que es blando por STOCK_LOWER_BOUND_
+    # FACTOR. No genera infactibilidad y no agrega ningun peso nuevo.
+    #
+    # `inicio` NO sirve para esto: es un contador agregado por (dia,linea)
+    # (Σ inicio >= Σ asig - 1, R12) y su unica ligadura por SKU es inicio<=asig.
+    # No esta atado a la transicion asig[d-1]->asig[d], asi que Σ inicio <= 1 no
+    # expresa contiguidad. Se usa variable propia `arranca`.
+    if SECUENCIA_CONTIG_SKU:
+        _lineas_c = {x.strip() for x in SECUENCIA_CONTIG_LINEAS.split(",") if x.strip()}
+        _arranca: dict = {}
+        _n_ct = 0
+        for d_idx, d in enumerate(horizonte):
+            for s in skus:
+                for l in m.pares_sku_linea[s]:
+                    if _lineas_c and l not in _lineas_c:
+                        continue
+                    a = m.model.NewBoolVar(f"arranca_{d_idx}_{s}_{l}")
+                    _arranca[(d, s, l)] = a
+                    # arranca = 1 si hoy produce y ayer no. Dia 0: se asume que
+                    # no venia produciendo (conservador).
+                    prev = m.asig[(horizonte[d_idx - 1], s, l)] if d_idx > 0 else None
+                    if prev is None:
+                        m.model.Add(a >= m.asig[(d, s, l)])
+                    else:
+                        m.model.Add(a >= m.asig[(d, s, l)] - prev)
+                    m.model.Add(a <= m.asig[(d, s, l)])
+        # Un solo arranque por (SKU, linea, semana) -> un solo bloque contiguo,
+        # que puede ocupar varios dias pero no reanudarse.
+        _por_sem: dict = {}
+        for (d, s, l), a in _arranca.items():
+            _por_sem.setdefault((semana_iso_inicio(d).isoformat(), s, l), []).append(a)
+        for _k, _vs in _por_sem.items():
+            if len(_vs) > 1:
+                m.model.Add(sum(_vs) <= SECUENCIA_MAX_BLOQUES)
+                _n_ct += 1
+        logger.info(f"[SECUENCIA] contiguidad SKU ON | lineas="
+                    f"{sorted(_lineas_c) or 'TODAS'} | max_bloques/semana="
+                    f"{SECUENCIA_MAX_BLOQUES} | {len(_arranca)} vars, "
+                    f"{_n_ct} restricciones")
+
+    # ─── Contiguidad por NIVEL (03-08 · SECUENCIA_CONTIG_NIVELES) ────────────
+    # El caso que importa. Medido en #101 L1Pet LV semana 17-08: el embalaje 12 se
+    # produce el 18 y el 20, y el 30 el 17, 19, 20 y 21 -> 4 cambios de embalaje
+    # donde alcanzaria 1. Cada cambio exige reconfigurar la encajonadora, muy por
+    # encima del costo de reanudar el mismo SKU (misma config, mismo granel,
+    # misma etiqueta). Orden de costo confirmado con Produccion el 03-08:
+    # formato > embalaje > familia > sub-granel.
+    #
+    # `usa[d,g,l]` = el grupo g ocupa la linea el dia d. Necesita AMBAS cotas:
+    # sin la superior el solver pondria usa=1 todos los dias y satisfaria la
+    # restriccion con un solo arranque, volviendola inerte.
+    #
+    # Estructural, sin peso: la agrupacion se resuelve ANTES que la desviacion de
+    # SS. Dura sin riesgo de infactibilidad (mismo argumento que el acople de
+    # granel: el faltante cae en quiebre, blando por STOCK_LOWER_BOUND_FACTOR).
+    _niv = [x.strip() for x in SECUENCIA_CONTIG_NIVELES.split(",") if x.strip()]
+    if _niv:
+        _lineas_n = {x.strip() for x in SECUENCIA_CONTIG_LINEAS.split(",") if x.strip()}
+
+        def _val_nivel(_s, _nivel):
+            sp = sku_params[_s]
+            if _nivel == "embalaje":
+                return str(sp.get("u_por_caja") or "")
+            if _nivel == "granel":
+                return str(sp.get("granel_grupo") or "").strip().lower()
+            if _nivel == "formato":
+                return str(sp.get("formato") or "").strip()
+            if _nivel == "familia":
+                # PROVISIONAL: la familia se deriva del prefijo de granel_grupo
+                # (vinagre_blanco -> vinagre, limon_pica -> limon). La fuente
+                # correcta es mrp_graneles.familia, que todavia no viaja hasta el
+                # modelo (trampa de las 4 capas: BD -> dataclass -> dict rich ->
+                # modelo). Valido para L1Pet LV con el naming cargado el 03-08.
+                _g = str(sp.get("granel_grupo") or "").strip().lower()
+                return _g.split("_")[0] if _g else ""
+            return ""
+
+        def _clave_de(_s, _hasta):
+            """Clave ACUMULADA de los niveles 0.._hasta.
+
+            La jerarquia es ANIDADA: el grupo del nivel N incluye los valores de
+            todos los niveles superiores. Asi "agrupar por familia DENTRO de cada
+            embalaje" se expresa como contiguidad de la clave (embalaje, familia):
+            (12,limon) y (30,limon) son grupos DISTINTOS, cada uno contiguo.
+            Si en cambio se agrupara solo por familia a nivel semana, se prohibiria
+            que limon apareciera en los dos embalajes -> pondria familia ARRIBA de
+            embalaje, invirtiendo la jerarquia de costos.
+            """
+            partes = []
+            for nv in _niv[:_hasta + 1]:
+                v = _val_nivel(_s, nv)
+                if not v:
+                    return None
+                partes.append(v)
+            return "|".join(partes)
+
+        for _i_niv, _nivel in enumerate(_niv):
+            _usa: dict = {}
+            _arr: dict = {}
+            _nr = 0
+            # (linea -> grupo -> [skus])
+            _por_l: dict = {}
+            for s in skus:
+                g = _clave_de(s, _i_niv)
+                if not g:
+                    continue
+                for l in m.pares_sku_linea[s]:
+                    if _lineas_n and l not in _lineas_n:
+                        continue
+                    _por_l.setdefault(l, {}).setdefault(g, []).append(s)
+            for l, grupos in _por_l.items():
+                if len(grupos) < 2:
+                    continue          # un solo grupo: nada que agrupar
+                for g, skus_g in grupos.items():
+                    for d_idx, d in enumerate(horizonte):
+                        u = m.model.NewBoolVar(f"usa_{_nivel}_{d_idx}_{g}_{l}")
+                        _usa[(d, g, l)] = u
+                        asigs = [m.asig[(d, x, l)] for x in skus_g]
+                        for a_ in asigs:
+                            m.model.Add(u >= a_)          # alguno produce -> usa=1
+                        m.model.Add(u <= sum(asigs))      # nadie produce -> usa=0
+                        a = m.model.NewBoolVar(f"arrg_{_nivel}_{d_idx}_{g}_{l}")
+                        _arr[(d, g, l)] = a
+                        prev = _usa.get((horizonte[d_idx - 1], g, l)) if d_idx > 0 else None
+                        if prev is None:
+                            m.model.Add(a >= u)
+                        else:
+                            m.model.Add(a >= u - prev)
+                        m.model.Add(a <= u)
+            _por_sem: dict = {}
+            for (d, g, l), a in _arr.items():
+                _por_sem.setdefault((semana_iso_inicio(d).isoformat(), g, l), []).append(a)
+            for _k, _vs in _por_sem.items():
+                if len(_vs) > 1:
+                    m.model.Add(sum(_vs) <= SECUENCIA_MAX_BLOQUES)
+                    _nr += 1
+            logger.info(f"[SECUENCIA] contiguidad N{_i_niv+1}={_nivel} "
+                        f"(clave={'+'.join(_niv[:_i_niv+1])}) ON | lineas="
+                        f"{sorted(_lineas_n) or 'TODAS'} | grupos="
+                        f"{sum(len(v) for v in _por_l.values())} | "
+                        f"{len(_usa)} usa, {len(_arr)} arranques, {_nr} restricciones")
 
     # ─── Restricciones agregadas por (d, l) ──────────────────────────────────
 
