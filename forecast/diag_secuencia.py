@@ -81,6 +81,13 @@ def main() -> int:
     ap.add_argument("--linea", type=str, default=None)
     ap.add_argument("--detalle", action="store_true",
                     help="imprime la secuencia completa por semana")
+    # Pesos relativos por nivel. NO sumar transiciones sin ponderar: el post-orden
+    # cambia transiciones CARAS (embalaje) por BARATAS (familia/granel), asi que
+    # un total sin pesos da un veredicto invertido. Orden de costo confirmado con
+    # Produccion el 03-08: formato > embalaje > familia > sub-granel.
+    ap.add_argument("--peso-emb", type=float, default=1.0)
+    ap.add_argument("--peso-fam", type=float, default=1.0)
+    ap.add_argument("--peso-gran", type=float, default=1.0)
     args = ap.parse_args()
 
     sys.path.insert(0, "/app")
@@ -210,12 +217,37 @@ def main() -> int:
     ta, tb = sum(tot_cron.values()), sum(tot_opt.values())
     print(f"{'TOTAL':<14}{ta:>13}{tb:>9}{ta-tb:>9}")
     print()
-    if ta - tb <= 0:
-        print("VEREDICTO: el plan ya sale agrupado -> el post-orden es INERTE.")
+    W = {"embalaje": args.peso_emb, "familia": args.peso_fam, "granel": args.peso_gran}
+    pa = sum(tot_cron[n] * W.get(n, 1.0) for n in nivset)
+    pb = sum(tot_opt[n] * W.get(n, 1.0) for n in nivset)
+    print()
+    print(f"--- PONDERADO (emb={args.peso_emb} fam={args.peso_fam} gran={args.peso_gran}) ---")
+    print(f"{'costo CRONOLOGICO':<22}{pa:>10.1f}")
+    print(f"{'costo OPTIMO':<22}{pb:>10.1f}")
+    print(f"{'ahorro':<22}{pa-pb:>10.1f}")
+    print()
+    # Punto de indiferencia: cuanto mas caro debe ser el embalaje para que convenga
+    d_emb = tot_cron.get("embalaje", 0) - tot_opt.get("embalaje", 0)   # >0 = ahorro
+    d_otros = ((tot_opt.get("familia", 0) - tot_cron.get("familia", 0)) +
+               (tot_opt.get("granel", 0) - tot_cron.get("granel", 0)))  # >0 = costo
+    print("--- PUNTO DE INDIFERENCIA ---")
+    if d_emb > 0 and d_otros > 0:
+        r = d_otros / d_emb
+        print(f"  El orden optimo ahorra {d_emb} transiciones de EMBALAJE y agrega "
+              f"{d_otros} de familia/granel.")
+        print(f"  CONVIENE si un cambio de embalaje cuesta mas de {r:.2f}x un cambio "
+              f"de familia/granel.")
+        print("  Falta el tiempo de cambio POR NIVEL (pendiente de Produccion).")
+    elif d_emb > 0:
+        print(f"  El orden optimo ahorra {d_emb} transiciones de embalaje sin costo "
+              f"en otros niveles -> CONVIENE sin condiciones.")
     else:
-        pct = 100.0 * (ta - tb) / ta if ta else 0
-        print(f"VEREDICTO: el post-orden ahorraria {ta-tb} transiciones ({pct:.0f}%).")
-        print("Para valorizarlo en horas falta el tiempo de cambio POR NIVEL (Produccion).")
+        print("  El orden optimo no mejora el nivel mas caro -> revisar la jerarquia.")
+    print()
+    print("NOTA: el cap <= K resulto redundante (todas las semanas tienen <=2 "
+          "embalajes y <=2 familias):")
+    print("      no hay que tocar el solver. Lo que falta es el ORDEN, que es "
+          "post-proceso.")
 
     if sin_granel:
         print()
