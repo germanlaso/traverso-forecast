@@ -106,8 +106,8 @@ def main() -> int:
     ap.add_argument("--horizonte", type=int, default=8, help="horizonte del PLAN (semanas)")
     ap.add_argument("--H", type=int, default=12, help="horizonte de EVALUACION (semanas)")
     ap.add_argument("--n-cutoffs", type=int, default=6)
-    ap.add_argument("--variantes", type=str, default="V0_baseline,V1_flat,V3_cps001",
-                    help="las que sobrevivieron Fase 1")
+    ap.add_argument("--variantes", type=str, default="V0_baseline,V1_flat,V7_logistic",
+                    help="las que sobrevivieron Fase 1 (V3_cps001 fallo M3 el 03-08)")
     ap.add_argument("--n-por-cohorte", type=int, default=4)
     ap.add_argument("--skus", type=str, default=None)
     ap.add_argument("--cache-ventas", type=str, default=None)
@@ -234,11 +234,14 @@ def main() -> int:
         return float(d["abs_err"].sum() / sr) if sr > 0 else np.nan
 
     def wmape_macro(d):
+        """MEDIANA, no media: en SKU con sum|real| ~ 0 el WMAPE explota a miles y
+        la media queda dominada por esos outliers (visto el 03-08: macro de 226
+        = 22.600%, ilegible). La mediana es robusta a esa cola."""
         vals = []
         for _s, g in d.groupby("sku"):
             vals.append(_wmape(g["real"].values, g["pred"].values))
         v = [x for x in vals if not np.isnan(x)]
-        return float(np.mean(v)) if v else np.nan
+        return float(np.median(v)) if v else np.nan
 
     base_vid = vids[0]
 

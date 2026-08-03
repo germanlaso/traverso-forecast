@@ -134,6 +134,7 @@ def train_model(prophet_df: pd.DataFrame,
     """
     _ov = dict(overrides or {})
     _usar_holidays_cl = _ov.pop("_country_holidays", True)
+    _cap_factor = float(_ov.pop("_logistic_cap_factor", FORECAST_CAP_FACTOR))
 
     _kwargs = dict(
         yearly_seasonality="auto", # <2 años de historia -> Prophet desactiva anual (evita onda espuria en SKU nuevos). Estacionalidad de negocio via regresores.
@@ -150,6 +151,19 @@ def train_model(prophet_df: pd.DataFrame,
         model.add_country_holidays(country_name="CL")
 
     df_train = prophet_df.copy()
+
+    # (03-08-2026) growth="logistic" exige `cap` en el df (y `floor` si se usa).
+    # cap = factor x max historico: el MISMO tope que _cap_forecast aplica
+    # post-hoc, para no introducir un limite nuevo. floor = 0 para que el
+    # trend se acerque asintoticamente a cero SIN cruzarlo (es el punto:
+    # preservar la tendencia sin permitir el colapso a negativo que produce
+    # growth="linear"). Ver DISENO_fix_tendencia_forecast.md
+    if _kwargs.get("growth") == "logistic":
+        _maxy = float(df_train["y"].max())
+        if _maxy <= 0:
+            _maxy = 1.0          # SKU sin venta: cap degenerado, evitar cap=0
+        df_train["cap"] = _cap_factor * _maxy
+        df_train["floor"] = 0.0
 
     # Regressores automáticos por categoría
     all_regressors = list(regressors or [])
@@ -176,6 +190,14 @@ def make_forecast(model: Prophet,
                   regressors: list[dict] | None   = None,
                   extra_events: list[dict] | None = None) -> pd.DataFrame:
     future = model.make_future_dataframe(periods=periods, freq=FREQ)
+
+    # (03-08-2026) logistic: el future TAMBIEN necesita cap/floor. Se toman
+    # del historico del modelo ya entrenado, asi que no hay que volver a
+    # pasar el df de ventas ni recalcular el tope.
+    if getattr(model, "growth", "") == "logistic":
+        for _c in ("cap", "floor"):
+            if _c in getattr(model, "history", pd.DataFrame()).columns:
+                future[_c] = float(model.history[_c].iloc[-1])
 
     all_regressors = list(regressors or [])
     for ev in (extra_events or []):

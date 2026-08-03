@@ -69,6 +69,10 @@ def variantes_para(n_obs: int) -> dict[str, dict]:
         "V4_noweekly":   {"weekly_seasonality": False},
         "V5_noholidays": {"_country_holidays": False},
         "V6_additive":   {"seasonality_mode": "additive"},
+        # V7 (03-08): preserva la tendencia pero el trend no puede cruzar cero
+        # (floor=0, cap=3x max historico). Candidato a dominar a V1_flat: gana
+        # en h corto como V3 y en h largo como V1.
+        "V7_logistic":   {"growth": "logistic"},
     }
 
 
