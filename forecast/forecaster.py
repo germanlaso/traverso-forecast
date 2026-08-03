@@ -61,6 +61,21 @@ def prepare_prophet_df(df: pd.DataFrame,
            .rename(columns={"fecha_semana": "ds", "cantidad": "y"})
     )
     prophet_df["y"] = prophet_df["y"].clip(lower=0)
+
+    # (D2-bis, 03-08-2026) Descartar el bin de la semana EN CURSO.
+    # resample("W") forma un bin con los pocos dias ya transcurridos. Verificado:
+    # el retrain del lunes 13-07 dejo la semana 12-07 con y=2 contra ~50 de las
+    # previas (111010600) -> un solo dia de venta. Ese outlier a la baja cae al
+    # FINAL de la serie, justo donde Prophet estima la tendencia, y la sesga hacia
+    # abajo. Ademas es inconsistente: solo afecta a los SKU que vendieron ese dia.
+    # ds es el domingo de INICIO de la semana (verificado dow=Sun), asi que la
+    # semana cierra en ds+6. Determinista, no depende del horario del ETL.
+    # Ver DECISION_forecast_cobertura_y_reentrenamiento.md (D2-bis)
+    if len(prophet_df) > 1:
+        _ini_ult = prophet_df["ds"].max()
+        if _ini_ult + timedelta(days=6) >= pd.Timestamp(date.today()):
+            prophet_df = prophet_df.iloc[:-1]
+
     return prophet_df
 
 
