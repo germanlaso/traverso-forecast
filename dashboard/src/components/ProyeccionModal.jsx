@@ -73,6 +73,19 @@ function TooltipLineas({ active, payload, label }) {
           {e.dataKey === "aprobada" && lineasDe(p.aprobLineas, "apr")}
         </React.Fragment>
       ))}
+      {/* Balance del dia: ini - demanda = disponible(+prod) = stock final */}
+      <div style={{ borderTop: `0.5px solid ${C.border}`, margin: "5px 0" }} />
+      {p.stock_ini != null && (
+        <div style={{ color: C.text }}>Stock inicial: {fmt1(p.stock_ini)} cj</div>)}
+      {p.demanda != null && (
+        <div style={{ color: C.gray }}>− Demanda: {fmt1(-p.demanda)} cj</div>)}
+      {p.stock_disp != null && (
+        <div style={{ color: p.stock_disp < 0 ? C.red : C.purple, fontWeight: 600 }}>
+          = Disponible: {fmt1(p.stock_disp)} cj{p.stock_disp < 0 ? " ⚠" : ""}</div>)}
+      {((p.oft || 0) + (p.aprobada || 0)) > 0 && (
+        <div style={{ color: C.orange }}>+ Produccion/entrada: {fmt1((p.oft || 0) + (p.aprobada || 0))} cj</div>)}
+      {p.stock != null && (
+        <div style={{ color: C.textMuted }}>= Stock final: {fmt1(p.stock)} cj</div>)}
     </div>
   );
 }
@@ -146,6 +159,8 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
   const serie = dias.map((x) => ({
     fecha: String(x.fecha).slice(5),          // MM-DD
     stock: x.stock_fin_cj,
+    stock_disp: x.stock_disp_cj,
+    stock_ini: x.stock_ini_disp_cj,
     ss: x.ss_u != null && d?.upc ? x.ss_u / d.upc : null,
     demanda: x.demanda_corr_cj,
     pedidos: x.pedidos_cj || 0,               // OV: faltaba en el modal
@@ -183,7 +198,7 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
   // `oft_cajas` es null y el KPI mostraría 0 aunque haya producción planificada.
   const nOft     = dias.filter((x) => (x.oft_cajas || 0) > 0
                                    || (x.entrada_aprobada_u || 0) > 0).length;
-  const stockMin = dias.length ? Math.min(...dias.map((x) => x.stock_fin_cj ?? 0)) : null;
+  const stockMin = dias.length ? Math.min(...dias.map((x) => x.stock_disp_cj ?? 0)) : null;
   const stockFin = dias.length ? dias[dias.length - 1].stock_fin_cj : null;
 
   return (
@@ -276,7 +291,7 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                          barSize={5} />
                     <Bar dataKey="pedidos" name="Pedidos (OV)" fill={C.purple} fillOpacity={0.65}
                          barSize={5} />
-                    <Line type="monotone" dataKey="stock" name="Stock final" stroke={C.purple}
+                    <Line type="monotone" dataKey="stock_disp" name="Stock disponible" stroke={C.purple}
                           strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="ss" name="Stock seguridad" stroke={C.amber}
                           strokeWidth={1.5} strokeDasharray="5 4" dot={false} />

@@ -59,7 +59,12 @@ function CustomTooltip({ active, payload, label }) {
       {row.entrada_cj > 0 && line("OF aprobada / OFM", row.entrada_cj, C.teal)}
       {lineas(row.aprobLineas, "apr")}
       <div style={{ borderTop: `0.5px solid ${C.border}`, margin: "5px 0" }} />
-      {row.stock_fin_cj != null && line("Stock final", row.stock_fin_cj, C.blue)}
+      {/* Balance del dia: ini - demanda = disponible(+prod) = stock final */}
+      {row.stock_ini_disp_cj != null && line("Stock inicial", row.stock_ini_disp_cj, C.text)}
+      {row.demanda_corr_cj != null && line("\u2212 Demanda", -row.demanda_corr_cj, C.gray)}
+      {row.stock_disp_cj != null && line(row.stock_disp_cj < 0 ? "= Disponible \u26a0" : "= Disponible", row.stock_disp_cj, row.stock_disp_cj < 0 ? C.red : C.blue)}
+      {((row.oft_cj || 0) + (row.entrada_cj || 0)) > 0 && line("+ Produccion/entrada", (row.oft_cj || 0) + (row.entrada_cj || 0), C.orange)}
+      {row.stock_fin_cj != null && line("= Stock final", row.stock_fin_cj, C.textMuted)}
       {row.ss_cj > 0 && line("Stock seguridad", row.ss_cj, C.amber)}
     </div>
   );
@@ -195,6 +200,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
     name: fmtDs(r.fecha), fecha: r.fecha,
     forecast_cj: r.forecast_cj, pedidos_cj: r.pedidos_cj,
     demanda_corr_cj: r.demanda_corr_cj, stock_fin_cj: r.stock_fin_cj, ss_cj: r.ss_cj,
+    stock_ini_disp_cj: r.stock_ini_disp_cj, stock_disp_cj: r.stock_disp_cj,
     oft_cj: r.oft_cajas || 0,
     entrada_cj: r.entrada_aprobada_u ? r.entrada_aprobada_u / upcSel : 0,
     // (30-07) lineas del dia: el tooltip muestra en que linea se produce y si
@@ -299,7 +305,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
               <span style={s.legItem}><span style={s.legSq(C.purple)} />Pedidos (OV)</span>
               <span style={s.legItem}><span style={s.legSq(C.orange)} />OFT propuesta</span>
               <span style={s.legItem}><span style={s.legSq(C.teal)} />OF aprobada / OFM</span>
-              <span style={s.legItem}><span style={{ width: 14, height: 2, background: C.blue, display: "inline-block" }} />Stock final</span>
+              <span style={s.legItem}><span style={{ width: 14, height: 2, background: C.blue, display: "inline-block" }} />Stock disponible</span>
               <span style={s.legItem}><span style={{ width: 14, height: 2, background: C.amber, display: "inline-block" }} />Stock seguridad</span>
               <span style={s.legItem}><span style={{ width: 14, height: 2, background: C.gray, display: "inline-block" }} />Demanda corr.</span>
             </div>
@@ -325,7 +331,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
                 <Line dataKey="demanda_corr_cj" name="Demanda corr. (cj)" stroke={C.gray}
                   strokeWidth={1} dot={false} strokeDasharray="2 2" />
                 {/* Stock final del plan (sin clamp) */}
-                <Line dataKey="stock_fin_cj" name="Stock final (cj)" stroke={C.blue}
+                <Line dataKey="stock_disp_cj" name="Stock disponible (cj)" stroke={C.blue}
                   strokeWidth={2.5} dot={{ r: 2, fill: C.blue }} activeDot={{ r: 5 }} connectNulls />
                 <Line dataKey="ss_cj" name="Stock seguridad (cj)" stroke={C.amber}
                   strokeWidth={1.5} strokeDasharray="5 4" dot={false} />
