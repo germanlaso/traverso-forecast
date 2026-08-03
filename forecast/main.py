@@ -1091,8 +1091,11 @@ def get_proyeccion_diaria_live(sku: str):
         entrada_viva = int(round(entradas_vivas.get(fecha_iso, 0.0)))
         stock_ini = stock_ini_base if stock_prev is None else stock_prev
         stock_fin = stock_ini + oft_u + entrada_viva - demanda_base
+        # (03-08) quiebre intradia: la demanda del dia se sirve con el stock al
+        # inicio (stock_ini); la produccion/entrada del dia entra al cierre.
+        stock_disp = stock_ini - demanda_base
         ss_u = int(c.get("ss_u", 0) or 0)
-        if stock_fin < 0:
+        if stock_disp < 0:
             estado = "QUIEBRE"
         elif ss_u > 0 and stock_fin < ss_u:
             estado = "BAJO_SS"
@@ -1103,6 +1106,8 @@ def get_proyeccion_diaria_live(sku: str):
             "oft_cajas": c.get("oft_cajas"),
             "stock_ini_disp_u": int(round(stock_ini)),
             "stock_ini_disp_cj": _cj(int(round(stock_ini))),
+            "stock_disp_u": int(round(stock_disp)),
+            "stock_disp_cj": _cj(int(round(stock_disp))),
             "pedidos_u": c.get("pedidos_u"),
             "pedidos_cj": _cj(c.get("pedidos_u")),
             "pedidos_crudos_u": c.get("pedidos_crudos_u"),
@@ -1346,6 +1351,7 @@ def get_quiebres_grid():
             sev = _sev(c.get("estado"), c.get("stock_fin_u"), c.get("ss_u"))
             dias[fecha_iso] = {"sev": sev,
                                "stock_fin_u": c.get("stock_fin_u"),
+                               "stock_disp_u": c.get("stock_disp_u"),
                                "ss_u": c.get("ss_u")}
             if sev > peor:
                 peor = sev
@@ -1359,10 +1365,14 @@ def get_quiebres_grid():
                 (encab_all.get(sku) or {}).get("descripcion") or "")
         cod_linea = getattr(p, "linea_preferida", None) or "SIN_LINEA"
 
-        # cajas faltantes por dia en quiebre
+        # cajas faltantes por dia en quiebre (magnitud = nadir intradia stock_disp_u;
+        # fallback a stock_fin_u para snapshots viejos sin el campo)
         for _f, dc in dias.items():
-            if dc["sev"] == 3 and dc["stock_fin_u"] is not None and upc:
-                dc["def_cj"] = int(math.ceil(abs(dc["stock_fin_u"]) / upc))
+            _base = dc.get("stock_disp_u")
+            if _base is None:
+                _base = dc.get("stock_fin_u")
+            if dc["sev"] == 3 and _base is not None and upc:
+                dc["def_cj"] = int(math.ceil(abs(_base) / upc))
             else:
                 dc["def_cj"] = 0
 

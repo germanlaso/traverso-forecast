@@ -1388,22 +1388,28 @@ def _post_procesar(
         upc = m.u_por_caja[s]
         cap_bodega = int(sp.get("cap_bodega_u", 1_000_000) or 1_000_000)
 
+        # (03-08) quiebre intradia: se evalua sobre el stock al INICIO del dia
+        stock_prev_disp = float((stock_inicial or {}).get(s, 0.0))
+        consumo_s = (demanda_consumo or {}).get(s) or {}
         for d in horizonte:
             stock_real = solver.Value(m.stock_u[(d, s)])
             stock_visible = max(0, stock_real)
             stock_diario[s][d.isoformat()] = stock_visible
 
+            consumo_d = int(round(consumo_s.get(d, 0.0)))
+            stock_disp = stock_prev_disp - consumo_d   # (03-08) piso del dia (pre-produccion)
             deficit_v = solver.Value(m.deficit[(d, s)])
             exceso_v = solver.Value(m.exceso[(d, s)])
 
-            # Alerta de quiebre (stock real negativo)
-            if stock_real < 0:
+            # (03-08) Alerta de quiebre INTRADIA: demanda no servible con el stock
+            # al inicio del dia (la produccion del mismo dia entra al cierre).
+            if stock_disp < 0:
                 alertas.append({
                     "sku": s,
                     "fecha": d.isoformat(),
                     "tipo": "QUIEBRE",
-                    "mensaje": f"Demanda no cubierta: {-stock_real} unidades",
-                    "deficit_u": -stock_real,
+                    "mensaje": f"Demanda no cubierta: {-int(round(stock_disp))} unidades",
+                    "deficit_u": -int(round(stock_disp)),
                 })
             elif deficit_v > 0:
                 alertas.append({
@@ -1422,6 +1428,8 @@ def _post_procesar(
                     "mensaje": f"Stock {stock_real} u excede cap. bodega ({exceso_v} u sobre cap)",
                     "deficit_u": exceso_v,
                 })
+
+            stock_prev_disp = stock_real   # (03-08) cierre de hoy = inicio de manana
 
     # ─── Detalle diario y encabezado por SKU (dashboard plan-consistente) ─────
     # (11-07) Fuente ÚNICA para la pestaña Stock Diario. Todo en UNIDADES, sin
@@ -1463,8 +1471,13 @@ def _post_procesar(
             pedidos_crudos_d = float(pcrudo_s.get(d, 0.0)) * upc
             ss_d = calcular_ss_diario(fc_ext_s, d, ss_dias)    # SS cobertura (fórmula nueva)
 
-            # estado contra SS nuevo y quiebre real
-            if stock_real < 0:
+            # (03-08) Quiebre INTRADIA: la demanda del dia se sirve con el stock
+            # al INICIO del dia (stock_prev_disp), NO con el cierre (stock_real,
+            # que ya incluye la produccion del mismo dia -> entra al cierre, se ve
+            # en D+1). stock_disp = piso del dia; es lo que grafica la curva
+            # "Stock disponible" y define el estado QUIEBRE.
+            stock_disp = stock_prev_disp - consumo_d
+            if stock_disp < 0:
                 estado = "QUIEBRE"
             elif ss_d > 0 and stock_real < ss_d:
                 estado = "BAJO_SS"
@@ -1475,6 +1488,7 @@ def _post_procesar(
             entrada_apr_d = _entradas_del_dia(s, d, _ea)  # (13-07) para recalculo live
             serie[d_iso] = {
                 "stock_ini_disp_u": int(round(stock_prev_disp)),
+                "stock_disp_u": int(round(stock_disp)),
                 "entrada_aprobada_u": int(round(entrada_apr_d)),
                 "pedidos_u": int(round(pedidos_d)),
                 "pedidos_crudos_u": int(round(pedidos_crudos_d)),
