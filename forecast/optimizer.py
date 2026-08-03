@@ -198,15 +198,15 @@ GRANEL_MODOS = ("ketchup", "mostaza")
 # reanudar el mismo SKU dentro de la semana). Estructural, no ponderada: la
 # agrupacion se resuelve ANTES que la desviacion de SS, no compite con ella.
 # Ver DISENO_SECUENCIACION.md
-SECUENCIA_CONTIG_SKU = os.getenv("SECUENCIA_CONTIG_SKU", "0") == "1"
-SECUENCIA_CONTIG_LINEAS = os.getenv("SECUENCIA_CONTIG_LINEAS", "")   # vacio = todas
-SECUENCIA_MAX_BLOQUES = int(os.getenv("SECUENCIA_MAX_BLOQUES", "1") or 1)
+SECUENCIA_CONTIG_SKU = _os.environ.get("SECUENCIA_CONTIG_SKU", "0") == "1"
+SECUENCIA_CONTIG_LINEAS = _os.environ.get("SECUENCIA_CONTIG_LINEAS", "")   # vacio = todas
+SECUENCIA_MAX_BLOQUES = int(_os.environ.get("SECUENCIA_MAX_BLOQUES", "1") or 1)
 # Contiguidad por NIVEL de agrupacion (el caso importante): el grupo se produce
 # en UN bloque contiguo por semana. "embalaje" usa u_por_caja; "granel" usa
 # granel_grupo. Un cambio de embalaje (reconfigurar encajonadora) es mucho mas
 # caro que reanudar el mismo SKU, por eso este nivel pesa mas que la contiguidad
 # por SKU. Lista separada por comas, vacio = apagado.
-SECUENCIA_CONTIG_NIVELES = os.getenv("SECUENCIA_CONTIG_NIVELES", "")
+SECUENCIA_CONTIG_NIVELES = _os.environ.get("SECUENCIA_CONTIG_NIVELES", "")
 
 # Campana de FORMATO por linea (Caso 2). Independiente del granel para poder
 # medir su efecto por separado. v1 = SOLO PINS: las semanas sin pin las decide
