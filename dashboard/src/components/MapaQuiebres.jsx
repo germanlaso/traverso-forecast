@@ -12,6 +12,7 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import axios from "axios";
+import ProyeccionModal from "./ProyeccionModal";
 
 const API = "";
 
@@ -43,9 +44,15 @@ export default function MapaQuiebres({ onOpenSku }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [filtro, setFiltro] = useState("todos");
+  // (04-08) Por defecto "solo quiebre": es lo que se revisa primero en la
+  // reunion de produccion. Los otros niveles quedan a un clic.
+  const [filtro, setFiltro] = useState("quiebre");
   const [colapsadas, setColapsadas] = useState({}); // codigo -> true si colapsada
   const [celda, setCelda] = useState(null);         // {sku, wk} abierto (drill-down)
+  // (04-08) El clic en el SKU abre el modal de stock AQUI MISMO, en vez de
+  // navegar a la pestana Stock Diario: revisando el mapa no se pierde el
+  // contexto ni el scroll.
+  const [modalSku, setModalSku] = useState(null);  // {sku, descripcion} | null
 
   useEffect(() => {
     let vivo = true;
@@ -66,11 +73,17 @@ export default function MapaQuiebres({ onOpenSku }) {
     return data.lineas
       .map((ln) => {
         const skus = ln.skus.filter((s) => s.peor_sev >= minSev);
-        const res = { n_skus: skus.length, n_quiebre: 0, n_riesgo: 0, n_bajo_ss: 0 };
+        const res = { n_skus: skus.length, n_quiebre: 0, n_riesgo: 0, n_bajo_ss: 0,
+                      n_dias_quiebre: 0 };
         skus.forEach((s) => {
           if (s.peor_sev === 3) res.n_quiebre++;
           else if (s.peor_sev === 2) res.n_riesgo++;
           else if (s.peor_sev === 1) res.n_bajo_ss++;
+          // (04-08) dias-SKU en quiebre: n_quiebre cuenta SKU distintos y no
+          // dice cuanto duran los quiebres. Un SKU con 12 dias caidos y otro
+          // con 1 pesan igual en ese conteo.
+          res.n_dias_quiebre += Object.values(s.dias || {})
+            .filter((d) => d && d.sev === 3).length;
         });
         return { ...ln, skus, resumen: res };
       })
@@ -159,9 +172,10 @@ export default function MapaQuiebres({ onOpenSku }) {
               )}
               <span style={{ fontSize: 12, color: "#999" }}>{ln.resumen.n_skus} SKU</span>
               <div style={{ display: "flex", gap: 5, marginLeft: "auto" }}>
-                {ln.resumen.n_quiebre > 0 && <Pill n={ln.resumen.n_quiebre} sev={3} />}
-                {ln.resumen.n_riesgo > 0 && <Pill n={ln.resumen.n_riesgo} sev={2} />}
-                {ln.resumen.n_bajo_ss > 0 && <Pill n={ln.resumen.n_bajo_ss} sev={1} />}
+                {ln.resumen.n_quiebre > 0 && <Pill n={ln.resumen.n_quiebre} sev={3} txt="SKU con quiebre" />}
+                {ln.resumen.n_dias_quiebre > 0 && <Pill n={ln.resumen.n_dias_quiebre} sev={3} txt="días quiebre" hueco />}
+                {ln.resumen.n_riesgo > 0 && <Pill n={ln.resumen.n_riesgo} sev={2} txt="SKU en riesgo" />}
+                {ln.resumen.n_bajo_ss > 0 && <Pill n={ln.resumen.n_bajo_ss} sev={1} txt="SKU bajo SS" />}
               </div>
             </div>
 
@@ -174,7 +188,7 @@ export default function MapaQuiebres({ onOpenSku }) {
                     semanas={semanas}
                     celda={celda}
                     onToggleCelda={toggleCelda}
-                    onOpenSku={onOpenSku}
+                    onOpenSku={(sk) => setModalSku({ sku: sk, descripcion: s.descripcion || "" })}
                   />
                 ))}
               </div>
@@ -184,17 +198,30 @@ export default function MapaQuiebres({ onOpenSku }) {
       })}
 
       <Leyenda />
+
+      {modalSku && (
+        <ProyeccionModal
+          sku={modalSku.sku}
+          descripcion={modalSku.descripcion}
+          onClose={() => setModalSku(null)}
+        />
+      )}
     </div>
   );
 }
 
-function Pill({ n, sev }) {
+function Pill({ n, sev, txt, hueco }) {
   const c = COLORS[sev];
+  const label = txt || NIV[sev].toLowerCase();
+  // `hueco`: mismo color pero sin relleno, para que "dias quiebre" no compita
+  // visualmente con "SKU con quiebre" siendo la misma severidad.
   return (
     <span style={{
       fontSize: 12, fontWeight: 600, padding: "1px 8px", borderRadius: 10,
-      background: c.bg === "transparent" ? "#eee" : c.bg, color: c.fg,
-    }}>{n} {NIV[sev].toLowerCase()}</span>
+      background: hueco ? "transparent" : (c.bg === "transparent" ? "#eee" : c.bg),
+      color: hueco ? c.bd : c.fg,
+      border: hueco ? `1px solid ${c.bd}` : "none",
+    }}>{n} {label}</span>
   );
 }
 

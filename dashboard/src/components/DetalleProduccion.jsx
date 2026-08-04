@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import axios from "axios";
 import ProyeccionModal from "./ProyeccionModal";
+import MiniStock from "./MiniStock";
 
 const API = "";
 const C = {
@@ -183,12 +184,17 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,
                  display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{background:"#fff",borderRadius:12,padding:24,width:420,
+      <div style={{background:"#fff",borderRadius:12,padding:24,width:620,
+                   maxHeight:"92vh",overflowY:"auto",
                    boxShadow:"0 8px 32px rgba(0,0,0,.18)"}}>
         <div style={{fontSize:14,fontWeight:700,color:C.tealMid,marginBottom:4}}>Editar orden aprobada</div>
-        <div style={{fontSize:11,color:C.textMuted,marginBottom:16}}>
+        <div style={{fontSize:11,color:C.textMuted,marginBottom:12}}>
           {orden.numero_of} · {orden.sku} · {orden.descripcion?.slice(0,45)}
         </div>
+        {/* (04-08) Grafico de stock a la vista: el operador decide cantidad y
+            fecha viendo la curva. La linea vertical marca la fecha de ENTRADA
+            elegida, que es cuando el stock sube (no la de lanzamiento). */}
+        <MiniStock sku={orden.sku} fechaFoco={fechaEnt} labelFoco="entrada"/>
         {[
           ["Cantidad real (cj)",<input type="number" value={cantReal} onChange={e=>setCantReal(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`1.5px solid ${C.teal}`,outline:"none"}}/>],
@@ -269,12 +275,15 @@ function ModalCrearOF({linea,skusCandidatos,descBySku,params,capDiaU,capUsadaByF
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,
                  display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{background:"#fff",borderRadius:12,padding:24,width:440,
+      <div style={{background:"#fff",borderRadius:12,padding:24,width:620,
+                   maxHeight:"92vh",overflowY:"auto",
                    boxShadow:"0 8px 32px rgba(0,0,0,.18)"}}>
         <div style={{fontSize:14,fontWeight:700,color:C.tealMid,marginBottom:4}}>Crear OF manual</div>
-        <div style={{fontSize:11,color:C.textMuted,marginBottom:16}}>
+        <div style={{fontSize:11,color:C.textMuted,marginBottom:12}}>
           Línea {linea.codigo} — {linea.nombre} · queda aprobada al crearse
         </div>
+        {/* (04-08) El grafico se actualiza al cambiar de SKU en el selector. */}
+        <MiniStock sku={sku} fechaFoco={fecha} labelFoco="lanzamiento"/>
 
         <div style={{marginBottom:10}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
