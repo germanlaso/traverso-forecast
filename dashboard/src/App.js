@@ -1075,7 +1075,16 @@ export default function App() {
                   cuando la produccion entra al stock (no la de lanzamiento). */}
               <MiniStock sku={modalOrden.sku}
                          fechaFoco={aprobForm.fecha_entrada_real || modalOrden.fecha_entrada_real || modalOrden.semana_necesidad}
-                         labelFoco="entrada"/>
+                         labelFoco="entrada"
+                         simular={{
+                           fecha:aprobForm.fecha_entrada_real,
+                           cantidadCj:Number(aprobForm.cantidad_real_cj)||0,
+                           // La OFT propuesta ya viene incluida en la curva del
+                           // backend con su cantidad sugerida: aprobar la
+                           // REEMPLAZA, no la suma.
+                           fechaOriginal:String(modalOrden.fecha_entrada_real||modalOrden.semana_necesidad||"").slice(0,10),
+                           reemplazaCj:Number(modalOrden.cantidad_cajas)||0,
+                         }}/>
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12,padding:'10px 14px',background:C.grayLt,borderRadius:8,fontSize:12}}>
                 <span style={{color:C.textMuted}}>Tipo: <strong style={{color:C.text}}>{modalOrden.tipo}</strong></span>
                 <span style={{color:C.textMuted}}>Línea: <strong style={{color:C.text}}>{modalOrden.linea||'—'}</strong></span>

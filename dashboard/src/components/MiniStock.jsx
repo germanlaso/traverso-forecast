@@ -10,9 +10,22 @@
 // (/plan/proyeccion_diaria_live/{sku}), así que no introduce otra fuente de
 // verdad: el backend calcula, el front sólo dibuja.
 //
-// Aporte clave sobre el gráfico grande: marca con una línea vertical la FECHA
-// que el operador está eligiendo en el formulario, de modo que se vea si la
-// entrada llega antes o después del quiebre.
+// Dos aportes sobre el gráfico grande:
+//  1. Marca con una línea vertical la FECHA que el operador está eligiendo.
+//  2. SIMULACIÓN en vivo (prop `simular`): dibuja una segunda curva punteada con
+//     el efecto de la cantidad y fecha que se están tipeando, y compara el piso y
+//     los días en quiebre contra el plan actual.
+//
+// Sobre la simulación y el principio "el stock lo calcula el backend": la curva
+// del backend se dibuja SIEMPRE y sin tocar. La simulada es un desplazamiento
+// vertical desde la fecha de entrada hacia adelante — aritmética de arrastre, no
+// lógica de negocio — y se muestra punteada y rotulada como proyección del
+// formulario, no como verdad. No sustituye el recálculo del backend, que llega
+// cuando la OF se guarda.
+//
+// LIMITACIÓN conocida: la simulación ignora cap_bodega y los mínimos de lote, así
+// que puede mostrar un stock que el optimizador no permitiría. Sirve para decidir
+// cantidad y fecha, no para validar factibilidad.
 
 import { useEffect, useState } from "react";
 import axios from "axios";
@@ -50,6 +63,11 @@ function TT({ active, payload, label }) {
       {p.prod > 0 && row("+ Producción", p.prod, C.amber)}
       {p.stock != null && row("= Stock final", p.stock, C.textMuted)}
       {p.ss > 0 && row("Stock seguridad", p.ss, C.amber)}
+      {p.sim_disp != null && (
+        <div style={{ borderTop: `0.5px solid ${C.grayMid}`, marginTop: 4, paddingTop: 4 }}>
+          {row("Con tu cambio", p.sim_disp, p.sim_disp < 0 ? C.red : C.purple, true)}
+        </div>
+      )}
     </div>
   );
 }
@@ -60,8 +78,16 @@ function TT({ active, payload, label }) {
  *                     operador está eligiendo). Opcional.
  * @param labelFoco    texto de la marca (ej. "entrada")
  * @param alto         altura del gráfico en px (default 180)
+ * @param simular      { fecha, cantidadCj, fechaOriginal, reemplazaCj } | null
+ *                     fecha/cantidadCj: lo que el operador está ingresando (la
+ *                     fecha es la de ENTRADA al stock, no la de lanzamiento).
+ *                     fechaOriginal/reemplazaCj: la OF que este cambio REEMPLAZA
+ *                     y que ya viene incluida en la curva del backend (la OFT
+ *                     propuesta al aprobar, o la aprobación previa al editar).
+ *                     En creación se omiten, porque no hay nada que reemplazar.
  */
-export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto = 180 }) {
+export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto = 180,
+                                    simular = null }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState(null);
   const [cargando, setCargando] = useState(true);
@@ -96,9 +122,35 @@ export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto 
     prod: (x.oft_cajas || 0) + (x.entrada_aprobada_u ? x.entrada_aprobada_u / upc : 0),
   }));
 
+  // ── Simulación: desplazamiento vertical desde la fecha de entrada ──────────
+  // La producción está disponible EN la fecha de entrada, así que el ajuste
+  // aplica desde ese día INCLUSIVE. Se resta primero lo que el cambio reemplaza
+  // (si ya está en la curva) y se suma la cantidad nueva.
+  const iso10 = (x) => (x ? String(x).slice(0, 10) : null);
+  const simFecha = iso10(simular?.fecha);
+  const simCant = Number(simular?.cantidadCj) || 0;
+  const simFechaOrig = iso10(simular?.fechaOriginal);
+  const simReemp = Number(simular?.reemplazaCj) || 0;
+  const haySim = !!(simular && (simCant > 0 || simReemp > 0)
+                    && (simFecha !== simFechaOrig || simCant !== simReemp));
+
+  if (haySim) {
+    const ajuste = {};
+    if (simFechaOrig && simReemp) ajuste[simFechaOrig] = (ajuste[simFechaOrig] || 0) - simReemp;
+    if (simFecha && simCant) ajuste[simFecha] = (ajuste[simFecha] || 0) + simCant;
+    let acum = 0;
+    serie.forEach((x) => {
+      acum += ajuste[x.iso] || 0;
+      x.sim_disp = (x.stock_disp ?? 0) + acum;
+      x.sim_delta = acum;
+    });
+  }
+
   // KPIs mínimos: el piso del horizonte y cuántos días quedan en quiebre.
   const minDisp = Math.min(...serie.map((x) => x.stock_disp ?? 0));
   const nQuiebre = serie.filter((x) => (x.stock_disp ?? 0) < 0).length;
+  const minSim = haySim ? Math.min(...serie.map((x) => x.sim_disp ?? 0)) : null;
+  const nQuiebreSim = haySim ? serie.filter((x) => (x.sim_disp ?? 0) < 0).length : null;
   const focoEje = fechaFoco
     ? (serie.find((x) => x.iso === String(fechaFoco).slice(0, 10))?.fecha ?? null)
     : null;
@@ -111,9 +163,21 @@ export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto 
         <span>Stock proyectado (cajas) · <b style={{ color: C.text }}>{sku}</b></span>
         <span>
           piso <b style={{ color: minDisp < 0 ? C.red : C.text }}>{fmt(minDisp)}</b>
-          {nQuiebre > 0 && (
-            <span style={{ color: C.red, fontWeight: 600 }}> · {nQuiebre} d en quiebre</span>
+          {haySim && (
+            <>
+              {" \u2192 "}
+              <b style={{ color: minSim < 0 ? C.red : C.teal }}>{fmt(minSim)}</b>
+            </>
           )}
+          {" · "}
+          <b style={{ color: nQuiebre > 0 ? C.red : C.text }}>{nQuiebre}</b>
+          {haySim && (
+            <>
+              {"\u2192"}
+              <b style={{ color: nQuiebreSim > 0 ? C.red : C.teal }}>{nQuiebreSim}</b>
+            </>
+          )}
+          {" d en quiebre"}
         </span>
       </div>
       <ResponsiveContainer width="100%" height={alto}>
@@ -133,10 +197,15 @@ export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto 
                 strokeDasharray="4 3" dot={false} />
           <Line type="monotone" dataKey="stock_disp" name="Stock disponible" stroke={C.blue}
                 strokeWidth={1.8} dot={false} />
+          {haySim && (
+            <Line type="monotone" dataKey="sim_disp" name="Con tu cambio" stroke={C.purple}
+                  strokeWidth={2} strokeDasharray="5 3" dot={false} />
+          )}
         </ComposedChart>
       </ResponsiveContainer>
       <div style={{ display: "flex", gap: 12, fontSize: 9.5, color: C.textMuted, paddingBottom: 4 }}>
         <Lg c={C.blue} t="Stock disponible" />
+        {haySim && <Lg c={C.purple} t="Con tu cambio (simulado)" />}
         <Lg c={C.amber} t="SS" />
         <Lg c={C.amber} t="Producción" />
         <Lg c={C.grayMid} t="Demanda" />

@@ -194,7 +194,14 @@ function ModalEditar({orden,aprobacion,onGuardar,onCancelarAprobacion,onCerrar})
         {/* (04-08) Grafico de stock a la vista: el operador decide cantidad y
             fecha viendo la curva. La linea vertical marca la fecha de ENTRADA
             elegida, que es cuando el stock sube (no la de lanzamiento). */}
-        <MiniStock sku={orden.sku} fechaFoco={fechaEnt} labelFoco="entrada"/>
+        <MiniStock sku={orden.sku} fechaFoco={fechaEnt} labelFoco="entrada"
+          simular={{
+            fecha:fechaEnt, cantidadCj:Number(cantReal)||0,
+            // Lo que este cambio REEMPLAZA y ya viene en la curva del backend:
+            // la aprobacion vigente si existe, o la OFT propuesta del plan.
+            fechaOriginal:String(aprobacion?.fecha_entrada_real||orden?.fecha_entrada_real||orden?.semana_necesidad||"").slice(0,10),
+            reemplazaCj:Number(aprobacion?.cantidad_real_cj??orden?.cantidad_cajas??0),
+          }}/>
         {[
           ["Cantidad real (cj)",<input type="number" value={cantReal} onChange={e=>setCantReal(e.target.value)}
             style={{width:"100%",fontSize:13,padding:"6px 10px",borderRadius:7,border:`1.5px solid ${C.teal}`,outline:"none"}}/>],
@@ -246,6 +253,17 @@ function ModalCrearOF({linea,skusCandidatos,descBySku,params,capDiaU,capUsadaByF
 
   const upj=params[sku]?.upj??1;
   const fv=params[sku]?.factor_velocidad??1;
+  // (04-08) Fecha en que la produccion ENTRA al stock: lanzamiento + lead_time.
+  // Es la fecha relevante para el grafico (la produccion del dia D entra al
+  // cierre y se ve en D+lt), no la de lanzamiento.
+  const ltDias=Math.max(1,Math.round((params[sku]?.lead_time_sem??(1/7))*7));
+  const fechaEntradaSim=(()=>{
+    if(!fecha) return "";
+    const [y,mm,dd]=fecha.split("-").map(Number);
+    const d=new Date(y,mm-1,dd); d.setDate(d.getDate()+ltDias);
+    const p2=n=>String(n).padStart(2,"0");
+    return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+  })();
   const usadaFrac=capUsadaByFecha?.[fecha]??0;
   // Capacidad libre del día en unidades "de capacidad" (equivalente a fv=1).
   const libreCapU=Math.max(0,capDiaU*(1-usadaFrac));
@@ -282,8 +300,12 @@ function ModalCrearOF({linea,skusCandidatos,descBySku,params,capDiaU,capUsadaByF
         <div style={{fontSize:11,color:C.textMuted,marginBottom:12}}>
           Línea {linea.codigo} — {linea.nombre} · queda aprobada al crearse
         </div>
-        {/* (04-08) El grafico se actualiza al cambiar de SKU en el selector. */}
-        <MiniStock sku={sku} fechaFoco={fecha} labelFoco="lanzamiento"/>
+        {/* (04-08) El grafico se actualiza al cambiar de SKU y simula en vivo la
+            cantidad tipeada. La OF nueva no reemplaza nada (no existe todavia),
+            asi que solo se suma. Se simula en la fecha de ENTRADA = lanzamiento +
+            lead_time, porque es cuando el stock sube. */}
+        <MiniStock sku={sku} fechaFoco={fechaEntradaSim} labelFoco="entrada"
+          simular={{ fecha:fechaEntradaSim, cantidadCj:Number(cantidad)||0 }}/>
 
         <div style={{marginBottom:10}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
