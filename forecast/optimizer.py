@@ -534,7 +534,10 @@ def optimizar_plan_v12_rich(
     if cotas_qstar:
         _n_barrera = 0
         _n_relajadas = 0
-        for (d, s), var in m.stock_u.items():
+        # (04-08) La cota va sobre la MISMA variable que juzga el quiebre. Si el
+        # criterio es intradia, acotar el cierre no impide que C hunda el piso.
+        _vars_barrera = m.stock_disp if QUIEBRE_INTRADIA_SOLVER else m.stock_u
+        for (d, s), var in _vars_barrera.items():
             q = cotas_qstar.get((s, d.isoformat()))
             if q is None:
                 continue
@@ -546,7 +549,9 @@ def optimizar_plan_v12_rich(
                 q_eff = int(q)
             m.model.Add(var >= q_eff)
             _n_barrera += 1
-        logger.info(f"[N2] barrera Q* modo={_modo_barrera}: {_n_barrera} cotas agregadas"
+        logger.info(f"[N2] barrera Q* modo={_modo_barrera} sobre="
+                    f"{'stock_disp' if QUIEBRE_INTRADIA_SOLVER else 'stock_fin'}"
+                    f": {_n_barrera} cotas agregadas"
                     + (f" ({_n_relajadas} relajadas a 0 -> C puede reducir producción)"
                        if _modo_barrera == "quiebre" else ""))
 
@@ -1796,12 +1801,26 @@ def _post_procesar(
 # A=C=280 dias-SKU, -641 colchon). Salva/restaura los globals del modulo.
 
 def _build_qstar(resultado: dict) -> tuple[dict, int]:
-    """Q*[(sku, dia_iso)] = stock_fin_u (crudo, sin clamp, ya int en detalle_diario)."""
+    """Q*[(sku, dia_iso)] = piso del dia, crudo y sin clamp.
+
+    (04-08) La variable DEBE ser la misma sobre la que el modelo juzga el quiebre,
+    o A y la barrera hablan de cosas distintas: A minimizaria quiebres intradia y
+    la barrera protegeria el cierre, dejando a C libre para hundir el piso sin
+    violar ninguna cota. Medido en el plan #111: A dio Q*=58 inevitables y el plan
+    final salio con 94 quiebres, 36 de ellos evitables segun A.
+
+    Con QUIEBRE_INTRADIA_SOLVER=1 se usa stock_disp_u (inicio del dia menos la
+    demanda del dia); si no, stock_fin_u como antes. Fallback a stock_fin_u para
+    snapshots viejos que no traen el campo.
+    """
     det = (resultado or {}).get("detalle_diario") or {}
+    campo = "stock_disp_u" if QUIEBRE_INTRADIA_SOLVER else "stock_fin_u"
     q, n_neg = {}, 0
     for s, celdas in det.items():
         for d_iso, c in celdas.items():
-            v = c.get("stock_fin_u")
+            v = c.get(campo)
+            if v is None:
+                v = c.get("stock_fin_u")
             if v is not None:
                 q[(s, d_iso)] = int(v)
                 if v < 0:
