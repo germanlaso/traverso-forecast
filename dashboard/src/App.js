@@ -9,6 +9,7 @@ import Faltantes from './components/Faltantes';
 import ParametrosDiagnostico from './components/ParametrosDiagnostico';
 import Campanas from './components/Campanas';
 import MapaQuiebres from './components/MapaQuiebres';
+import MiniStock from './components/MiniStock';
 
 const API = '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -1063,11 +1064,18 @@ export default function App() {
         {/* ══ MODAL APROBACIÓN ══ */}
         {modalOrden && (
           <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,.45)',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}}>
-            <div style={{background:'#fff',borderRadius:12,padding:'24px 28px',width:480,maxWidth:'95vw',boxShadow:'0 8px 32px rgba(0,0,0,.18)'}}>
+            <div style={{background:'#fff',borderRadius:12,padding:'24px 28px',width:640,maxWidth:'95vw',maxHeight:'92vh',overflowY:'auto',boxShadow:'0 8px 32px rgba(0,0,0,.18)'}}>
               <div style={{fontWeight:700,fontSize:15,color:C.text,marginBottom:4}}>Aprobar orden de producción</div>
-              <div style={{fontSize:12,color:C.textMuted,marginBottom:16}}>
+              <div style={{fontSize:12,color:C.textMuted,marginBottom:12}}>
                 {modalOrden.sku} — {modalOrden.descripcion}
               </div>
+              {/* (04-08) Stock a la vista al aprobar: la cantidad y la fecha se
+                  deciden mirando la curva, sin cambiar de pantalla. La linea
+                  vertical sigue el campo "Fecha entrada stock real", que es
+                  cuando la produccion entra al stock (no la de lanzamiento). */}
+              <MiniStock sku={modalOrden.sku}
+                         fechaFoco={aprobForm.fecha_entrada_real || modalOrden.fecha_entrada_real || modalOrden.semana_necesidad}
+                         labelFoco="entrada"/>
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:12,padding:'10px 14px',background:C.grayLt,borderRadius:8,fontSize:12}}>
                 <span style={{color:C.textMuted}}>Tipo: <strong style={{color:C.text}}>{modalOrden.tipo}</strong></span>
                 <span style={{color:C.textMuted}}>Línea: <strong style={{color:C.text}}>{modalOrden.linea||'—'}</strong></span>
