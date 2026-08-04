@@ -71,10 +71,16 @@ BRAZOS = {
 }
 
 # Config N2 de produccion (la misma del crontab) para que sea comparable.
+# (04-08) QUIEBRE_INTRADIA_SOLVER=1 en TODOS los brazos: la Etapa 2 pasa a ser la
+# linea base, asi que la contiguidad debe medirse SOBRE ella. Los brazos de la
+# corrida del 03-08 no sirven de referencia por dos motivos: corrieron con el
+# criterio viejo y con el escape de `asig` fantasma sin cerrar (el solver
+# satisfacia la contiguidad sin producir), asi que subestiman su efecto.
 ENV_BASE = {
     "N2_ENABLED": "1", "SS_COBERTURA": "1", "N2_BARRERA_MODO": "quiebre",
     "N2_WORKERS_C": "8", "N2_TL_C": "3600",
     "CAMPANA_GRANEL_ENABLED": "1", "CAMPANA_FORMATO_ENABLED": "1",
+    "QUIEBRE_INTRADIA_SOLVER": "1",
 }
 
 
@@ -143,6 +149,25 @@ def metricas(linea_foco: str) -> dict:
         fams = [(gg.get(sk, "").split("_")[0] or "?") for _f, sk, _e in lst]
         cf += sum(1 for a, b in zip(fams, fams[1:]) if a != b)
     out["camb_fam"] = cf
+
+    # (04-08) HUECOS: la metrica correcta. camb_emb ordena por (fecha,sku) y dentro
+    # del dia de transicion mezcla embalajes, inflando el conteo. Un hueco es que
+    # los dias de un grupo NO sean consecutivos (saltando fines de semana): eso es
+    # lo que la contiguidad prohibe y no se puede arreglar reordenando.
+    dias_g = {1: {}, 2: {}}
+    for lun, lst in porsem.items():
+        for f, sk, e in lst:
+            fam = (gg.get(sk, "").split("_")[0] or "?")
+            for niv, clave in ((1, (e,)), (2, (e, fam))):
+                dias_g[niv].setdefault((lun, clave), set()).add(f)
+    for niv in (1, 2):
+        n = 0
+        for _k, ds in dias_g[niv].items():
+            idx = sorted(dt.date.fromisoformat(x).toordinal() for x in ds)
+            n += sum(1 for a, b in zip(idx, idx[1:])
+                     if b - a > 1 and not any(
+                         dt.date.fromordinal(x).weekday() >= 5 for x in range(a + 1, b)))
+        out["huecos_emb" if niv == 1 else "huecos_ef"] = n
 
     # quiebres y SS (criterio intradia: estado ya viene con el fix del 03-08)
     q = bajo = exc = 0
@@ -222,7 +247,8 @@ def main() -> int:
     print("=" * 78)
     print("RESUMEN")
     print("=" * 78)
-    campos = ["camb_emb", "min_emb", "camb_fam", "batches", "ratio", "quiebres", "bajo_ss", "exceso_ss", "min"]
+    campos = ["huecos_emb", "huecos_ef", "camb_emb", "batches", "ratio",
+              "quiebres", "bajo_ss", "exceso_ss", "min"]
     print(f"{'brazo':<12}{'n':>3}" + "".join(f"{c:>12}" for c in campos))
     med = {}
     for b in brazos:
@@ -246,12 +272,14 @@ def main() -> int:
         a, b = med["A_base"], med[_ob]
         print()
         print(f"### {_ob} vs A_base ###")
-        for c in ["camb_emb", "camb_fam", "batches", "ratio", "quiebres", "bajo_ss", "exceso_ss"]:
+        for c in ["huecos_emb", "huecos_ef", "camb_emb", "batches", "ratio",
+                  "quiebres", "bajo_ss", "exceso_ss"]:
             d = b[c] - a[c]
             print(f"  {c:<12} {a[c]:>8g} -> {b[c]:>8g}   ({d:+g})")
         print()
         print("  Como leerlo:")
-        print("   · camb_emb es LA metrica: debe caer hacia min_emb (1 por semana).")
+        print("   · huecos_emb y huecos_ef son LA metrica: deben ser 0 con la")
+        print("     restriccion activa. Si no, hay un escape en la formulacion.")
         print("   · exceso_ss va a SUBIR: es el costo esperado de concentrar produccion.")
         print("   · quiebres: si suben, ver la DISTRIBUCION temporal antes de concluir.")
         print("     Concentrados en las primeras 2-3 semanas = transicion (se agotan).")
