@@ -208,6 +208,21 @@ SECUENCIA_MAX_BLOQUES = int(_os.environ.get("SECUENCIA_MAX_BLOQUES", "1") or 1)
 # por SKU. Lista separada por comas, vacio = apagado.
 SECUENCIA_CONTIG_NIVELES = _os.environ.get("SECUENCIA_CONTIG_NIVELES", "")
 
+# ── Quiebre INTRADIA en el SOLVER (04-08-2026 · Etapa 2) ─────────────────────
+# La Etapa 1 (03-08) corrigio solo el REPORTE: `estado` y las alertas pasaron a
+# evaluarse sobre el stock al INICIO del dia. El solver siguio con el criterio
+# viejo (stock de CIERRE), asi que cree que producir el dia D cubre la demanda de
+# D -> su optimo es llegar a D con stock 0 y producir ese dia. Operacionalmente
+# eso es un dia TARDE: la produccion de D entra al cierre y se ve en D+1.
+# Medido en el plan #109: el patron se repite en decenas de SKU.
+#
+# Con el flag, el QUIEBRE y el DEFICIT vs SS se evaluan sobre `stock_disp` (stock
+# al inicio del dia menos la demanda del dia, ANTES de la produccion del dia).
+# El EXCESO sigue sobre el cierre `stock_u`, que es donde esta el pico real de
+# inventario. Regla: lo que mide "¿tengo suficiente?" va sobre el disponible; lo
+# que mide "¿tengo demasiado?" va sobre el cierre.
+QUIEBRE_INTRADIA_SOLVER = _os.environ.get("QUIEBRE_INTRADIA_SOLVER", "0") == "1"
+
 # Campana de FORMATO por linea (Caso 2). Independiente del granel para poder
 # medir su efecto por separado. v1 = SOLO PINS: las semanas sin pin las decide
 # el solver sin penalizacion de cambio (no forzamos campana en todo el horizonte,
@@ -298,6 +313,10 @@ class _ModeloCPSAT:
         self.pares_sku_linea: dict[str, list[str]] = {}
         self.u_por_caja: dict[str, int] = {}                            # cache
         self.setup_u: dict[tuple[str, str], int] = {}                   # cache (u eqv. línea)
+        # (04-08) stock al INICIO del dia menos la demanda del dia, ANTES de la
+        # produccion de ese dia. Es el piso real del dia y la base correcta del
+        # criterio de quiebre. Ver QUIEBRE_INTRADIA_SOLVER.
+        self.stock_disp: dict[tuple[date, str], cp_model.IntVar] = {}
         self.factor: dict[tuple[str, str], float] = {}                  # cache factor_velocidad
 
 
@@ -714,6 +733,8 @@ def _construir_modelo(
             stock_high = 2 * cap_bodega
             big_ub = 100 * cap_bodega
             m.stock_u[(d, s)] = m.model.NewIntVar(stock_low, stock_high, f"stock_{d_idx}_{s}")
+            m.stock_disp[(d, s)] = m.model.NewIntVar(stock_low, stock_high,
+                                                    f"stockdisp_{d_idx}_{s}")
             m.deficit[(d, s)] = m.model.NewIntVar(0, big_ub, f"def_{d_idx}_{s}")
             m.exceso[(d, s)] = m.model.NewIntVar(0, big_ub, f"exc_{d_idx}_{s}")
             m.quiebre[(d, s)] = m.model.NewIntVar(0, big_ub, f"qbr_{d_idx}_{s}")
@@ -1206,16 +1227,25 @@ def _construir_modelo(
                 upc * m.cajas[(d, s, l)] for l in m.pares_sku_linea[s]
             )
 
+            # (04-08) Balance en DOS pasos. Algebraicamente identico al anterior
+            # (stock_u = prev + entrada - demanda + prod), pero expone el piso del
+            # dia: stock_disp = lo disponible tras servir la demanda y ANTES de la
+            # produccion de ese dia. La produccion entra al CIERRE.
             if d_idx == 0:
                 stock_prev_val = int(round(stock_inicial.get(s, 0)))
                 m.model.Add(
-                    m.stock_u[(d, s)] == stock_prev_val + prod_u_total_d + entrada_d - demanda_consumo_d
+                    m.stock_disp[(d, s)] == stock_prev_val + entrada_d - demanda_consumo_d
                 )
             else:
                 stock_prev = m.stock_u[(horizonte[d_idx - 1], s)]
                 m.model.Add(
-                    m.stock_u[(d, s)] == stock_prev + prod_u_total_d + entrada_d - demanda_consumo_d
+                    m.stock_disp[(d, s)] == stock_prev + entrada_d - demanda_consumo_d
                 )
+            m.model.Add(m.stock_u[(d, s)] == m.stock_disp[(d, s)] + prod_u_total_d)
+
+            # Variable sobre la que se juzga FALTA (quiebre / deficit vs SS).
+            # El EXCESO se sigue juzgando sobre el cierre (m.stock_u).
+            _v_falta = m.stock_disp[(d, s)] if QUIEBRE_INTRADIA_SOLVER else m.stock_u[(d, s)]
 
             # Déficit bajo SS (SS dinámico, en unidades)
             # V-OV: base = forecast SOLO (los pedidos NO inflan el SS; van al balance).
@@ -1230,9 +1260,9 @@ def _construir_modelo(
 
             # Compatibilidad: mantenemos deficit/exceso/quiebre ligados (post-proceso
             # y otras lecturas). El OBJETIVO usa los tramos en % del SS (abajo).
-            m.model.Add(m.deficit[(d, s)] >= ss_d - m.stock_u[(d, s)])
+            m.model.Add(m.deficit[(d, s)] >= ss_d - _v_falta)
             m.model.Add(m.exceso[(d, s)] >= m.stock_u[(d, s)] - cap_bodega)
-            m.model.Add(m.quiebre[(d, s)] >= -m.stock_u[(d, s)])  # V6.18: >0 solo si stock<0
+            m.model.Add(m.quiebre[(d, s)] >= -_v_falta)  # V6.18: >0 solo si stock<0
 
             big_ub_s = 100 * cap_bodega
 
@@ -1263,7 +1293,7 @@ def _construir_modelo(
                 # suma de tramos >= déficit total (ss_d - stock); >=0 implícito
                 m.model.Add(
                     m.def_leve[(d, s)] + m.def_grave[(d, s)] + m.qbr_mag[(d, s)]
-                    >= ss_d - m.stock_u[(d, s)]
+                    >= ss_d - _v_falta
                 )
 
                 # Exceso SOBRE SS descompuesto (leve 0..+100%, alto >+100%)
@@ -1302,7 +1332,7 @@ def _construir_modelo(
                 m.model.Add(m.exc_bodega[(d, s)] >= m.stock_u[(d, s)] - cap_bodega)
                 if demanda_consumo_d > 0:
                     m.qbr_mag[(d, s)] = m.model.NewIntVar(0, big_ub_s, f"qmg0_{d_idx}_{s}")
-                    m.model.Add(m.qbr_mag[(d, s)] >= -m.stock_u[(d, s)])
+                    m.model.Add(m.qbr_mag[(d, s)] >= -_v_falta)
                     m.coef_qbr_mag[(d, s)] = int(W_QBR_ABS * ESCALA_OBJ)
 
             # Una línea por SKU por día
