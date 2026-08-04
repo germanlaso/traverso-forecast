@@ -940,6 +940,7 @@ def _construir_modelo(
     if SECUENCIA_CONTIG_SKU:
         _lineas_c = {x.strip() for x in SECUENCIA_CONTIG_LINEAS.split(",") if x.strip()}
         _arranca: dict = {}
+        _prod_sku: dict = {}
         _n_ct = 0
         for d_idx, d in enumerate(horizonte):
             for s in skus:
@@ -948,14 +949,20 @@ def _construir_modelo(
                         continue
                     a = m.model.NewBoolVar(f"arranca_{d_idx}_{s}_{l}")
                     _arranca[(d, s, l)] = a
-                    # arranca = 1 si hoy produce y ayer no. Dia 0: se asume que
-                    # no venia produciendo (conservador).
-                    prev = m.asig[(horizonte[d_idx - 1], s, l)] if d_idx > 0 else None
+                    # (04-08 · FIX) mismo escape que en la contiguidad por nivel:
+                    # `asig` es permiso, no produccion. Se usa un indicador propio
+                    # ligado a las CAJAS.
+                    prod = m.model.NewBoolVar(f"prod_{d_idx}_{s}_{l}")
+                    _cap_s = (int(cap_dia.get((d, l), 0) or 0) + 1) * 2
+                    m.model.Add(m.cajas[(d, s, l)] <= _cap_s * prod)
+                    m.model.Add(prod <= m.cajas[(d, s, l)])
+                    _prod_sku[(d, s, l)] = prod
+                    prev = _prod_sku.get((horizonte[d_idx - 1], s, l)) if d_idx > 0 else None
                     if prev is None:
-                        m.model.Add(a >= m.asig[(d, s, l)])
+                        m.model.Add(a >= prod)
                     else:
-                        m.model.Add(a >= m.asig[(d, s, l)] - prev)
-                    m.model.Add(a <= m.asig[(d, s, l)])
+                        m.model.Add(a >= prod - prev)
+                    m.model.Add(a <= prod)
         # Un solo arranque por (SKU, linea, semana) -> un solo bloque contiguo,
         # que puede ocupar varios dias pero no reanudarse.
         _por_sem: dict = {}
@@ -1047,10 +1054,33 @@ def _construir_modelo(
                     for d_idx, d in enumerate(horizonte):
                         u = m.model.NewBoolVar(f"usa_{_nivel}_{d_idx}_{g}_{l}")
                         _usa[(d, g, l)] = u
-                        asigs = [m.asig[(d, x, l)] for x in skus_g]
-                        for a_ in asigs:
-                            m.model.Add(u >= a_)          # alguno produce -> usa=1
-                        m.model.Add(u <= sum(asigs))      # nadie produce -> usa=0
+                        # (04-08 · FIX) `usa` se liga a las CAJAS, no a `asig`.
+                        # asig es solo un PERMISO: la unica ligadura con la
+                        # produccion es `upc*cajas <= cap*asig` (linea ~777), asi
+                        # que asig=1 con cajas=0 es factible y GRATIS. Con la
+                        # version anterior el solver satisfacia la contiguidad
+                        # poniendo asig=1 en el dia del hueco sin producir nada:
+                        # cadena contigua en el modelo, hueco real en las OFTs.
+                        # Medido en el plan #113: (emb30, limon) produjo lun/mar/jue
+                        # de la semana del 31-08 saltando el miercoles habil.
+                        # Es el mismo patron que los "inicios fantasma" que motivaron
+                        # W_INICIO_SIMBOLICO. Ligando a cajas, `usa` refleja
+                        # produccion EFECTIVA y el escape desaparece.
+                        cajas_g = [m.cajas[(d, x, l)] for x in skus_g]
+                        # BIG: cota superior valida para la suma de cajas del grupo
+                        # ese dia. cap_dia esta en unidades y u_por_caja >= 1, asi
+                        # que cap_dia + 1 acota la suma en cajas con holgura. Se
+                        # evita leer el dominio de la variable (API interna de
+                        # OR-Tools, fragil entre versiones).
+                        # Cota CONSERVADORA: cada SKU aporta a lo sumo ~cap_dia
+                        # cajas (upc>=1), y la capacidad agregada admite sobrecarga
+                        # penalizada, asi que se multiplica por el nº de SKU del
+                        # grupo. Un BIG holgado relaja algo la propagacion, pero un
+                        # BIG invalido permitiria usa=0 CON produccion, que es
+                        # exactamente el escape que se esta cerrando.
+                        _big_g = (int(cap_dia.get((d, l), 0) or 0) + 1) * max(1, len(skus_g))
+                        m.model.Add(sum(cajas_g) <= _big_g * u)   # produce -> usa=1
+                        m.model.Add(u <= sum(cajas_g))            # no produce -> usa=0
                         a = m.model.NewBoolVar(f"arrg_{_nivel}_{d_idx}_{g}_{l}")
                         _arr[(d, g, l)] = a
                         prev = _usa.get((horizonte[d_idx - 1], g, l)) if d_idx > 0 else None
