@@ -91,17 +91,29 @@ export default function MapaQuiebres({ onOpenSku }) {
   }, [data, minSev]);
 
   const totales = useMemo(() => {
-    const t = { skus: 0, quiebre: 0, riesgo: 0, rp: 0 };
+    const t = { skus: 0, quiebre: 0, riesgo: 0, rp: 0, dias_quiebre: 0 };
     lineasVis.forEach((ln) =>
       ln.skus.forEach((s) => {
         t.skus++;
         if (s.peor_sev === 3) t.quiebre++;
         if (s.peor_sev === 2) t.riesgo++;
         if (s.recepcion_pendiente) t.rp++;
+        t.dias_quiebre += Object.values(s.dias || {}).filter((d) => d && d.sev === 3).length;
       })
     );
     return t;
   }, [lineasVis]);
+
+  // (04-08) La recepcion pendiente es un aviso de CALIDAD DE DATOS, no de
+  // severidad: hay que verlo siempre. Contarlo solo sobre los SKU visibles lo
+  // esconde cuando el filtro es "solo quiebre" (ahora el default), justo en el
+  // caso en que sirve: una OF lanzada que no se refleja en el stock puede
+  // significar tanto un quiebre falso como produccion sin registrar.
+  const rpTotal = useMemo(() => {
+    if (!data?.lineas) return 0;
+    return data.lineas.reduce(
+      (n, ln) => n + ln.skus.filter((s) => s.recepcion_pendiente).length, 0);
+  }, [data]);
 
   if (loading) return <div style={{ padding: 24, color: "#666" }}>Cargando mapa de quiebres…</div>;
   if (error) return <div style={{ padding: 24, color: "#B93636" }}>Error: {error}</div>;
@@ -134,11 +146,21 @@ export default function MapaQuiebres({ onOpenSku }) {
             </button>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 18, fontSize: 13, color: "#555" }}>
+        <div style={{ display: "flex", gap: 18, fontSize: 13, color: "#555", flexWrap: "wrap" }}>
           <span><b>{totales.skus}</b> SKU</span>
-          <span style={{ color: "#B93636" }}><b>{totales.quiebre}</b> quiebre</span>
-          <span style={{ color: "#B4790F" }}><b>{totales.riesgo}</b> riesgo</span>
-          <span><b>{totales.rp}</b> recepción pend.</span>
+          <span style={{ color: "#B93636" }}><b>{totales.quiebre}</b> SKU con quiebre</span>
+          {totales.dias_quiebre > 0 && (
+            <span style={{ color: "#B93636" }}><b>{totales.dias_quiebre}</b> días quiebre</span>
+          )}
+          <span style={{ color: "#B4790F" }}><b>{totales.riesgo}</b> en riesgo</span>
+          <span title="OF lanzada que no se refleja en el stock: el quiebre puede ser falso, o hay producción sin registrar">
+            <b>{rpTotal}</b> recepción pend.
+            {rpTotal > totales.rp && (
+              <span style={{ color: "#B4790F" }}>
+                {" "}({rpTotal - totales.rp} fuera del filtro)
+              </span>
+            )}
+          </span>
         </div>
       </div>
 
