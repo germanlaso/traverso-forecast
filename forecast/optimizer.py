@@ -86,7 +86,8 @@ W_ALT = 50         # penaliza usar línea alternativa (pasada A / N1)
 #   Sandwich buscado: por encima del deficit leve, muy por debajo del quiebre
 #   (coef_qbr_mag ~ 200.000 por 1% del SS).
 # K=0 (default) -> comportamiento IDENTICO al actual.
-W_ALT_C_K = int(_os.environ.get("W_ALT_C_K", "0") or 0)
+# (La lectura de la env var vive mas abajo, junto a las otras: aqui `_os` todavia
+# no esta importado.)
 W_INICIO_SIMBOLICO = 1   # v1.3 (R12): desempate para evitar inicios fantasma
                          # cuando la cota Σ inicio >= Σ asig - 1 deja al solver
                          # indiferente. NO subir por encima de 1 (recrearía
@@ -243,6 +244,10 @@ SECUENCIA_CONTIG_NIVELES = _os.environ.get("SECUENCIA_CONTIG_NIVELES", "")
 # La regla correcta es UNA SOLA TRANSICION POR PAR: con n grupos activos en la
 # semana se permiten n-1 dias con mas de un grupo. Con 2 embalajes -> 1 dia
 # compartido -> 1 cambio de embalaje por semana, que es el minimo posible.
+# Peso de linea alternativa en la pasada C, en unidades de ESCALA_OBJ.
+# Ver el bloque de comentarios de W_ALT. K=0 -> comportamiento identico al actual.
+W_ALT_C_K = int(_os.environ.get("W_ALT_C_K", "0") or 0)
+
 SECUENCIA_ORDEN_NIVELES = _os.environ.get("SECUENCIA_ORDEN_NIVELES", "")
 # Orden preferente DENTRO de un nivel, separado por comas. En familias el orden
 # es fijo (vinagre antes que limon); en embalajes es indiferente, asi que se deja
