@@ -87,7 +87,9 @@ function OrdenBadge({orden,esPreferida,estaAprobada,onClick,desc}){
         </div>
       )}
       <div style={{fontSize:8.5,color:esDesborde?C.red:C.tealMid,marginTop:1}}>
-        {fmtN(orden.uProduccion)} u · {fmtPct(orden.usoPct)}
+        {fmtN(orden.uProduccion)} u
+        {orden.cjProduccion!=null && ` · ${fmtN(orden.cjProduccion)} cj`}
+        {" · "}{fmtPct(orden.usoPct)}
       </div>
     </div>
   );
@@ -394,7 +396,10 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
   // Es la capacidad YA COMPROMETIDA: el optimizer no puede usarla (ver warning
   // V6.37 del cron: "(linea,dia) saturados solo por OFs aprobadas").
   const mapa={};const capUsada={};const capUsadaAprob={};
-  diasExt.forEach(d=>{mapa[d.fecha]=[];capUsada[d.fecha]=0;capUsadaAprob[d.fecha]=0;});
+  // (05-08) uAprobDia: unidades fisicas aprobadas por dia, para mostrarlas junto
+  // al % (el porcentaje solo no dice cuanto volumen hay comprometido).
+  const uAprobDia={};
+  diasExt.forEach(d=>{mapa[d.fecha]=[];capUsada[d.fecha]=0;capUsadaAprob[d.fecha]=0;uAprobDia[d.fecha]=0;});
 
   ordenesLinea.forEach(o=>{
     // v1.2: lookup por numero_of (estable). Si la orden está aprobada,
@@ -427,13 +432,17 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
       usoPct:Math.round(usoPctReal*100)/100,
       esDesborde:false,        // v1.2: el backend nunca desborda — la cap es por construcción
       uProduccion:uProd,
+      cjProduccion:cajasReales,   // (05-08) cajas, para mostrarlas junto a las unidades
       ultimoDiaProd:fechaIni,  // mismo día (V6.39: legacy, ModalDesplazar fue eliminado)
       fechaEntradaCalc:o.fecha_entrada_real||o.semana_necesidad,
     });
     capUsada[fechaIni]=(capUsada[fechaIni]||0)+usoPctReal;
-    if(aprobacion) capUsadaAprob[fechaIni]=(capUsadaAprob[fechaIni]||0)+usoPctReal;
+    if(aprobacion){
+      capUsadaAprob[fechaIni]=(capUsadaAprob[fechaIni]||0)+usoPctReal;
+      uAprobDia[fechaIni]=(uAprobDia[fechaIni]||0)+uProd;   // (05-08) unidades fisicas
+    }
   });
-  return{mapa,capUsada,capUsadaAprob};
+  return{mapa,capUsada,capUsadaAprob, uAprobDia};
 }
 
 export default function DetalleProduccion({
@@ -712,7 +721,7 @@ export default function DetalleProduccion({
 
       {lineas.filter(linea=>!lineaFiltro||linea.codigo===lineaFiltro).map(linea=>{
         const ordenesLinea=getOrdenesLinea(linea);
-        const{mapa:ordenesXDia,capUsada,capUsadaAprob}=distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea);
+        const{mapa:ordenesXDia,capUsada,capUsadaAprob,uAprobDia}=distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea);
         const pendientes=ordenesLinea.filter(o=>!aprobMap[o.numero_of]);
         const aprobadas_lin=ordenesLinea.filter(o=>!!aprobMap[o.numero_of]);
         // Fechas de la semana visible: dom→sáb
@@ -792,6 +801,7 @@ export default function DetalleProduccion({
                 const ords=ordenesXDia[dia.fecha]??[];
                 const uso=capUsada[dia.fecha]??0;
                 const usoAprob=capUsadaAprob?.[dia.fecha]??0;   // (31-07) ya comprometido
+                const uAprob=uAprobDia?.[dia.fecha]??0;         // (05-08) unidades aprobadas
                 const desborde=uso>1;
                 const capDia=linea.cap_u_semana/5;
                 const setupUDia=ords.reduce((s,o)=>s+(o.setup_unidades||0),0);
@@ -830,7 +840,7 @@ export default function DetalleProduccion({
                       <div style={{fontSize:8.5,color:C.tealMid,marginTop:1,textAlign:"center"}}
                         title={`Capacidad ya comprometida por OF/OFM aprobadas: ${fmtPct(usoAprob)}. `+
                                `El optimizer solo puede planificar sobre el resto.`}>
-                        ✓ {fmtPct(usoAprob)} aprobado
+                        ✓ {fmtPct(usoAprob)} · {fmtN(uAprob)} u aprobado
                       </div>
                     )}
                     {setupUDia>0&&(

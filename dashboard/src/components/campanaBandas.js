@@ -90,6 +90,16 @@ export function bandasCampana({ reglas, cals, info, puntos }) {
     if (dim === "granel_grupo") {
       propio = (info.granel_grupo || "").toLowerCase();
       if (!propio) return;                            // independiente: sin bandas
+      // (05-08) El granel del SKU tiene que estar entre los MODOS de la regla.
+      // Sin esto, cualquier SKU con granel_grupo cargado recibia bandas: al
+      // asignar granel a los 89 SKU de vinagres y limones (03-08), un
+      // vinagre_blanco pasaba el filtro y como nunca coincide con los modos
+      // quedaba bloquea=true en TODAS las semanas -> "planta en ketchup" en un
+      // vinagre, que no tiene nada que ver.
+      // Es el mismo guard que ya hace el optimizer:
+      //   if _grupo not in GRANEL_MODOS: continue   (optimizer.py)
+      // La rama de formato de aca abajo siempre lo tuvo bien.
+      if (!modos.includes(propio)) return;            // granel ajeno a la regla
     } else if (dim === "formato") {
       if (!r.linea) return;
       if (!(info.lineas || []).includes(r.linea)) return;  // no corre en esa linea
