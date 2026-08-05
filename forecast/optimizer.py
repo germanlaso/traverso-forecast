@@ -61,7 +61,32 @@ W_EXCESO = 10_000
 W_URGENTE = 10_000
 W_SETUP = 0        # v1.3: ya no se usa en N1 — N2 optimizará setups con matriz real (R9).
                    # Conservada para rollback rápido o experimentos (e.g. W_SETUP=20).
-W_ALT = 50         # penaliza usar línea alternativa
+W_ALT = 50         # penaliza usar línea alternativa (pasada A / N1)
+# (05-08-2026) W_ALT es el UNICO termino del objetivo que no se multiplica por
+# ESCALA_OBJ, asi que en N2 compite en una escala 1000x menor que los demas:
+#   coef_def_leve = 20 * 100 * 1000 / ss_d  -> dejar 1% del SS bajo objetivo un
+#   dia cuesta ~20.000, mientras MIGRAR un SKU un dia entero cuesta 50.
+# Migrar es ~400 veces mas barato que el deficit mas leve, asi que C migra
+# siempre que el gate de formato lo empuje. Medido en el plan #117: las 30 OFTs
+# en linea alternativa son TODAS formato 1000 en semanas donde la campana fijo
+# 500 -> la campana expulsa produccion a L1Pet, que es 4x mas lenta.
+#
+# El balance correcto es asimetrico por pasada:
+#   · A (N1-min): migrar debe ser BARATO. Su trabajo es determinar que quiebres
+#     son inevitables; si la linea alternativa evita uno, hay que usarla. Ademas
+#     A corre con W_DEF=W_EXC=0 (indiferente al volumen), asi que W_ALT no tiene
+#     contra que competir salvo el quiebre. No se toca.
+#   · C (SS-target): migrar debe ser CARO. La barrera Q* ya garantiza que C no
+#     puede crear quiebres nuevos (q_eff = min(Q*,0)), asi que migrar no compra
+#     nada en servicio: solo mueve produccion a una linea mas lenta. Subirlo aqui
+#     solo puede aumentar bajo_ss, que es blando.
+#
+# W_ALT_C_K se expresa en unidades de ESCALA_OBJ para que sea comparable:
+#   K=100 -> migrar un dia cuesta 100.000 = un dia con ~5% del SS de deficit leve.
+#   Sandwich buscado: por encima del deficit leve, muy por debajo del quiebre
+#   (coef_qbr_mag ~ 200.000 por 1% del SS).
+# K=0 (default) -> comportamiento IDENTICO al actual.
+W_ALT_C_K = int(_os.environ.get("W_ALT_C_K", "0") or 0)
 W_INICIO_SIMBOLICO = 1   # v1.3 (R12): desempate para evitar inicios fantasma
                          # cuando la cota Σ inicio >= Σ asig - 1 deja al solver
                          # indiferente. NO subir por encima de 1 (recrearía
@@ -207,6 +232,22 @@ SECUENCIA_MAX_BLOQUES = int(_os.environ.get("SECUENCIA_MAX_BLOQUES", "1") or 1)
 # caro que reanudar el mismo SKU, por eso este nivel pesa mas que la contiguidad
 # por SKU. Lista separada por comas, vacio = apagado.
 SECUENCIA_CONTIG_NIVELES = _os.environ.get("SECUENCIA_CONTIG_NIVELES", "")
+# (05-08) ORDEN de bloques: "uno primero y el otro despues", con la transicion
+# ocurriendo DENTRO de un dia. La contiguidad sola no lo logra: dos grupos pueden
+# ser contiguos Y coexistir todos los dias, que es lo del plan #113 (semana del
+# 10-08: vinagre y limon presentes los 5 dias, ambos contiguos, cero huecos).
+# Tampoco sirve prohibir el solapamiento diario: el dia de transicion tiene por
+# fuerza los dos grupos (el embalaje 30 termina el miercoles a media manana y el
+# 12 sigue esa tarde), y prohibirlo desperdiciaria capacidad.
+#
+# La regla correcta es UNA SOLA TRANSICION POR PAR: con n grupos activos en la
+# semana se permiten n-1 dias con mas de un grupo. Con 2 embalajes -> 1 dia
+# compartido -> 1 cambio de embalaje por semana, que es el minimo posible.
+SECUENCIA_ORDEN_NIVELES = _os.environ.get("SECUENCIA_ORDEN_NIVELES", "")
+# Orden preferente DENTRO de un nivel, separado por comas. En familias el orden
+# es fijo (vinagre antes que limon); en embalajes es indiferente, asi que se deja
+# vacio y el solver elige.
+SECUENCIA_ORDEN_FAMILIA = _os.environ.get("SECUENCIA_ORDEN_FAMILIA", "vinagre,limon")
 
 # ── Quiebre INTRADIA en el SOLVER (04-08-2026 · Etapa 2) ─────────────────────
 # La Etapa 1 (03-08) corrigio solo el REPORTE: `estado` y las alertas pasaron a
@@ -507,8 +548,14 @@ def optimizar_plan_v12_rich(
     )
 
     # ─── 6. Función objetivo ─────────────────────────────────────────────────
+    # (05-08) Peso de linea alternativa ASIMETRICO por pasada: cotas_qstar
+    # distingue A (None) de C (con contenido). Ver el comentario de W_ALT_C_K.
+    _w_alt = (W_ALT_C_K * ESCALA_OBJ) if (cotas_qstar and W_ALT_C_K > 0) else W_ALT
+    if cotas_qstar and W_ALT_C_K > 0:
+        logger.info(f"[N2] W_ALT en pasada C = {_w_alt:,} "
+                    f"(K={W_ALT_C_K} x ESCALA_OBJ) | en A queda {W_ALT}")
     _agregar_objetivo(m, sku_params=sku_params, lineas_params=lineas_params,
-                      cap_dia=cap_dia, sku_a_lineas=sku_a_lineas)
+                      cap_dia=cap_dia, sku_a_lineas=sku_a_lineas, w_alt=_w_alt)
 
     # ─── 6b. (N2) Barrera dura Q*: stock_u[(d,s)] >= Q*[(s, d_iso)] ───────────
     # Cota inferior por celda tomada del stock SIN clamp de la pasada N1
@@ -993,6 +1040,8 @@ def _construir_modelo(
     # SS. Dura sin riesgo de infactibilidad (mismo argumento que el acople de
     # granel: el faltante cae en quiebre, blando por STOCK_LOWER_BOUND_FACTOR).
     _niv = [x.strip() for x in SECUENCIA_CONTIG_NIVELES.split(",") if x.strip()]
+    _ord = {x.strip() for x in SECUENCIA_ORDEN_NIVELES.split(",") if x.strip()}
+    _ord_fam = [x.strip().lower() for x in SECUENCIA_ORDEN_FAMILIA.split(",") if x.strip()]
     if _niv:
         _lineas_n = {x.strip() for x in SECUENCIA_CONTIG_LINEAS.split(",") if x.strip()}
 
@@ -1096,6 +1145,74 @@ def _construir_modelo(
                 if len(_vs) > 1:
                     m.model.Add(sum(_vs) <= SECUENCIA_MAX_BLOQUES)
                     _nr += 1
+
+            # ── ORDEN: una sola transicion por par de grupos ─────────────────
+            # Con n grupos activos en la semana se permiten n-1 dias con mas de un
+            # grupo. Ese dia extra es la TRANSICION (el cambio ocurre dentro del
+            # dia), asi que los bloques quedan "uno primero y el otro despues" sin
+            # prohibir el dia compartido ni desperdiciar capacidad.
+            # No genera infactibilidad: si un grupo no cabe en los dias que le
+            # quedan, el faltante cae en QUIEBRE (blando), igual que el acople de
+            # granel.
+            if _nivel in _ord:
+                _no = _nf = 0
+                # (semana, linea) -> {grupo: [usa por dia]}
+                _sem_g: dict = {}
+                for (d, g, l2), u_ in _usa.items():
+                    w = semana_iso_inicio(d).isoformat()
+                    _sem_g.setdefault((w, l2), {}).setdefault(g, []).append((d, u_))
+                for (w, l2), gs in _sem_g.items():
+                    if len(gs) < 2:
+                        continue
+                    # `usado[g]` = el grupo aparece en la semana
+                    usado = {}
+                    for g, pares in gs.items():
+                        ug = m.model.NewBoolVar(f"usado_{_nivel}_{w}_{g}_{l2}")
+                        for _d, u_ in pares:
+                            m.model.Add(ug >= u_)
+                        m.model.Add(ug <= sum(u_ for _d, u_ in pares))
+                        usado[g] = ug
+                    # dias con MAS de un grupo: a lo sumo (n_usados - 1)
+                    dias_w = sorted({d for pares in gs.values() for d, _u in pares})
+                    extras = []
+                    for d in dias_w:
+                        us_d = [u_ for g, pares in gs.items() for dd, u_ in pares if dd == d]
+                        if len(us_d) < 2:
+                            continue
+                        e = m.model.NewIntVar(0, len(us_d), f"extra_{_nivel}_{d}_{l2}")
+                        m.model.Add(e >= sum(us_d) - 1)
+                        extras.append(e)
+                    if extras:
+                        m.model.Add(sum(extras) <= sum(usado.values()) - 1)
+                        _no += 1
+                    # ORDEN FIJO dentro del nivel (p.ej. vinagre antes que limon).
+                    # La clave del nivel es acumulada ("emb|fam"), asi que la
+                    # precedencia se aplica entre grupos que comparten prefijo:
+                    # dentro de CADA embalaje, las familias van en orden.
+                    if _ord_fam and "|" in next(iter(gs), ""):
+                        def _pos(_g):
+                            suf = _g.split("|")[-1]
+                            return _ord_fam.index(suf) if suf in _ord_fam else 99
+                        for g1 in gs:
+                            for g2 in gs:
+                                if g1 == g2:
+                                    continue
+                                if g1.split("|")[:-1] != g2.split("|")[:-1]:
+                                    continue      # distinto embalaje: no aplica
+                                if _pos(g1) >= _pos(g2):
+                                    continue      # solo pares (anterior, posterior)
+                                # g1 va antes que g2: prohibido g2 en d y g1 en d'>d
+                                m1 = dict(gs[g1]); m2 = dict(gs[g2])
+                                for d in dias_w:
+                                    for dp in dias_w:
+                                        if dp <= d:
+                                            continue
+                                        if d in m2 and dp in m1:
+                                            m.model.Add(m2[d] + m1[dp] <= 1)
+                                            _nf += 1
+                logger.info(f"[SECUENCIA] ORDEN en {_nivel}: {_no} semanas con "
+                            f"cota de transiciones, {_nf} restricciones de "
+                            f"precedencia (orden={_ord_fam or 'libre'})")
             logger.info(f"[SECUENCIA] contiguidad N{_i_niv+1}={_nivel} "
                         f"(clave={'+'.join(_niv[:_i_niv+1])}) ON | lineas="
                         f"{sorted(_lineas_n) or 'TODAS'} | grupos="
@@ -1388,6 +1505,7 @@ def _agregar_objetivo(
     lineas_params: dict[str, dict],
     cap_dia: dict[tuple[date, str], int],
     sku_a_lineas: dict[str, list[dict]],
+    w_alt: int = W_ALT,
 ) -> None:
     """Añade la función objetivo multi-criterio al modelo.
 
@@ -1432,7 +1550,7 @@ def _agregar_objetivo(
     for (d, s, l), asig in m.asig.items():
         if not pref_map.get((s, l), True):
             # Es alternativa → penalizamos suavemente
-            obj_terms.append(W_ALT * asig)
+            obj_terms.append(w_alt * asig)
 
     # R12: peso simbólico para evitar inicios fantasma (ver Paso 3 del doc R12).
     # Sin este peso, la cota Σ inicio >= Σ asig - 1 deja al solver indiferente
