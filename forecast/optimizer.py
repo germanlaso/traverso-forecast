@@ -395,6 +395,10 @@ class _ModeloCPSAT:
         # (05-08) arranques de grupo por nivel, para penalizarlos en el objetivo:
         # {(nivel, fecha, grupo, linea): BoolVar}
         self.arranques_grupo: dict[tuple[str, date, str, str], cp_model.IntVar] = {}
+        # (05-08) cambios INTRADIA: por (nivel, dia, linea), cuantos grupos de mas
+        # de uno hay ese dia. Un dia con k grupos obliga a k-1 cambios de maquina,
+        # sin importar cuantos "bloques" haya: la linea produce UNO a la vez.
+        self.cambios_intradia: dict[tuple[str, date, str], cp_model.IntVar] = {}
         self.factor: dict[tuple[str, str], float] = {}                  # cache factor_velocidad
 
 
@@ -1218,6 +1222,23 @@ def _construir_modelo(
                         else:
                             m.model.Add(a >= u - prev)
                         m.model.Add(a <= u)
+            # ── Cambios INTRADIA por (dia, linea) ────────────────────────────
+            # `arranca` cuenta arranques de BLOQUE y solo mide bien si los bloques
+            # son exclusivos. Si dos grupos comparten los 5 dias, `arranca` cuenta
+            # 1 por grupo (=2) cuando la linea en realidad cambia una vez por dia
+            # (=5): la linea produce UN producto a la vez, no dos en paralelo.
+            # Esta variable captura ese costo: k grupos en un dia obligan a k-1
+            # cambios de maquina.
+            _por_dia_u: dict = {}
+            for (d, g, l), u_ in _usa.items():
+                _por_dia_u.setdefault((d, l), []).append(u_)
+            for (d, l), us in _por_dia_u.items():
+                if len(us) < 2:
+                    continue
+                e = m.model.NewIntVar(0, len(us) - 1, f"cambint_{_nivel}_{d}_{l}")
+                m.model.Add(e >= sum(us) - 1)
+                m.cambios_intradia[(_nivel, d, l)] = e
+
             _por_sem: dict = {}
             for (d, g, l), a in _arr.items():
                 _por_sem.setdefault((semana_iso_inicio(d).isoformat(), g, l), []).append(a)
@@ -1648,15 +1669,23 @@ def _agregar_objetivo(
     # llena en la pasada C (la secuenciacion no corre en A), asi que este termino
     # es automaticamente asimetrico. El primer arranque de la semana no se
     # descuenta: es constante para todos los planes y no afecta la comparacion.
-    _n_pen = 0
+    _n_pen = _n_pen_i = 0
     for (_niv_g, _d, _g, _l), _a in m.arranques_grupo.items():
         _k = W_CAMBIO_GRUPO_K.get(_niv_g, 0)
         if _k > 0:
             obj_terms.append(_k * ESCALA_OBJ * _a)
             _n_pen += 1
-    if _n_pen:
-        logger.info(f"[SECUENCIA] costo de cambio de grupo en objetivo: "
-                    f"{_n_pen} terminos | pesos="
+    # Cambios INTRADIA: el costo que `arranca` no ve. Dos grupos solapados 5 dias
+    # dan 2 arranques pero 5 cambios de maquina. Sin este termino, agrupar era
+    # indiferente para el solver.
+    for (_niv_g, _d, _l), _e in m.cambios_intradia.items():
+        _k = W_CAMBIO_GRUPO_K.get(_niv_g, 0)
+        if _k > 0:
+            obj_terms.append(_k * ESCALA_OBJ * _e)
+            _n_pen_i += 1
+    if _n_pen or _n_pen_i:
+        logger.info(f"[SECUENCIA] costo de cambio en objetivo: {_n_pen} arranques "
+                    f"+ {_n_pen_i} cambios intradia | pesos="
                     + str({k: v for k, v in W_CAMBIO_GRUPO_K.items() if v}))
 
     # R12: peso simbólico para evitar inicios fantasma (ver Paso 3 del doc R12).
