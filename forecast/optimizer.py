@@ -389,7 +389,9 @@ class _ModeloCPSAT:
         # (04-08) stock al INICIO del dia menos la demanda del dia, ANTES de la
         # produccion de ese dia. Es el piso real del dia y la base correcta del
         # criterio de quiebre. Ver QUIEBRE_INTRADIA_SOLVER.
-        self.stock_disp: dict[tuple[date, str], cp_model.IntVar] = {}
+        # (05-08) EXPRESIONES lineales, no variables: ver el comentario del
+        # balance en _construir_modelo.
+        self.stock_disp: dict = {}
         # (05-08) arranques de grupo por nivel, para penalizarlos en el objetivo:
         # {(nivel, fecha, grupo, linea): BoolVar}
         self.arranques_grupo: dict[tuple[str, date, str, str], cp_model.IntVar] = {}
@@ -620,9 +622,17 @@ def optimizar_plan_v12_rich(
         # (04-08) La cota va sobre la MISMA variable que juzga el quiebre. Si el
         # criterio es intradia, acotar el cierre no impide que C hunda el piso.
         _vars_barrera = m.stock_disp if QUIEBRE_INTRADIA_SOLVER else m.stock_u
+        _n_const = 0
         for (d, s), var in _vars_barrera.items():
             q = cotas_qstar.get((s, d.isoformat()))
             if q is None:
+                continue
+            # El dia 0 de stock_disp es CONSTANTE (stock inicial - demanda del dia,
+            # sin decisiones). Agregar `const >= q` seria trivial o volveria el
+            # modelo INFEASIBLE sin pista si A y C vieran datos distintos.
+            if isinstance(var, int):
+                if var < (min(int(q), 0) if _modo_barrera == "quiebre" else int(q)):
+                    _n_const += 1
                 continue
             if _modo_barrera == "quiebre":
                 q_eff = min(int(q), 0)
@@ -636,7 +646,9 @@ def optimizar_plan_v12_rich(
                     f"{'stock_disp' if QUIEBRE_INTRADIA_SOLVER else 'stock_fin'}"
                     f": {_n_barrera} cotas agregadas"
                     + (f" ({_n_relajadas} relajadas a 0 -> C puede reducir producción)"
-                       if _modo_barrera == "quiebre" else ""))
+                       if _modo_barrera == "quiebre" else "")
+                    + (f" | {_n_const} celdas constantes ya por debajo de la cota"
+                       if _n_const else ""))
 
     # ─── 7. Resolver ─────────────────────────────────────────────────────────
     solver = cp_model.CpSolver()
@@ -828,8 +840,16 @@ def _construir_modelo(
             stock_high = 2 * cap_bodega
             big_ub = 100 * cap_bodega
             m.stock_u[(d, s)] = m.model.NewIntVar(stock_low, stock_high, f"stock_{d_idx}_{s}")
-            m.stock_disp[(d, s)] = m.model.NewIntVar(stock_low, stock_high,
-                                                    f"stockdisp_{d_idx}_{s}")
+            # (05-08) stock_disp NO es variable de decision: es una funcion lineal
+            # de stock_u[d-1], la entrada y la demanda. Declararla como IntVar con
+            # el dominio de stock_u (-10x a +2x cap_bodega = 1,68 MILLONES de
+            # valores) agregaba ~11.800 enteros y ~11.800 igualdades inutiles, y
+            # ademas quedaban EN EL CAMINO de la penalizacion de quiebre, asi que
+            # el bound del objetivo pasaba a propagarse sobre ese dominio en vez de
+            # usar la expresion directa. Efecto medido: la pasada A dejo de probar
+            # optimalidad (de OPTIMAL en 1-2 min a agotar los 1800s).
+            # Ahora se guarda la EXPRESION en el mismo dict; CP-SAT acepta
+            # expresiones lineales en Add() igual que variables.
             m.deficit[(d, s)] = m.model.NewIntVar(0, big_ub, f"def_{d_idx}_{s}")
             m.exceso[(d, s)] = m.model.NewIntVar(0, big_ub, f"exc_{d_idx}_{s}")
             m.quiebre[(d, s)] = m.model.NewIntVar(0, big_ub, f"qbr_{d_idx}_{s}")
@@ -1459,20 +1479,17 @@ def _construir_modelo(
             # dia: stock_disp = lo disponible tras servir la demanda y ANTES de la
             # produccion de ese dia. La produccion entra al CIERRE.
             if d_idx == 0:
-                stock_prev_val = int(round(stock_inicial.get(s, 0)))
-                m.model.Add(
-                    m.stock_disp[(d, s)] == stock_prev_val + entrada_d - demanda_consumo_d
-                )
+                stock_prev = int(round(stock_inicial.get(s, 0)))
             else:
                 stock_prev = m.stock_u[(horizonte[d_idx - 1], s)]
-                m.model.Add(
-                    m.stock_disp[(d, s)] == stock_prev + entrada_d - demanda_consumo_d
-                )
-            m.model.Add(m.stock_u[(d, s)] == m.stock_disp[(d, s)] + prod_u_total_d)
+            # Expresion (no variable): piso del dia, antes de la produccion de hoy.
+            _expr_disp = stock_prev + entrada_d - demanda_consumo_d
+            m.stock_disp[(d, s)] = _expr_disp
+            m.model.Add(m.stock_u[(d, s)] == _expr_disp + prod_u_total_d)
 
             # Variable sobre la que se juzga FALTA (quiebre / deficit vs SS).
             # El EXCESO se sigue juzgando sobre el cierre (m.stock_u).
-            _v_falta = m.stock_disp[(d, s)] if QUIEBRE_INTRADIA_SOLVER else m.stock_u[(d, s)]
+            _v_falta = _expr_disp if QUIEBRE_INTRADIA_SOLVER else m.stock_u[(d, s)]
 
             # Déficit bajo SS (SS dinámico, en unidades)
             # V-OV: base = forecast SOLO (los pedidos NO inflan el SS; van al balance).
