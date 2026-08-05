@@ -539,6 +539,7 @@ def optimizar_plan_v12_rich(
 
     # ─── 5. Construir modelo CP-SAT ──────────────────────────────────────────
     m = _construir_modelo(
+        es_pasada_c=bool(cotas_qstar),
         horizonte=horizonte,
         skus=skus_modelo,
         sku_params=sku_params,
@@ -754,8 +755,15 @@ def _construir_modelo(
     stock_inicial: dict[str, float],
     entradas_aprobadas: dict[str, list[dict]],
     ss_forecast_ext: dict[str, dict[date, float]] | None = None,
+    es_pasada_c: bool = False,
 ) -> _ModeloCPSAT:
-    """Construye variables y restricciones del modelo CP-SAT con variables en cajas."""
+    """Construye variables y restricciones del modelo CP-SAT con variables en cajas.
+
+    es_pasada_c: True cuando se construye la pasada C (SS-target). Se usa para las
+    restricciones que NO deben aplicarse en A, como el ORDEN de bloques: en A
+    degradan la convergencia (gap 0.0 -> 6.94 medido el 05-08) y conceptualmente
+    no corresponden, porque A solo determina que quiebres son inevitables.
+    """
 
     m = _ModeloCPSAT()
     m.skus = skus
@@ -1168,7 +1176,7 @@ def _construir_modelo(
             # (W_DEF=W_EXC=0), su unica mision es determinar que quiebres son
             # INEVITABLES. El orden es una preferencia de eficiencia operativa, no
             # de servicio: pertenece a C. Mismo principio asimetrico que W_ALT.
-            if _nivel in _ord and cotas_qstar:
+            if _nivel in _ord and es_pasada_c:
                 _no = _nf = 0
                 # (semana, linea) -> {grupo: [usa por dia]}
                 _sem_g: dict = {}
