@@ -248,6 +248,33 @@ SECUENCIA_CONTIG_NIVELES = _os.environ.get("SECUENCIA_CONTIG_NIVELES", "")
 # Ver el bloque de comentarios de W_ALT. K=0 -> comportamiento identico al actual.
 W_ALT_C_K = int(_os.environ.get("W_ALT_C_K", "0") or 0)
 
+# ── Costo de CAMBIO DE GRUPO, jerarquico (05-08-2026) ────────────────────────
+# Penaliza cada ARRANQUE de grupo en la pasada C, con peso distinto por nivel:
+# minimizar cambios de embalaje pesa mas que minimizar cambios de familia.
+#
+# Por que peso y no restriccion dura (que es lo que se probo primero):
+#   · Jerarquico por construccion: dos pesos expresan "embalaje primero, familia
+#     despues" sin restricciones de precedencia cuadraticas, que son las que
+#     llevaron el gap de la pasada A de 0.0 a 6.4.
+#   · No choca con la barrera Q*: la barrera exige un stock y la contiguidad dura
+#     puede hacerlo inalcanzable; un precio nunca es infactible.
+#   · El solver puede CEDER: si evitar un cambio costaria un quiebre, cambia. Con
+#     restriccion dura agrupaba igual, aunque costara servicio.
+#
+# Calibracion (unidades de ESCALA_OBJ, comparables con el resto del objetivo):
+# en L1Pet LV un cambio de 0,5 h son ~6.100 u de capacidad; con ss_d~50.000 el
+# coeficiente de exceso leve es ~6/u, o sea ~37.000 de objetivo. K_EMB=50 pone el
+# cambio de embalaje en 50.000: por encima de ese costo de capacidad (refleja
+# deterioro y horas-hombre, no solo tiempo) y muy por debajo de un quiebre
+# (coef_qbr_mag ~400/u con ese SS: 1.000 u quebradas = 400.000).
+# Ratio 5:1 entre embalaje y familia = la jerarquia declarada por Produccion.
+W_CAMBIO_GRUPO_K = {
+    "formato":   int(_os.environ.get("W_CAMBIO_FORMATO_K", "0") or 0),
+    "embalaje":  int(_os.environ.get("W_CAMBIO_EMB_K", "0") or 0),
+    "familia":   int(_os.environ.get("W_CAMBIO_FAM_K", "0") or 0),
+    "granel":    int(_os.environ.get("W_CAMBIO_GRANEL_K", "0") or 0),
+}
+
 SECUENCIA_ORDEN_NIVELES = _os.environ.get("SECUENCIA_ORDEN_NIVELES", "")
 # Orden preferente DENTRO de un nivel, separado por comas. En familias el orden
 # es fijo (vinagre antes que limon); en embalajes es indiferente, asi que se deja
@@ -363,6 +390,9 @@ class _ModeloCPSAT:
         # produccion de ese dia. Es el piso real del dia y la base correcta del
         # criterio de quiebre. Ver QUIEBRE_INTRADIA_SOLVER.
         self.stock_disp: dict[tuple[date, str], cp_model.IntVar] = {}
+        # (05-08) arranques de grupo por nivel, para penalizarlos en el objetivo:
+        # {(nivel, fecha, grupo, linea): BoolVar}
+        self.arranques_grupo: dict[tuple[str, date, str, str], cp_model.IntVar] = {}
         self.factor: dict[tuple[str, str], float] = {}                  # cache factor_velocidad
 
 
@@ -997,7 +1027,10 @@ def _construir_modelo(
     # (Σ inicio >= Σ asig - 1, R12) y su unica ligadura por SKU es inicio<=asig.
     # No esta atado a la transicion asig[d-1]->asig[d], asi que Σ inicio <= 1 no
     # expresa contiguidad. Se usa variable propia `arranca`.
-    if SECUENCIA_CONTIG_SKU:
+    if SECUENCIA_CONTIG_SKU and not es_pasada_c:
+        logger.info("[SECUENCIA] contiguidad SKU OMITIDA en pasada A "
+                    "- toda la secuenciacion va en C")
+    if SECUENCIA_CONTIG_SKU and es_pasada_c:
         _lineas_c = {x.strip() for x in SECUENCIA_CONTIG_LINEAS.split(",") if x.strip()}
         _arranca: dict = {}
         _prod_sku: dict = {}
@@ -1052,10 +1085,23 @@ def _construir_modelo(
     # Estructural, sin peso: la agrupacion se resuelve ANTES que la desviacion de
     # SS. Dura sin riesgo de infactibilidad (mismo argumento que el acople de
     # granel: el faltante cae en quiebre, blando por STOCK_LOWER_BOUND_FACTOR).
+    # (05-08) TODA la secuenciacion vive en C, no en A. Medido en dos corridas:
+    # con la contiguidad activa en A, la pasada A pasa de OPTIMAL gap=0.0 a
+    # FEASIBLE_TIMEOUT gap~6.4 -> el Q* deja de ser confiable y la barrera que
+    # hereda C se construye sobre una cota mala.
+    # El costo aparecio al CERRAR el escape de `asig` (03-08): al ligar `usa` a
+    # `cajas` con big-M la restriccion paso de inerte a real, y la relajacion
+    # lineal quedo muy floja. Antes de ese fix A daba OPTIMAL porque la
+    # restriccion practicamente no restringia.
+    # Principio: A solo determina que quiebres son INEVITABLES; agrupacion,
+    # orden y eleccion de linea son preferencias de eficiencia y pertenecen a C.
     _niv = [x.strip() for x in SECUENCIA_CONTIG_NIVELES.split(",") if x.strip()]
     _ord = {x.strip() for x in SECUENCIA_ORDEN_NIVELES.split(",") if x.strip()}
     _ord_fam = [x.strip().lower() for x in SECUENCIA_ORDEN_FAMILIA.split(",") if x.strip()]
-    if _niv:
+    if _niv and not es_pasada_c:
+        logger.info(f"[SECUENCIA] contiguidad OMITIDA en pasada A "
+                    f"(niveles={_niv}) - toda la secuenciacion va en C")
+    if _niv and es_pasada_c:
         _lineas_n = {x.strip() for x in SECUENCIA_CONTIG_LINEAS.split(",") if x.strip()}
 
         def _val_nivel(_s, _nivel):
@@ -1145,6 +1191,7 @@ def _construir_modelo(
                         m.model.Add(u <= sum(cajas_g))            # no produce -> usa=0
                         a = m.model.NewBoolVar(f"arrg_{_nivel}_{d_idx}_{g}_{l}")
                         _arr[(d, g, l)] = a
+                        m.arranques_grupo[(_nivel, d, g, l)] = a
                         prev = _usa.get((horizonte[d_idx - 1], g, l)) if d_idx > 0 else None
                         if prev is None:
                             m.model.Add(a >= u)
@@ -1154,10 +1201,15 @@ def _construir_modelo(
             _por_sem: dict = {}
             for (d, g, l), a in _arr.items():
                 _por_sem.setdefault((semana_iso_inicio(d).isoformat(), g, l), []).append(a)
-            for _k, _vs in _por_sem.items():
-                if len(_vs) > 1:
-                    m.model.Add(sum(_vs) <= SECUENCIA_MAX_BLOQUES)
-                    _nr += 1
+            # SECUENCIA_MAX_BLOQUES=0 -> no se agrega la cota dura: las variables
+            # `arranca` se crean igual y el agrupamiento se logra por PRECIO
+            # (W_CAMBIO_*_K). Es el modo recomendado: nunca infactible y el solver
+            # puede ceder si agrupar costaria servicio.
+            if SECUENCIA_MAX_BLOQUES > 0:
+                for _k, _vs in _por_sem.items():
+                    if len(_vs) > 1:
+                        m.model.Add(sum(_vs) <= SECUENCIA_MAX_BLOQUES)
+                        _nr += 1
 
             # ── ORDEN: una sola transicion por par de grupos ─────────────────
             # Con n grupos activos en la semana se permiten n-1 dias con mas de un
@@ -1235,9 +1287,7 @@ def _construir_modelo(
                 logger.info(f"[SECUENCIA] ORDEN en {_nivel}: {_no} semanas con "
                             f"cota de transiciones, {_nf} restricciones de "
                             f"precedencia (orden={_ord_fam or 'libre'})")
-            elif _nivel in _ord:
-                logger.info(f"[SECUENCIA] ORDEN en {_nivel}: OMITIDO en pasada A "
-                            f"(solo se aplica en C, ver comentario)")
+
             logger.info(f"[SECUENCIA] contiguidad N{_i_niv+1}={_nivel} "
                         f"(clave={'+'.join(_niv[:_i_niv+1])}) ON | lineas="
                         f"{sorted(_lineas_n) or 'TODAS'} | grupos="
@@ -1576,6 +1626,21 @@ def _agregar_objetivo(
         if not pref_map.get((s, l), True):
             # Es alternativa → penalizamos suavemente
             obj_terms.append(w_alt * asig)
+
+    # (05-08) Costo de cambio de grupo, jerarquico. m.arranques_grupo solo se
+    # llena en la pasada C (la secuenciacion no corre en A), asi que este termino
+    # es automaticamente asimetrico. El primer arranque de la semana no se
+    # descuenta: es constante para todos los planes y no afecta la comparacion.
+    _n_pen = 0
+    for (_niv_g, _d, _g, _l), _a in m.arranques_grupo.items():
+        _k = W_CAMBIO_GRUPO_K.get(_niv_g, 0)
+        if _k > 0:
+            obj_terms.append(_k * ESCALA_OBJ * _a)
+            _n_pen += 1
+    if _n_pen:
+        logger.info(f"[SECUENCIA] costo de cambio de grupo en objetivo: "
+                    f"{_n_pen} terminos | pesos="
+                    + str({k: v for k, v in W_CAMBIO_GRUPO_K.items() if v}))
 
     # R12: peso simbólico para evitar inicios fantasma (ver Paso 3 del doc R12).
     # Sin este peso, la cota Σ inicio >= Σ asig - 1 deja al solver indiferente
