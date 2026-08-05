@@ -1159,7 +1159,16 @@ def _construir_modelo(
             # No genera infactibilidad: si un grupo no cabe en los dias que le
             # quedan, el faltante cae en QUIEBRE (blando), igual que el acople de
             # granel.
-            if _nivel in _ord:
+            # (05-08) El ORDEN se aplica SOLO EN C. Medido en la corrida de las
+            # 09:09: con las 474 restricciones de precedencia activas en A, la
+            # pasada A paso de OPTIMAL gap=0.0 a FEASIBLE_TIMEOUT gap=6.94 -> el
+            # Q* deja de ser confiable y la barrera que hereda C se construye
+            # sobre una cota mala.
+            # Y conceptualmente no corresponde: A es indiferente al volumen
+            # (W_DEF=W_EXC=0), su unica mision es determinar que quiebres son
+            # INEVITABLES. El orden es una preferencia de eficiencia operativa, no
+            # de servicio: pertenece a C. Mismo principio asimetrico que W_ALT.
+            if _nivel in _ord and cotas_qstar:
                 _no = _nf = 0
                 # (semana, linea) -> {grupo: [usa por dia]}
                 _sem_g: dict = {}
@@ -1218,6 +1227,9 @@ def _construir_modelo(
                 logger.info(f"[SECUENCIA] ORDEN en {_nivel}: {_no} semanas con "
                             f"cota de transiciones, {_nf} restricciones de "
                             f"precedencia (orden={_ord_fam or 'libre'})")
+            elif _nivel in _ord:
+                logger.info(f"[SECUENCIA] ORDEN en {_nivel}: OMITIDO en pasada A "
+                            f"(solo se aplica en C, ver comentario)")
             logger.info(f"[SECUENCIA] contiguidad N{_i_niv+1}={_nivel} "
                         f"(clave={'+'.join(_niv[:_i_niv+1])}) ON | lineas="
                         f"{sorted(_lineas_n) or 'TODAS'} | grupos="
