@@ -209,6 +209,21 @@ N2_SEED_C = 42
 #                congelar su inventario, dejando a C reducir producción hacia el SS.
 N2_BARRERA_MODO = _os.environ.get("N2_BARRERA_MODO", "universal").strip().lower()
 
+# (06-08) Sobre QUE variable se ANCLA la barrera Q*, independiente de sobre cual
+# se MIDE el quiebre. Etapa 2 (QUIEBRE_INTRADIA_SOLVER) acoplo ambas cosas: medir
+# el quiebre sobre stock_disp (piso pre-produccion, CORRECTO) forzo tambien a
+# anclar la barrera sobre stock_disp, lo que vuelve C INFEASIBLE (la produccion
+# del propio dia no puede ayudar a cumplir el piso -> conflicto estructural).
+# Este flag las separa:
+#   "auto"  (default): replica el comportamiento historico -> sigue a
+#            QUIEBRE_INTRADIA_SOLVER (disp si el flag esta ON, fin si OFF).
+#   "fin":   ancla SIEMPRE sobre stock_u (cierre). La produccion del dia entra en
+#            la desigualdad -> C siempre puede cumplir el piso produciendo. Es lo
+#            que hacia el brazo D (E2 OFF) que resolvia. NO cambia donde se mide
+#            el quiebre (eso sigue en stock_disp si QUIEBRE_INTRADIA_SOLVER=1).
+#   "disp":  ancla SIEMPRE sobre stock_disp (piso). Puede dar INFEASIBLE.
+N2_BARRERA_SOBRE = _os.environ.get("N2_BARRERA_SOBRE", "auto").strip().lower()
+
 N2_TL_A = int(_os.environ.get("N2_TL_A", "1800"))
 N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 
@@ -639,9 +654,20 @@ def optimizar_plan_v12_rich(
     if cotas_qstar:
         _n_barrera = 0
         _n_relajadas = 0
-        # (04-08) La cota va sobre la MISMA variable que juzga el quiebre. Si el
-        # criterio es intradia, acotar el cierre no impide que C hunda el piso.
-        _vars_barrera = m.stock_disp if QUIEBRE_INTRADIA_SOLVER else m.stock_u
+        # (04-08) La cota iba sobre la MISMA variable que juzga el quiebre.
+        # (06-08) Desacoplado via N2_BARRERA_SOBRE: medir el quiebre sobre
+        # stock_disp NO obliga a anclar la barrera ahi. Anclar sobre stock_u
+        # (cierre) deja que la produccion del dia ayude a cumplir el piso, lo que
+        # evita el INFEASIBLE estructural. Ver el comentario del flag.
+        if N2_BARRERA_SOBRE == "fin":
+            _vars_barrera = m.stock_u
+        elif N2_BARRERA_SOBRE == "disp":
+            _vars_barrera = m.stock_disp
+        else:  # "auto": comportamiento historico
+            _vars_barrera = m.stock_disp if QUIEBRE_INTRADIA_SOLVER else m.stock_u
+        logger.info(f"[N2] barrera se ANCLA sobre "
+                    f"{'stock_disp' if _vars_barrera is m.stock_disp else 'stock_u'} "
+                    f"(N2_BARRERA_SOBRE={N2_BARRERA_SOBRE})")
         _n_const = 0
         _diag_imposibles = []   # (06-08 DIAG) cotas inalcanzables bajo el techo
         _diag_bool_cota = {}    # (06-08 DIAG NUCLEO) Index(bool) -> cota, si N2_DIAG_NUCLEO
@@ -717,7 +743,7 @@ def optimizar_plan_v12_rich(
             logger.info("[N2 DIAG] ninguna cota de barrera excede el techo "
                         "2*cap_bodega (la infactibilidad, si la hay, es de otra causa)")
         logger.info(f"[N2] barrera Q* modo={_modo_barrera} sobre="
-                    f"{'stock_disp' if QUIEBRE_INTRADIA_SOLVER else 'stock_fin'}"
+                    f"{'stock_disp' if _vars_barrera is m.stock_disp else 'stock_fin'}"
                     f": {_n_barrera} cotas agregadas"
                     + (f" ({_n_relajadas} relajadas a 0 -> C puede reducir producción)"
                        if _modo_barrera == "quiebre" else "")
