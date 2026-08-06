@@ -212,6 +212,13 @@ N2_BARRERA_MODO = _os.environ.get("N2_BARRERA_MODO", "universal").strip().lower(
 N2_TL_A = int(_os.environ.get("N2_TL_A", "1800"))
 N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 
+# (06-08) DIAGNOSTICO: aisla el nucleo infactible de la pasada C. Con el flag,
+# cada cota de barrera Q* se condiciona a un booleano marcado como assumption;
+# si C da INFEASIBLE, el solver reporta el subconjunto minimo de cotas en
+# conflicto (SufficientAssumptionsForInfeasibility). Solo para corridas de
+# diagnostico -> NUNCA en el cron. No cambia el plan resultante cuando esta OFF.
+N2_DIAG_NUCLEO = _os.environ.get("N2_DIAG_NUCLEO", "0") == "1"
+
 # ─── Campaña de granel (V6 · 29-07) ──────────────────────────────────────────
 # Estado de planta semanal: a lo mas un granel de salsa (ketchup/mostaza) por
 # semana habilita el envasado de los SKU de ese grupo (granel_grupo en
@@ -628,6 +635,7 @@ def optimizar_plan_v12_rich(
         _vars_barrera = m.stock_disp if QUIEBRE_INTRADIA_SOLVER else m.stock_u
         _n_const = 0
         _diag_imposibles = []   # (06-08 DIAG) cotas inalcanzables bajo el techo
+        _diag_bool_cota = {}    # (06-08 DIAG NUCLEO) Index(bool) -> cota, si N2_DIAG_NUCLEO
         for (d, s), var in _vars_barrera.items():
             q = cotas_qstar.get((s, d.isoformat()))
             if q is None:
@@ -671,7 +679,17 @@ def optimizar_plan_v12_rich(
                 logger.warning(f"[N2 DIAG] no se pudo evaluar cota ({s},{d}): {_e}")
             # ─── fin DIAG ──────────────────────────────────────────────────────
 
-            m.model.Add(var >= q_eff)
+            if N2_DIAG_NUCLEO:
+                # Condicionar la cota a un booleano-assumption para poder pedir
+                # el nucleo infactible. Semanticamente identico (el bool se
+                # fuerza a True via AddAssumption), pero rastreable.
+                _b = m.model.NewBoolVar(f"barr_{s}_{d.isoformat()}")
+                m.model.Add(var >= q_eff).OnlyEnforceIf(_b)
+                m.model.AddAssumption(_b)
+                _diag_bool_cota[_b.Index()] = {"sku": s, "fecha": d.isoformat(),
+                                               "q_eff": int(q_eff)}
+            else:
+                m.model.Add(var >= q_eff)
             _n_barrera += 1
 
         # (06-08 DIAG) Reporte de cotas imposibles: candidatas al nucleo infactible.
@@ -733,6 +751,30 @@ def optimizar_plan_v12_rich(
             status_name = "FEASIBLE_TIMEOUT"
         # else: queda 'FEASIBLE' normal
     elif status == cp_model.INFEASIBLE:
+        # (06-08 DIAG NUCLEO) Si el flag esta activo y hubo assumptions, pedir el
+        # subconjunto minimo de cotas de barrera en conflicto.
+        if N2_DIAG_NUCLEO and _diag_bool_cota:
+            try:
+                _idx_nucleo = solver.SufficientAssumptionsForInfeasibility()
+                if _idx_nucleo:
+                    logger.warning(
+                        f"[N2 NUCLEO] {len(_idx_nucleo)} cota(s) de barrera forman "
+                        f"el nucleo infactible (subconjunto MINIMO en conflicto):")
+                    for _i in _idx_nucleo:
+                        _c = _diag_bool_cota.get(_i)
+                        if _c:
+                            logger.warning(
+                                f"[N2 NUCLEO]   SKU={_c['sku']} {_c['fecha']} "
+                                f"q_eff={_c['q_eff']}")
+                        else:
+                            logger.warning(f"[N2 NUCLEO]   (bool idx={_i} no mapeado)")
+                else:
+                    logger.warning(
+                        "[N2 NUCLEO] el nucleo NO involucra cotas de barrera "
+                        "(lista vacia): la infactibilidad es del modelo BASE de C "
+                        "(capacidad / campanas / balance), no de la barrera Q*.")
+            except Exception as _e:
+                logger.warning(f"[N2 NUCLEO] no se pudo extraer el nucleo: {_e}")
         # Infactibilidad REAL probada por el solver.
         return _resultado_vacio(
             "El solver probó que no existe plan factible con las restricciones actuales (INFEASIBLE real). Revisar parámetros (cap_bodega, SS, capacidad).",
