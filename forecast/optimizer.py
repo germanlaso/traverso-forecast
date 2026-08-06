@@ -219,6 +219,15 @@ N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 # diagnostico -> NUNCA en el cron. No cambia el plan resultante cuando esta OFF.
 N2_DIAG_NUCLEO = _os.environ.get("N2_DIAG_NUCLEO", "0") == "1"
 
+# (06-08) DIAGNOSTICO: excluir SKU(s) del modelo (lista separada por comas). Reusa
+# el filtro V6.12-mini. Para probar si un SKU concreto es el que vuelve C
+# infactible: si al excluirlo C pasa a factible, es (parte de) la causa. Vacio por
+# defecto -> no afecta el cron.
+N2_DIAG_EXCLUIR_SKU = [
+    _s.strip() for _s in _os.environ.get("N2_DIAG_EXCLUIR_SKU", "").split(",")
+    if _s.strip()
+]
+
 # ─── Campaña de granel (V6 · 29-07) ──────────────────────────────────────────
 # Estado de planta semanal: a lo mas un granel de salsa (ketchup/mostaza) por
 # semana habilita el envasado de los SKU de ese grupo (granel_grupo en
@@ -2513,6 +2522,22 @@ def optimizar_plan(
             f"[V6.12-mini] {len(skus_filtrados_cap_bodega)} SKUs filtrados del optimizador "
             f"por stock>cap_bodega: {[s['sku'] for s in skus_filtrados_cap_bodega]}"
         )
+
+    # (06-08 DIAG) Exclusion manual de SKU para aislar la causa del INFEASIBLE.
+    if N2_DIAG_EXCLUIR_SKU:
+        _excl = []
+        for _sku in N2_DIAG_EXCLUIR_SKU:
+            if _sku in sku_params_rich:
+                sku_params_rich.pop(_sku, None)
+                forecast_rich.pop(_sku, None)
+                stock_inicial_rich.pop(_sku, None)
+                entradas_aprobadas_rich.pop(_sku, None)
+                _excl.append(_sku)
+        logger.warning(
+            f"[N2 DIAG EXCLUIR] {len(_excl)} SKU excluidos del modelo "
+            f"(diagnostico, NO cron): {_excl}"
+            + (f" | NO encontrados: {[s for s in N2_DIAG_EXCLUIR_SKU if s not in _excl]}"
+               if len(_excl) != len(N2_DIAG_EXCLUIR_SKU) else ""))
 
     # ─── 7. Llamar al optimizador rico ───────────────────────────────────────
     horizonte_dias = max(horizonte_semanas * 7, 14)
