@@ -627,6 +627,7 @@ def optimizar_plan_v12_rich(
         # criterio es intradia, acotar el cierre no impide que C hunda el piso.
         _vars_barrera = m.stock_disp if QUIEBRE_INTRADIA_SOLVER else m.stock_u
         _n_const = 0
+        _diag_imposibles = []   # (06-08 DIAG) cotas inalcanzables bajo el techo
         for (d, s), var in _vars_barrera.items():
             q = cotas_qstar.get((s, d.isoformat()))
             if q is None:
@@ -644,8 +645,50 @@ def optimizar_plan_v12_rich(
                     _n_relajadas += 1
             else:
                 q_eff = int(q)
+
+            # ─── (06-08 DIAG) ¿es esta cota alcanzable bajo el techo? ───────────
+            # stock_disp[d] = stock_u[d-1] + entrada_d - demanda_consumo_d.
+            # stock_u[d-1] <= 2*cap_bodega (dominio de la variable, ver ~l.844).
+            # Entonces el maximo posible de stock_disp[d] es:
+            #     2*cap_bodega + entrada_d - demanda_consumo_d
+            # Si q_eff supera eso, la cota NO se puede cumplir ni produciendo al
+            # tope los dias previos -> INFEASIBLE estructural. Solo se REGISTRA;
+            # no se altera el modelo (mismo comportamiento del solver).
+            try:
+                _cap = int(sku_params[s].get("cap_bodega_u", 1_000_000) or 1_000_000)
+                _ent = _entradas_del_dia(s, d, entradas_aprobadas)
+                _dem = int(round(demanda_consumo[s].get(d, 0.0)))
+                _max_disp = 2 * _cap + _ent - _dem
+                if q_eff > _max_disp:
+                    _diag_imposibles.append({
+                        "sku": s, "fecha": d.isoformat(),
+                        "q_eff": int(q_eff), "cap_bodega": _cap,
+                        "entrada": int(_ent), "demanda": int(_dem),
+                        "max_alcanzable": int(_max_disp),
+                        "exceso": int(q_eff - _max_disp),
+                    })
+            except Exception as _e:
+                logger.warning(f"[N2 DIAG] no se pudo evaluar cota ({s},{d}): {_e}")
+            # ─── fin DIAG ──────────────────────────────────────────────────────
+
             m.model.Add(var >= q_eff)
             _n_barrera += 1
+
+        # (06-08 DIAG) Reporte de cotas imposibles: candidatas al nucleo infactible.
+        # Si esta lista NO esta vacia y C da INFEASIBLE, la causa es el choque
+        # barrera-vs-techo (regla: cap_bodega/SS no deben crear infactibilidad dura).
+        if _diag_imposibles:
+            logger.warning(
+                f"[N2 DIAG] {len(_diag_imposibles)} cota(s) de barrera INALCANZABLES "
+                f"bajo el techo 2*cap_bodega (candidatas al nucleo infactible):")
+            for _c in sorted(_diag_imposibles, key=lambda x: -x["exceso"])[:20]:
+                logger.warning(
+                    f"[N2 DIAG]   SKU={_c['sku']} {_c['fecha']} | q_eff={_c['q_eff']} "
+                    f"> max={_c['max_alcanzable']} (cap_bodega={_c['cap_bodega']}, "
+                    f"ent={_c['entrada']}, dem={_c['demanda']}) | exceso={_c['exceso']}")
+        else:
+            logger.info("[N2 DIAG] ninguna cota de barrera excede el techo "
+                        "2*cap_bodega (la infactibilidad, si la hay, es de otra causa)")
         logger.info(f"[N2] barrera Q* modo={_modo_barrera} sobre="
                     f"{'stock_disp' if QUIEBRE_INTRADIA_SOLVER else 'stock_fin'}"
                     f": {_n_barrera} cotas agregadas"
