@@ -37,7 +37,7 @@ import {
 const API = "";
 const C = {
   teal: "#1D9E75", amber: "#EF9F27", red: "#E24B4A", blue: "#3B6FD4",
-  purple: "#6D4AC4", grayMid: "#D3D1C7", textMuted: "#888780", text: "#2C2C2A",
+  purple: "#6D4AC4", orange: "#E8862B", grayMid: "#D3D1C7", textMuted: "#888780", text: "#2C2C2A",
 };
 
 const fmt = (n) => (n == null ? "—" : Math.round(n).toLocaleString("es-CL"));
@@ -60,7 +60,9 @@ function TT({ active, payload, label }) {
       {p.stock_disp != null && row(
         p.stock_disp < 0 ? "= Disponible ⚠" : "= Disponible",
         p.stock_disp, p.stock_disp < 0 ? C.red : C.blue, true)}
-      {p.prod > 0 && row("+ Producción", p.prod, C.amber)}
+      {p.oft > 0 && row("+ OFT propuesta", p.oft, C.orange)}
+      {p.aprobada > 0 && row("+ OF aprobada / OFM", p.aprobada, C.teal)}
+      {p.pedidos > 0 && row("Pedidos (OV)", p.pedidos, C.purple)}
       {p.stock != null && row("= Stock final", p.stock, C.textMuted)}
       {p.ss > 0 && row("Stock seguridad", p.ss, C.amber)}
       {p.sim_disp != null && (
@@ -119,7 +121,11 @@ export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto 
     stock_ini: x.stock_ini_disp_cj,
     ss: x.ss_u != null ? x.ss_u / upc : null,
     demanda: x.demanda_corr_cj,
-    prod: (x.oft_cajas || 0) + (x.entrada_aprobada_u ? x.entrada_aprobada_u / upc : 0),
+    // (06-08) Separadas como en ProyeccionModal: OFT propuesta (naranja),
+    // OF/OFM aprobada (teal) y OV (purpura). Antes iban sumadas en `prod`.
+    oft: x.oft_cajas || 0,
+    aprobada: x.entrada_aprobada_u ? x.entrada_aprobada_u / upc : 0,
+    pedidos: x.pedidos_cj || 0,
   }));
 
   // ── Simulación: desplazamiento vertical desde la fecha de entrada ──────────
@@ -191,8 +197,10 @@ export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto 
             <ReferenceLine x={focoEje} stroke={C.purple} strokeWidth={1.5} strokeDasharray="4 3"
               label={{ value: labelFoco, position: "top", fontSize: 9.5, fill: C.purple }} />
           )}
-          <Bar dataKey="demanda" name="Demanda" fill={C.grayMid} barSize={5} />
-          <Bar dataKey="prod" name="Producción" fill={C.amber} barSize={5} />
+          <Bar dataKey="demanda" name="Demanda" fill={C.grayMid} barSize={4} />
+          <Bar dataKey="pedidos" name="Pedidos (OV)" fill={C.purple} fillOpacity={0.65} barSize={4} />
+          <Bar dataKey="oft" name="OFT propuesta" fill={C.orange} fillOpacity={0.4} barSize={4} />
+          <Bar dataKey="aprobada" name="OF aprobada / OFM" fill={C.teal} fillOpacity={0.8} barSize={4} />
           <Line type="monotone" dataKey="ss" name="SS" stroke={C.amber} strokeWidth={1}
                 strokeDasharray="4 3" dot={false} />
           <Line type="monotone" dataKey="stock_disp" name="Stock disponible" stroke={C.blue}
@@ -207,7 +215,9 @@ export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto 
         <Lg c={C.blue} t="Stock disponible" />
         {haySim && <Lg c={C.purple} t="Con tu cambio (simulado)" />}
         <Lg c={C.amber} t="SS" />
-        <Lg c={C.amber} t="Producción" />
+        <Lg c={C.orange} t="OFT propuesta" />
+        <Lg c={C.teal} t="OF aprobada" />
+        <Lg c={C.purple} t="OV" />
         <Lg c={C.grayMid} t="Demanda" />
       </div>
     </div>
