@@ -11,7 +11,7 @@ import Campanas from './components/Campanas';
 import MapaQuiebres from './components/MapaQuiebres';
 import MiniStock from './components/MiniStock';
 
-const API = '';
+const API = process.env.REACT_APP_API_BASE || '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
 // distinto de API que es path relativo (funciona con el proxy del dev-server
 // para fetch/XHR). En dev (dashboard:3000) backend esta en :8000.
@@ -187,7 +187,51 @@ function useResizableColumns(initialWidths) {
   return { widths, onMouseDown };
 }
 
-export default function App() {
+// -- Error boundary global --------------------------------------------------
+// Si cualquier error de render revienta el arbol (p.ej. un endpoint que
+// responde algo inesperado), en build de produccion NO hay overlay: la
+// pantalla queda en blanco sin pista. Este boundary muestra un mensaje
+// legible en su lugar. Debe ser PADRE de AppInner (un boundary no atrapa
+// errores de su propio render), por eso AppInner va envuelto en el export
+// default del final del archivo.
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, msg: '' };
+  }
+  static getDerivedStateFromError(err) {
+    return { hasError: true, msg: (err && err.message) ? err.message : String(err) };
+  }
+  componentDidCatch(err, info) {
+    console.error('ErrorBoundary capturo un error de render:', err, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{fontFamily:'Arial,sans-serif',padding:'40px 24px',maxWidth:640,margin:'40px auto',
+          background:'#fff',border:'0.5px solid #D3D1C7',borderRadius:10,color:'#2C2C2A'}}>
+          <div style={{fontSize:16,fontWeight:700,marginBottom:10}}>No se pudieron cargar los datos</div>
+          <div style={{fontSize:13,lineHeight:1.5,color:'#5F5E5A'}}>
+            Ocurrio un error al mostrar la aplicacion. Suele deberse a que el backend
+            no respondio lo esperado (conexion, proxy o servicio caido).
+          </div>
+          <div style={{fontSize:12,marginTop:14,color:'#888780'}}>
+            Detalle tecnico: {this.state.msg}
+          </div>
+          <button
+            onClick={() => window.location.reload()}
+            style={{marginTop:18,fontSize:12,padding:'8px 16px',borderRadius:7,border:'none',
+              background:'#1D9E75',color:'#fff',cursor:'pointer',fontWeight:600}}>
+            Reintentar
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function AppInner() {
   const [skus, setSkus] = useState([]);
   const [selSku, setSelSku] = useState('');
   const [result, setResult] = useState(null);
@@ -267,7 +311,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    axios.get(`${API}/dimensions`).then(r => { setCanales(r.data.canales||[]); }).catch(() => {});
+    axios.get(`${API}/dimensions`).then(r => { setCanales(Array.isArray(r.data?.canales) ? r.data.canales : []); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -276,7 +320,7 @@ export default function App() {
 
   useEffect(() => {
     axios.get(`${API}/ordenes/aprobadas`)
-      .then(r => setOrdenesAprobadas(r.data || []))
+      .then(r => setOrdenesAprobadas(Array.isArray(r.data) ? r.data : []))
       .catch(() => {});
   }, []);
 
@@ -305,7 +349,7 @@ export default function App() {
   useEffect(() => {
     const params = csvMode ? {use_csv: csvPath} : {};
     axios.get(`${API}/skus`, {params})
-      .then(r => { setSkus(r.data); if (r.data.length > 0 && !selSku) setSelSku(r.data[0].sku); })
+      .then(r => { const data = Array.isArray(r.data) ? r.data : []; if (!Array.isArray(r.data)) setError('Respuesta inesperada al cargar SKUs (no es una lista). Revisa la conexion con el backend.'); setSkus(data); if (data.length > 0 && !selSku) setSelSku(data[0].sku); })
       .catch(e => setError(`Error cargando SKUs: ${extractErrorMsg(e)}`));
   }, [csvMode, csvPath]);
 
@@ -1245,5 +1289,16 @@ export default function App() {
         {activeTab === 'parametros' && <ParametrosDiagnostico />}
       </div>
     </div>
+  );
+}
+
+// Export default: AppInner envuelto en el ErrorBoundary. Asi un error de
+// render de AppInner (p.ej. una lista que llego como string) muestra el
+// mensaje de fallback en vez de dejar la pantalla en blanco.
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
   );
 }
