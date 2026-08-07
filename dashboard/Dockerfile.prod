@@ -1,0 +1,22 @@
+# ── Stage 1: build de producción ──────────────────────────────────
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+# Base path y API base se inyectan en build (dependen del proxy de TI).
+# Valores por defecto = producción intranet. Para el test de de-risk se
+# sobreescriben con --build-arg (PUBLIC_URL=/ y REACT_APP_API_BASE=http://180.1.1.18:8000).
+ARG PUBLIC_URL=/planificacion
+ARG REACT_APP_API_BASE=/planificacion/api
+ENV PUBLIC_URL=$PUBLIC_URL
+ENV REACT_APP_API_BASE=$REACT_APP_API_BASE
+RUN npm run build
+
+# ── Stage 2: servir estático ──────────────────────────────────────
+FROM node:20-alpine
+WORKDIR /app
+RUN npm install -g serve@14
+COPY --from=build /app/build ./build
+EXPOSE 3000
+CMD ["serve", "-s", "build", "-l", "3000"]
