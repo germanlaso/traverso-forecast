@@ -16,11 +16,17 @@ const API = process.env.REACT_APP_API_BASE || '';
 // distinto de API que es path relativo (funciona con el proxy del dev-server
 // para fetch/XHR). En dev (dashboard:3000) backend esta en :8000.
 // En produccion (mismo origen tras nginx) usa el origin sin cambio.
-const BACKEND_URL = (() => {
-  const { protocol, hostname, port } = window.location;
-  const backendPort = port === '3000' ? '8000' : port;
-  return `${protocol}//${hostname}${backendPort ? ':' + backendPort : ''}`;
-})();
+// En produccion (build con REACT_APP_API_BASE) las navegaciones reales del
+// browser (<a href> a descargas del backend) tambien deben pasar por el proxy
+// bajo /planificacion/api, si no dan 404. En dev se mantiene la logica
+// absoluta a :8000 (un <a href> relativo no lo proxea el dev-server).
+const BACKEND_URL = process.env.REACT_APP_API_BASE
+  ? process.env.REACT_APP_API_BASE
+  : (() => {
+      const { protocol, hostname, port } = window.location;
+      const backendPort = port === '3000' ? '8000' : port;
+      return `${protocol}//${hostname}${backendPort ? ':' + backendPort : ''}`;
+    })();
 
 // (28-07-2026) Ancho del contenedor principal según la pestaña.
 // Las vistas de TABLA (muchas columnas) aprovechan todo el monitor; las de texto y

@@ -1,6 +1,4 @@
-
 services:
-
   # ── PostgreSQL MRP ────────────────────────────────────────────────────────────
   mrp_db:
     image: postgres:16-alpine
@@ -19,7 +17,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
   # ── Motor de forecast (Prophet + API FastAPI) ─────────────────────────────────
   forecast:
     build: ./forecast
@@ -53,20 +50,28 @@ services:
       mrp_db:
         condition: service_healthy
     restart: unless-stopped
-
-  # ── Dashboard React ───────────────────────────────────────────────────────────
+  # ── Dashboard React (BUILD DE PRODUCCION para la intranet) ────────────────────
+  # Sirve el build estatico con `serve` (ver dashboard/Dockerfile.prod).
+  # - PUBLIC_URL=/planificacion         -> assets se piden bajo /planificacion/
+  # - REACT_APP_API_BASE=/planificacion/api -> las llamadas van a /planificacion/api/*
+  # El proxy de la intranet (4433) strippea /planificacion (UI->3000) y
+  # /planificacion/api (API->8000).
+  # NOTA: este servicio ya NO monta ./dashboard/src como volumen -> se pierde el
+  # hot-reload en el server (comportamiento de produccion). Para iterar frontend
+  # rapido, usar `npm start` local o un docker-compose.override.yml de dev.
   dashboard:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.prod
+      args:
+        PUBLIC_URL: /planificacion
+        REACT_APP_API_BASE: /planificacion/api
     container_name: traverso_dashboard
     ports:
       - "3000:3000"
-    volumes:
-      - ./dashboard/src:/app/src
-      - ./dashboard/public:/app/public
     depends_on:
       - forecast
     restart: unless-stopped
-
 volumes:
   forecast_models:
   mrp_db_data:
