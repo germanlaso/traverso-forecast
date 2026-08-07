@@ -4,7 +4,7 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine, Legend
 } from "recharts";
 
-const API = "";
+const API = process.env.REACT_APP_API_BASE || "";
 
 // ── Parámetros MRP hardcodeados como fallback (se reemplazan con /plan/params) ──
 const PARAMS_FALLBACK = {

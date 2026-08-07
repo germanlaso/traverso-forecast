@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-const API = "";
+const API = process.env.REACT_APP_API_BASE || "";
 
 // Paleta minima (importar la global hubiera requerido cambios estructurales)
 const C = {

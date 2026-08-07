@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import ProyeccionModal from "./ProyeccionModal";
 
-const API = "";
+const API = process.env.REACT_APP_API_BASE || "";
 
 const C = {
   teal:    "#1D9E75", tealLt: "#E1F5EE", tealMid: "#0F6E56",

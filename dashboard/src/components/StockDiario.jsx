@@ -9,7 +9,7 @@ import { useCampanas, bandasCampana, renderBandas, NotaCampana } from "./campana
 // la demanda por forecast vs pedidos (OV). Lee el backend como fuente de verdad
 // (GET /plan/proyeccion_diaria/{sku}); NO recalcula nada en el cliente (§5.1).
 
-const API = "";
+const API = process.env.REACT_APP_API_BASE || "";
 
 const C = {
   teal:    "#1D9E75", tealLt: "#E1F5EE", tealMid: "#0F6E56",

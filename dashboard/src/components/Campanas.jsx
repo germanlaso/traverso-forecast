@@ -20,7 +20,7 @@ import axios from "axios";
  */
 
 // Path relativo, igual que App.js: funciona con el proxy del dev-server.
-const API = '';
+const API = process.env.REACT_APP_API_BASE || '';
 
 const NAVY = "#1A2D4D";
 

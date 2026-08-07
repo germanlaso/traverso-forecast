@@ -14,7 +14,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import axios from "axios";
 import ProyeccionModal from "./ProyeccionModal";
 
-const API = "";
+const API = process.env.REACT_APP_API_BASE || "";
 
 // severidad -> color (hex propio del dashboard; NO tokens CDS)
 const COLORS = {

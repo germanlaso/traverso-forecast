@@ -34,7 +34,7 @@ import {
   ResponsiveContainer, ReferenceLine,
 } from "recharts";
 
-const API = "";
+const API = process.env.REACT_APP_API_BASE || "";
 const C = {
   teal: "#1D9E75", amber: "#EF9F27", red: "#E24B4A", blue: "#3B6FD4",
   purple: "#6D4AC4", orange: "#E8862B", grayMid: "#D3D1C7", textMuted: "#888780", text: "#2C2C2A",

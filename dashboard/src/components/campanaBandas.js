@@ -23,7 +23,7 @@
 import React, { useEffect, useState } from "react";
 import { ReferenceArea } from "recharts";
 
-const API = "";
+const API = process.env.REACT_APP_API_BASE || "";
 
 export const COLOR_MODO = {
   ketchup: "#E24B4A",

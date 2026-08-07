@@ -3,7 +3,7 @@ import axios from "axios";
 import ProyeccionModal from "./ProyeccionModal";
 import MiniStock from "./MiniStock";
 
-const API = "";
+const API = process.env.REACT_APP_API_BASE || "";
 const C = {
   teal:"#1D9E75",tealLt:"#E1F5EE",tealMid:"#0F6E56",tealDk:"#085041",
   amber:"#EF9F27",amberLt:"#FAEEDA",red:"#E24B4A",redLt:"#FCEBEB",
