@@ -65,42 +65,26 @@ def quiebres_por_semana(snap: dict, sku: str) -> dict:
     return out
 
 
-def ordenes_por_semana(snap: dict, sku: str) -> dict:
-    """Cajas a producir por semana, del vista_dashboard.ordenes."""
-    ords = ((snap.get("vista_dashboard") or {}).get("ordenes") or [])
-    out = defaultdict(float)
-    for o in ords:
-        if str(o.get("sku")) != str(sku):
-            continue
-        sem = o.get("semana_necesidad") or o.get("semana") or "?"
-        out[str(sem)[:10]] += float(o.get("cantidad_cajas") or 0)
-    return out
+# Claves reales del snapshot (confirmadas el 10-08-2026 en el plan 137).
+# Separarlas permite AISLAR los confundidos entre planes:
+#   forecast_u     -> lo que cambia la correccion del evento
+#   pedidos_u      -> OV de HANA: aca vive el cambio de 179 a 186 SKU con pedido
+#   demanda_corr_u -> lo que el MRP realmente consume
+CLAVES_DEMANDA = [("forecast_u", "fc"), ("pedidos_u", "ped"),
+                  ("demanda_corr_u", "corr")]
 
 
-def demanda_por_semana(snap: dict, sku: str) -> tuple[dict, str]:
-    """Demanda semanal. Busca la clave real en el snapshot en vez de suponerla."""
-    # 1) intento en el detalle diario
+def series_por_semana(snap: dict, sku: str) -> dict:
+    """Agrega por semana (domingo) cada clave de demanda + los OFT en cajas."""
     serie = (snap.get("detalle_diario") or {}).get(sku) or {}
-    if serie:
-        muestra = next(iter(serie.values()))
-        for k in ("demanda_u", "demanda", "consumo_u", "salidas_u", "venta_u"):
-            if k in muestra:
-                out = defaultdict(float)
-                for fecha, c in serie.items():
-                    out[semana(fecha)] += float(c.get(k) or 0)
-                return out, f"detalle_diario.{k}"
-    # 2) intento en la proyeccion por SKU del dashboard
-    proy = ((snap.get("vista_dashboard") or {}).get("proyeccion_por_sku") or {}).get(sku)
-    if isinstance(proy, list) and proy:
-        m = proy[0]
-        for k in ("demanda_cj", "demanda", "forecast_cj", "forecast", "demanda_u"):
-            if k in m:
-                out = defaultdict(float)
-                for p in proy:
-                    sem = str(p.get("semana") or p.get("ds") or "?")[:10]
-                    out[sem] += float(p.get(k) or 0)
-                return out, f"proyeccion_por_sku.{k}"
-    return {}, "(no encontrada)"
+    out = {k: defaultdict(float) for k, _ in CLAVES_DEMANDA}
+    out["oft_cajas"] = defaultdict(float)
+    for fecha, c in serie.items():
+        sem = semana(fecha)
+        for k, _ in CLAVES_DEMANDA:
+            out[k][sem] += float(c.get(k) or 0)
+        out["oft_cajas"][sem] += float(c.get("oft_cajas") or 0)
+    return out
 
 
 def estructura(snap: dict, sku: str) -> None:
@@ -109,9 +93,6 @@ def estructura(snap: dict, sku: str) -> None:
     serie = (snap.get("detalle_diario") or {}).get(sku) or {}
     if serie:
         print("  detalle_diario[dia]:", ", ".join(sorted(next(iter(serie.values())).keys())))
-    proy = ((snap.get("vista_dashboard") or {}).get("proyeccion_por_sku") or {}).get(sku)
-    if isinstance(proy, list) and proy:
-        print("  proyeccion_por_sku[i]:", ", ".join(sorted(proy[0].keys())))
     ords = ((snap.get("vista_dashboard") or {}).get("ordenes") or [])
     mio = [o for o in ords if str(o.get("sku")) == str(sku)]
     if mio:
@@ -168,35 +149,46 @@ def main() -> None:
         print(f"{'TOTAL':<12}" + "".join(celdas))
     print()
 
-    # ── Demanda semanal ───────────────────────────────────────────────────────
-    da, fa = demanda_por_semana(A["snap"], sku)
-    db_, fb = demanda_por_semana(B["snap"], sku)
-    print(f"--- DEMANDA SEMANAL (fuente: {fa}) ---")
-    if not da and not db_:
-        print("  No se encontro una clave de demanda en el snapshot.")
-        print("  Ver la seccion 'claves del snapshot' de arriba y avisar cual es.")
+    # ── Demanda semanal ──────────────────────────────────────────────────────
+    sa_, sb_ = series_por_semana(A["snap"], sku), series_por_semana(B["snap"], sku)
+    sems = sorted(set(sa_["forecast_u"]) | set(sb_["forecast_u"]))
+    print(f"--- DEMANDA SEMANAL en UNIDADES (SKU {sku}) ---")
+    if not sems:
+        print("  Sin detalle diario para este SKU.")
     else:
-        oa, ob = ordenes_por_semana(A["snap"], sku), ordenes_por_semana(B["snap"], sku)
-        sem2 = sorted(set(da) | set(db_) | set(oa) | set(ob))
-        print(f"{'semana':<12}{f'dem {args.a}':>12}{f'dem {args.b}':>12}{'delta':>10}"
-              f"{'%':>8}   {f'prod {args.a}':>12}{f'prod {args.b}':>12}")
-        print("-" * 80)
-        sa = sb = 0.0
-        for s_ in sem2:
-            x, y = da.get(s_, 0.0), db_.get(s_, 0.0)
-            sa += x
-            sb += y
-            d = y - x
-            pct = (100.0 * d / x) if x else float("nan")
+        print(f"{'semana':<12}{'fc ' + str(args.a):>10}{'fc ' + str(args.b):>10}"
+              f"{'delta%':>9}{'ped ' + str(args.a):>10}{'ped ' + str(args.b):>10}"
+              f"{'corr ' + str(args.a):>11}{'corr ' + str(args.b):>11}"
+              f"{'oft ' + str(args.a):>10}{'oft ' + str(args.b):>10}")
+        print("-" * 103)
+        tot = {k: [0.0, 0.0] for k in ("forecast_u", "pedidos_u",
+                                       "demanda_corr_u", "oft_cajas")}
+        for s_ in sems:
+            fx, fy = sa_["forecast_u"][s_], sb_["forecast_u"][s_]
+            px, py = sa_["pedidos_u"][s_], sb_["pedidos_u"][s_]
+            cx, cy = sa_["demanda_corr_u"][s_], sb_["demanda_corr_u"][s_]
+            ox, oy = sa_["oft_cajas"][s_], sb_["oft_cajas"][s_]
+            for k, (x, y) in zip(tot, ((fx, fy), (px, py), (cx, cy), (ox, oy))):
+                tot[k][0] += x
+                tot[k][1] += y
+            pct = (100.0 * (fy - fx) / fx) if fx else float("nan")
             spct = f"{pct:+.1f}%" if pct == pct else "  —"
-            print(f"{s_:<12}{x:>12,.0f}{y:>12,.0f}{d:>+10,.0f}{spct:>8}   "
-                  f"{oa.get(s_, 0):>12,.0f}{ob.get(s_, 0):>12,.0f}")
-        print("-" * 80)
-        dt = sb - sa
-        pt = (100.0 * dt / sa) if sa else float("nan")
-        spt = f"{pt:+.1f}%" if pt == pt else "  —"
-        print(f"{'TOTAL':<12}{sa:>12,.0f}{sb:>12,.0f}{dt:>+10,.0f}{spt:>8}   "
-              f"{sum(oa.values()):>12,.0f}{sum(ob.values()):>12,.0f}")
+            print(f"{s_:<12}{fx:>10,.0f}{fy:>10,.0f}{spct:>9}"
+                  f"{px:>10,.0f}{py:>10,.0f}{cx:>11,.0f}{cy:>11,.0f}"
+                  f"{ox:>10,.0f}{oy:>10,.0f}")
+        print("-" * 103)
+        fx, fy = tot["forecast_u"]
+        pct = (100.0 * (fy - fx) / fx) if fx else float("nan")
+        spct = f"{pct:+.1f}%" if pct == pct else "  —"
+        print(f"{'TOTAL':<12}{fx:>10,.0f}{fy:>10,.0f}{spct:>9}"
+              f"{tot['pedidos_u'][0]:>10,.0f}{tot['pedidos_u'][1]:>10,.0f}"
+              f"{tot['demanda_corr_u'][0]:>11,.0f}{tot['demanda_corr_u'][1]:>11,.0f}"
+              f"{tot['oft_cajas'][0]:>10,.0f}{tot['oft_cajas'][1]:>10,.0f}")
+        print()
+        print("COMO LEER: `fc` es el forecast, lo unico que cambia la correccion del")
+        print("evento. `ped` son las OV de HANA: si cambio, ahi esta el confundido de")
+        print("179 -> 186 SKU con pedido, ajeno al evento. `corr` es lo que consume el")
+        print("MRP. `oft` son las cajas a producir que decidio el optimizador.")
 
     # ── Opcional: toda la linea ───────────────────────────────────────────────
     if args.linea:
