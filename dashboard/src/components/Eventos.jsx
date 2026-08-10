@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip,
          ResponsiveContainer, ReferenceArea } from 'recharts';
@@ -52,6 +52,73 @@ function errMsg(e) {
 
 const COLOR_FASE = {suave: C.amber, fuerte: C.danger, base: C.purple};
 
+/**
+ * Buscador de SKU que filtra por CODIGO o por DESCRIPCION y muestra las dos.
+ * No usa <datalist> a proposito: Chrome, Firefox y Safari renderizan el `value`
+ * y el texto de la opcion de forma distinta, asi que la descripcion no se veria
+ * de manera confiable.
+ */
+function BuscadorSku({skus, value, onChange}) {
+  const [q, setQ] = useState('');
+  const [abierto, setAbierto] = useState(false);
+
+  const desc = skus.find(x => String(x.sku) === String(value))?.descripcion || '';
+  const texto = abierto ? q : (value ? `${value}${desc ? ` — ${desc}` : ''}` : '');
+
+  const filtrados = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    const base = !t ? skus : skus.filter(x =>
+      String(x.sku).toLowerCase().includes(t) ||
+      String(x.descripcion || '').toLowerCase().includes(t));
+    return base.slice(0, 12);
+  }, [q, skus]);
+
+  const elegir = (s) => { onChange(String(s)); setQ(''); setAbierto(false); };
+
+  return (
+    <div style={{position:'relative', minWidth:330}}>
+      <input
+        style={{...s.input, width:'100%'}}
+        value={texto}
+        placeholder="Código o nombre del producto"
+        onFocus={() => {setQ(''); setAbierto(true);}}
+        onChange={e => {setQ(e.target.value); setAbierto(true);}}
+        onBlur={() => setTimeout(() => setAbierto(false), 120)}
+        onKeyDown={e => {
+          if (e.key === 'Escape') setAbierto(false);
+          // Enter con un solo resultado: lo toma, para no obligar al mouse
+          if (e.key === 'Enter' && filtrados.length === 1) elegir(filtrados[0].sku);
+        }}
+      />
+      {abierto && filtrados.length > 0 && (
+        <div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:20,
+                     background:'#fff',border:`0.5px solid ${C.border}`,
+                     borderRadius:6,marginTop:2,maxHeight:260,overflowY:'auto',
+                     boxShadow:'0 4px 12px rgba(0,0,0,.10)'}}>
+          {filtrados.map(x => (
+            // onMouseDown y no onClick: dispara ANTES del blur del input
+            <div key={x.sku} onMouseDown={() => elegir(x.sku)}
+                 style={{padding:'6px 10px',cursor:'pointer',fontSize:12,
+                          borderBottom:`0.5px solid ${C.border}`}}
+                 onMouseEnter={e => e.currentTarget.style.background = C.grayLt}
+                 onMouseLeave={e => e.currentTarget.style.background = '#fff'}>
+              <span style={{fontWeight:600}}>{x.sku}</span>
+              <span style={{color:C.textMuted,marginLeft:8}}>{x.descripcion || '—'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {abierto && q.trim() && filtrados.length === 0 && (
+        <div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:20,
+                     background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:6,
+                     marginTop:2,padding:'8px 10px',fontSize:12,color:C.textMuted}}>
+          Ningún producto coincide con "{q.trim()}"
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Eventos({skus = []}) {
   const [lista, setLista]     = useState([]);
   const [sku, setSku]         = useState('');
@@ -64,6 +131,14 @@ export default function Eventos({skus = []}) {
   const [cargando, setCargando] = useState('');   // '', 'analizar', 'preview', 'guardar'
   const [error, setError]     = useState('');
   const [aviso, setAviso]     = useState('');
+
+  // La respuesta de /eventos son filas crudas de mrp_eventos y no trae
+  // descripcion; se resuelve con el listado de SKU que ya tiene el dashboard.
+  const descPorSku = useMemo(() => {
+    const m = {};
+    (skus || []).forEach(x => { m[String(x.sku)] = x.descripcion || ''; });
+    return m;
+  }, [skus]);
 
   const recargar = useCallback(() => {
     axios.get(`${API}/eventos`)
@@ -130,7 +205,7 @@ export default function Eventos({skus = []}) {
     semana: w.ds, real: w.real, habitual: w.base,
   }));
 
-  const skuDesc = skus.find(x => String(x.sku) === String(sku))?.descripcion || '';
+  const skuDesc = descPorSku[String(sku)] || '';
   const puedeGuardar = fases.length > 0 && preview !== null && cargando === '';
 
   return (
@@ -148,7 +223,7 @@ export default function Eventos({skus = []}) {
         ) : (
           <table style={{width:'100%',borderCollapse:'collapse'}}>
             <thead><tr>
-              {['Evento','SKU','Tramo','Desde','Hasta','Semanas','Estado',''].map(h =>
+              {['Evento','SKU','Descripción','Tramo','Desde','Hasta','Semanas','Estado',''].map(h =>
                 <th key={h} style={s.th}>{h}</th>)}
             </tr></thead>
             <tbody>
@@ -156,6 +231,11 @@ export default function Eventos({skus = []}) {
                 <tr key={ev.id}>
                   <td style={s.td}>{ev.nombre}</td>
                   <td style={s.td}>{ev.sku}</td>
+                  <td style={{...s.td,color:C.textMuted,maxWidth:220,overflow:'hidden',
+                               textOverflow:'ellipsis',whiteSpace:'nowrap'}}
+                      title={descPorSku[String(ev.sku)] || ''}>
+                    {descPorSku[String(ev.sku)] || '—'}
+                  </td>
                   <td style={s.td}>
                     <span style={s.badge(C.grayLt, COLOR_FASE[ev.etiqueta] || C.gray)}>{ev.etiqueta}</span>
                   </td>
@@ -192,14 +272,9 @@ export default function Eventos({skus = []}) {
           puedas decidir.
         </div>
         <div style={s.row}>
-          <span style={{fontSize:12,fontWeight:600,color:C.textMuted}}>SKU:</span>
-          <input style={{...s.input,width:150}} list="lista-skus-ev" value={sku}
-                 onChange={e => {setSku(e.target.value); setAnalisis(null); setPreview(null);}}
-                 placeholder="250010495"/>
-          <datalist id="lista-skus-ev">
-            {skus.map(x => <option key={x.sku} value={x.sku}>{x.descripcion}</option>)}
-          </datalist>
-          {skuDesc && <span style={{fontSize:11,color:C.textMuted}}>{skuDesc}</span>}
+          <span style={{fontSize:12,fontWeight:600,color:C.textMuted}}>Producto:</span>
+          <BuscadorSku skus={skus} value={sku}
+                       onChange={v => {setSku(v); setAnalisis(null); setPreview(null);}}/>
         </div>
         <div style={s.row}>
           <span style={{fontSize:12,fontWeight:600,color:C.textMuted}}>Nombre:</span>
@@ -226,7 +301,9 @@ export default function Eventos({skus = []}) {
       {/* ── 3. Análisis ─────────────────────────────────────────────────── */}
       {analisis?.ok && (
         <div style={s.card}>
-          <div style={s.cardTitle}>Qué encontró el sistema</div>
+          <div style={s.cardTitle}>
+            Qué encontró el sistema — {sku}{skuDesc ? ` · ${skuDesc}` : ''}
+          </div>
           <div style={s.alert('ok')}>{analisis.mensaje}</div>
 
           {datosGrafico.length > 0 && (
