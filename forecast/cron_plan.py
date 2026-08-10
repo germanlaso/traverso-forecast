@@ -32,6 +32,7 @@ tocar main.py (archivo sensible) ni aproximar la parte delicada de las OFs.
 import argparse
 import datetime as dt
 import logging
+import os
 import sys
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -245,6 +246,40 @@ def main():
     # Ver DECISION_forecast_cobertura_y_reentrenamiento.md
     fecha_cobertura = hoy + dt.timedelta(days=args.horizonte * 7 + 42)
     log.info(f"[4/8] el forecast debe cubrir hasta {fecha_cobertura}")
+    # (10-08-2026) EVENTOS COMERCIALES — Fase 1.
+    # Detras de flag: mientras EVENTOS_ENABLED != 1 este bloque no hace nada y el
+    # comportamiento es identico al de antes (extra_events=None). Se apaga sacando
+    # el flag del crontab, sin revertir codigo.
+    #
+    # Efecto de pasar extra_events: run_sku_pipeline SALTEA el cache y reentrena
+    # ese SKU en cada corrida (forecaster.py L371). No persiste el pickle: los
+    # eventos vetan el guardado (ver INVARIANTE en run_sku_pipeline), porque un
+    # modelo entrenado con eventos solo es cargable por una corrida que pase los
+    # MISMOS eventos. Son segundos por SKU y solo afecta a los que tengan evento.
+    eventos_por_sku: dict = {}
+    if os.getenv("EVENTOS_ENABLED", "0") == "1":
+        try:
+            from eventos import cargar_eventos_activos
+            eventos_por_sku = cargar_eventos_activos()
+            n_reg = sum(len(v) for v in eventos_por_sku.values())
+            log.info(f"[4/8] eventos ON: {len(eventos_por_sku)} SKU, {n_reg} regresor(es)")
+            # Los SKU MTO se saltean antes del pipeline (abajo), asi que un evento
+            # cargado sobre un MTO no se aplicaria y hay que decirlo.
+            mto_ev = [s for s in eventos_por_sku
+                      if getattr(sku_params.get(s), "mto", False)]
+            if mto_ev:
+                log.warning(f"[4/8] eventos IGNORADOS (SKU es MTO, sin forecast): {mto_ev}")
+            fuera = [s for s in eventos_por_sku if s not in sku_params]
+            if fuera:
+                log.warning(f"[4/8] eventos de SKU que no estan en params: {fuera}")
+        except Exception as e:
+            # Un problema de eventos NO debe tirar el plan del dia: se degrada a
+            # "sin eventos", que es exactamente el comportamiento previo.
+            log.error(f"[4/8] eventos: fallo la carga, se CONTINUA SIN EVENTOS: {e}")
+            eventos_por_sku = {}
+    else:
+        log.info("[4/8] eventos OFF (EVENTOS_ENABLED != 1)")
+
     forecasts = {}
     n_mto = 0
     for sku in sku_params:
@@ -254,10 +289,15 @@ def main():
         if getattr(sku_params[sku], "mto", False):
             n_mto += 1
             continue
+        _ev = eventos_por_sku.get(sku)
+        if _ev:
+            log.info(f"[4/8] {sku}: {len(_ev)} regresor(es) de evento "
+                     f"({', '.join(e['name'] for e in _ev)}) -> reentrena sin persistir")
         try:
             r = run_sku_pipeline(df=df_sales, sku=sku, canal=None,
                                  forecast_periods=args.horizonte + 4,
-                                 fecha_cobertura=fecha_cobertura)
+                                 fecha_cobertura=fecha_cobertura,
+                                 extra_events=_ev)
             forecasts[sku] = r.get("forecast", [])
         except Exception as e:
             log.warning(f"[4/8] forecast no disponible para {sku}: {e}")
