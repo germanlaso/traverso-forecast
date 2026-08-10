@@ -348,7 +348,8 @@ def run_sku_pipeline(df: pd.DataFrame,
                      extra_events: list[dict] | None = None,
                      forecast_periods: int      = 26,
                      force_retrain: bool        = False,
-                     fecha_cobertura: date | None = None) -> dict:
+                     fecha_cobertura: date | None = None,
+                     persistir: bool | None     = None) -> dict:
     """
     Pipeline completo para un segmento SKU x Canal x Zona.
 
@@ -358,7 +359,12 @@ def run_sku_pipeline(df: pd.DataFrame,
       3. Evalúa con hold-out (80/20)
       4. Entrena con historial completo + regressores + eventos manuales
       5. Genera forecast a `forecast_periods` semanas
-      6. Guarda el modelo en disco
+      6. Guarda el modelo en disco (solo si `persistir`; ver INVARIANTE abajo)
+
+    persistir:
+        None (default) -> se persiste, salvo que haya `extra_events`.
+        False          -> nunca se persiste (exploracion / experimentos).
+        True           -> se persiste, EXCEPTO si hay `extra_events` (veto duro).
     """
     key       = make_key(sku, canal, zona)
     categoria = get_categoria(df, sku)
@@ -366,6 +372,19 @@ def run_sku_pipeline(df: pd.DataFrame,
     # Regressores automáticos según categoría
     regressors = get_regressors(categoria)
     logger.info(f"SKU={sku} | categoria='{categoria}' | regressors={[r['name'] for r in regressors]}")
+
+    # (10-08-2026) INVARIANTE: el pickle en disco NUNCA contiene regresores de
+    # evento. Un modelo entrenado con `extra_events` solo es cargable por una
+    # corrida que pase los MISMOS eventos: la rama de cache (abajo) llama a
+    # make_forecast() SIN extra_events y Prophet aborta con
+    #   ValueError: Regressor '<evento>' missing from dataframe
+    # Guardarlo envenena el cron (incidente 05-08-2026, §3.3). Por eso los
+    # eventos VETAN la persistencia, sin importar lo que pida el llamador; un
+    # `persistir=False` explicito ademas evita que la pestana de exploracion
+    # pise el cache de produccion.
+    # Patron `is not None`: un False explicito NO debe leerse como "sin valor"
+    # (trampa de coalescencia falsy ya vista en mrp.py con ss_dias=0).
+    _persistir = (persistir if persistir is not None else True) and not extra_events
 
     # Intentar modelo en caché (solo si no hay eventos manuales que cambien el modelo)
     if not force_retrain and not extra_events:
@@ -394,6 +413,8 @@ def run_sku_pipeline(df: pd.DataFrame,
                 "history":     history,
                 "metrics":     meta.get("metrics", {}),
                 "from_cache":  True,
+                "eventos":     [],        # la rama de cache solo corre sin eventos
+                "persistido":  False,     # no se entreno nada
             }
 
     prophet_df = prepare_prophet_df(df, sku, canal, zona)
@@ -413,16 +434,24 @@ def run_sku_pipeline(df: pd.DataFrame,
     fc    = make_forecast(model, _periods, regressors, extra_events)
     fc    = _cap_forecast(fc, prophet_df)
 
-    save_model(model, key, metadata={
-        "metrics":        metrics,
-        "n_history":      len(prophet_df),
-        "freq":           FREQ,
-        "forecast_periods": _periods,          # efectivos (D1), no el mínimo pedido
-        "categoria":      categoria,
-        "regressors":     [r["name"] for r in regressors],
-        "n_regressors":   len(regressors),
-        "trained_at":     datetime.utcnow().isoformat(),
-    })
+    if _persistir:
+        save_model(model, key, metadata={
+            "metrics":        metrics,
+            "n_history":      len(prophet_df),
+            "freq":           FREQ,
+            "forecast_periods": _periods,          # efectivos (D1), no el mínimo pedido
+            "categoria":      categoria,
+            "regressors":     [r["name"] for r in regressors],
+            "n_regressors":   len(regressors),
+            "trained_at":     datetime.utcnow().isoformat(),
+        })
+    else:
+        _nom_ev = [e.get("name") for e in (extra_events or [])]
+        logger.info(
+            "SKU=%s | modelo NO persistido (persistir=%s, eventos=%s) "
+            "-> el pickle de produccion queda intacto",
+            sku, persistir, _nom_ev
+        )
 
     history = (
         prophet_df
@@ -439,6 +468,8 @@ def run_sku_pipeline(df: pd.DataFrame,
         "history":    history,
         "metrics":    metrics,
         "from_cache": False,
+        "eventos":    [e.get("name") for e in (extra_events or [])],
+        "persistido": _persistir,
     }
 
 
