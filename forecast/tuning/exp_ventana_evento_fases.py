@@ -80,6 +80,18 @@ F2_DERIV = [("2024-10-06", "2024-11-10"), ("2024-11-24", "2024-12-08"),
             ("2024-12-22", "2024-12-29")]
 TAIL_2025 = [("2025-01-12", "2025-01-12")]
 
+# Variantes de CORTE, para descartar circularidad. El corte de `dos_fases_contiguo`
+# cae en 09-29/10-06, o sea EXACTAMENTE en la costura de las ventanas de medicion
+# (ago-sep termina 09-30). Si a cada ventana de medicion se le da su propio
+# coeficiente, los ratios podrian igualarse por MECANICA y no porque el modelo
+# mejoro. Estas variantes desplazan el corte manteniendo las mismas 20 semanas
+# totales: si `asim` sigue bajo con cortes desplazados, el hallazgo es robusto.
+CORTES_ALT = {
+    "corte_38_39": ("2024-09-22", "2024-09-29"),   # 1 sem antes de la costura
+    "corte_41_42": ("2024-10-13", "2024-10-20"),   # 2 sem despues
+    "corte_43_44": ("2024-10-27", "2024-11-03"),   # 4 sem despues
+}
+
 CANDIDATOS: dict[str, list[dict]] = {
     # baseline
     "sin_evento": [],
@@ -108,6 +120,14 @@ CANDIDATOS: dict[str, list[dict]] = {
         {"name": "ev_comp_f3", "tramos": [("2025-01-05", "2025-01-26")]},
     ],
 }
+
+# Variantes de corte generadas: mismas 20 semanas (2024-08-18 -> 2024-12-29),
+# solo cambia DONDE se parte en dos fases.
+for _nom, (_fin_f1, _ini_f2) in CORTES_ALT.items():
+    CANDIDATOS[_nom] = [
+        {"name": "ev_comp_f1", "tramos": [(F1_CONTIG[0], _fin_f1)]},
+        {"name": "ev_comp_f2", "tramos": [(_ini_f2, F2_CONTIG[1])]},
+    ]
 
 
 def domingos(tramos) -> list[str]:
