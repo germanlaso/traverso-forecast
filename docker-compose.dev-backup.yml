@@ -1,0 +1,82 @@
+# docker-compose.dev-backup.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPOSE DE ROLLBACK. Deja el dashboard de vuelta en modo DEV (react-scripts
+# start con hot-reload), que es como corria antes del cutover a la intranet.
+#
+# Uso (SOLO en rollback, ver RUNBOOK):
+#   docker compose -f docker-compose.dev-backup.yml up -d dashboard
+#
+# Requiere que en los backups previos al cutover se haya guardado la imagen dev:
+#   docker tag traverso-forecast-dashboard traverso-forecast-dashboard:dev-backup
+#
+# forecast y mrp_db son identicos al compose de produccion (no cambian en el
+# cutover). Estan aca solo para que este archivo sea un compose completo y
+# valido; el rollback solo actua sobre `dashboard` (up -d dashboard).
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  mrp_db:
+    image: postgres:16-alpine
+    container_name: traverso_mrp_db
+    environment:
+      POSTGRES_DB: mrp
+      POSTGRES_USER: mrp_user
+      POSTGRES_PASSWORD: ${MRP_DB_PASSWORD:-mrp_traverso_2026}
+    volumes:
+      - mrp_db_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mrp_user -d mrp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  forecast:
+    build: ./forecast
+    container_name: traverso_forecast
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./forecast:/app
+      - forecast_models:/app/models
+    environment:
+      - TZ=America/Santiago
+      - SQL_SERVER=${SQL_SERVER}
+      - SQL_DATABASE=${SQL_DATABASE}
+      - SQL_USERNAME=${SQL_USERNAME}
+      - SQL_PASSWORD=${SQL_PASSWORD}
+      - SQL_DRIVER=ODBC Driver 18 for SQL Server
+      - MRP_DB_URL=postgresql://mrp_user:${MRP_DB_PASSWORD:-mrp_traverso_2026}@mrp_db:5432/mrp
+      - HANA_PWD=${HANA_PWD}
+      - SMTP_PWD=${SMTP_PWD}
+      - FALTANTES_DEST=${FALTANTES_DEST}
+      - FALTANTES_ALERTA=${FALTANTES_ALERTA}
+      - FALTANTES_DEST_AM=${FALTANTES_DEST_AM}
+      - FALTANTES_DEST_FINAL=${FALTANTES_DEST_FINAL}
+      - VIGIA_DEST=${VIGIA_DEST}
+      - VIGIA_ALERTA=${VIGIA_ALERTA}
+      - INFORME_VENTAS_DEST=${INFORME_VENTAS_DEST}
+      - INFORME_VENTAS_ALERTA=${INFORME_VENTAS_ALERTA}
+      - OV_NETTING_ENABLED=${OV_NETTING_ENABLED:-1}
+    depends_on:
+      mrp_db:
+        condition: service_healthy
+    restart: unless-stopped
+  # ── Dashboard en modo DEV (rollback) ──────────────────────────────────────
+  # Usa la imagen dev respaldada (sin build args, sin subpath) + hot-reload.
+  dashboard:
+    image: traverso-forecast-dashboard:dev-backup
+    container_name: traverso_dashboard
+    command: ["npm", "start"]
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dashboard/src:/app/src
+      - ./dashboard/public:/app/public
+    depends_on:
+      - forecast
+    restart: unless-stopped
+volumes:
+  forecast_models:
+  mrp_db_data:
