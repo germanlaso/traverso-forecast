@@ -448,6 +448,64 @@ def crear_tablas_params():
                 PRIMARY KEY (sku, desde)
             );
 
+            -- Eventos comerciales que distorsionan el forecast.
+            --
+            -- UNA FILA = UN PERIODO en fechas naturales. El usuario NO piensa en
+            -- domingos ni en semanas ISO: eventos.py snapea con
+            -- calendario.semana_viz_inicio().
+            --
+            -- `etiqueta` agrupa filas en un MISMO regresor: filas con igual
+            -- (nombre, sku, etiqueta) se unen en una sola columna binaria;
+            -- etiquetas distintas generan regresores SEPARADOS, cada uno con su
+            -- propio coeficiente. Medido el 10-08-2026 sobre 250010495: un solo
+            -- regresor sobre todo el evento sobrepredice oct-nov 2025 en +86%
+            -- (holdout out-of-sample); separado en dos fases de intensidad
+            -- ('suave' ago-sep, 'fuerte' oct-dic) baja a +17%. Sin evento: +402%.
+            --
+            -- `tipo`: 'pasado'  -> regresor binario, Prophet estima el coeficiente.
+            --         'futuro'  -> NO es un regresor. Un regresor cuya columna es
+            --                      cero en todo el entrenamiento no es
+            --                      identificable y Prophet lo encoge a ~0, asi
+            --                      que un evento futuro no tendria ningun efecto.
+            --                      Requiere ajuste post-hoc sobre la serie de
+            --                      forecast (Fase 2). Hoy eventos.py los IGNORA.
+            --
+            -- `unidad` es OBLIGATORIA cuando hay magnitud: la confusion
+            -- cajas/unidades ya costo un diagnostico entero el 05-08.
+            CREATE TABLE IF NOT EXISTS mrp_eventos (
+                id              BIGSERIAL    PRIMARY KEY,
+                nombre          VARCHAR(100) NOT NULL,
+                sku             VARCHAR(30)  NOT NULL,
+                etiqueta        VARCHAR(40)  NOT NULL DEFAULT 'base',
+                fecha_desde     DATE         NOT NULL,
+                fecha_hasta     DATE         NOT NULL,
+                tipo            VARCHAR(20)  NOT NULL DEFAULT 'pasado',
+                magnitud        NUMERIC,
+                unidad          VARCHAR(4),
+                tipo_magnitud   VARCHAR(4)   NOT NULL DEFAULT 'abs',
+                activo          BOOLEAN      NOT NULL DEFAULT TRUE,
+                nota            TEXT,
+                created_at      TIMESTAMP    DEFAULT NOW(),
+                CONSTRAINT mrp_eventos_rango
+                    CHECK (fecha_hasta >= fecha_desde),
+                CONSTRAINT mrp_eventos_tipo
+                    CHECK (tipo IN ('pasado', 'futuro')),
+                CONSTRAINT mrp_eventos_unidad
+                    CHECK (unidad IS NULL OR unidad IN ('cj', 'u')),
+                CONSTRAINT mrp_eventos_tipo_magnitud
+                    CHECK (tipo_magnitud IN ('abs', 'pct')),
+                -- un evento futuro sin magnitud+unidad no se puede aplicar
+                CONSTRAINT mrp_eventos_futuro_exige_magnitud
+                    CHECK (tipo <> 'futuro'
+                           OR (magnitud IS NOT NULL AND unidad IS NOT NULL)),
+                -- una magnitud sin unidad es la trampa cajas/unidades
+                CONSTRAINT mrp_eventos_magnitud_exige_unidad
+                    CHECK (magnitud IS NULL OR unidad IS NOT NULL)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_mrp_eventos_sku
+                ON mrp_eventos (sku, activo);
+
             -- `linea` NULL = estado de planta (granel). Con valor = campana
             -- de esa linea (formato), y el acople aplica a la produccion EN
             -- esa linea, no al linea_preferida del SKU.
@@ -509,6 +567,66 @@ def limpiar_vigia_alertas(dias: int = 30) -> int:
         r = session.execute(text(
             "DELETE FROM mrp_vigia_alertas "
             "WHERE COALESCE(hasta, desde) < CURRENT_DATE - :d"), {"d": dias})
+        session.commit()
+        return r.rowcount or 0
+
+
+# ─── Eventos comerciales (forecast) ──────────────────────────────────────────
+
+def get_eventos(sku: str | None = None, solo_activos: bool = True,
+                tipo: str | None = None) -> list[dict]:
+    """Filas crudas de mrp_eventos, sin expandir a domingos.
+
+    La expansion a domingos y el armado de regresores es de eventos.py; esto es
+    solo acceso a datos. Orden estable por (sku, nombre, etiqueta, fecha_desde)
+    para que el nombre del regresor sea deterministico.
+    """
+    q = "SELECT * FROM mrp_eventos WHERE 1=1"
+    p: dict = {}
+    if sku:
+        q += " AND sku = :sku"
+        p["sku"] = str(sku)
+    if solo_activos:
+        q += " AND activo = TRUE"
+    if tipo:
+        q += " AND tipo = :tipo"
+        p["tipo"] = tipo
+    q += " ORDER BY sku, nombre, etiqueta, fecha_desde"
+    with get_session() as session:
+        rows = session.execute(text(q), p).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
+def upsert_evento(nombre: str, sku: str, fecha_desde, fecha_hasta,
+                  etiqueta: str = "base", tipo: str = "pasado",
+                  magnitud=None, unidad: str | None = None,
+                  tipo_magnitud: str = "abs", activo: bool = True,
+                  nota: str | None = None) -> int:
+    """Inserta una fila de evento. Devuelve el id."""
+    with get_session() as session:
+        r = session.execute(text("""
+            INSERT INTO mrp_eventos
+                (nombre, sku, etiqueta, fecha_desde, fecha_hasta, tipo,
+                 magnitud, unidad, tipo_magnitud, activo, nota)
+            VALUES
+                (:nombre, :sku, :etiqueta, :desde, :hasta, :tipo,
+                 :magnitud, :unidad, :tmag, :activo, :nota)
+            RETURNING id
+        """), {"nombre": nombre, "sku": str(sku), "etiqueta": etiqueta,
+               "desde": fecha_desde, "hasta": fecha_hasta, "tipo": tipo,
+               "magnitud": magnitud, "unidad": unidad,
+               "tmag": tipo_magnitud, "activo": activo, "nota": nota})
+        new_id = r.scalar()
+        session.commit()
+        return int(new_id)
+
+
+def borrar_eventos(nombre: str, sku: str) -> int:
+    """Borra todas las filas de un (nombre, sku). Para recarga idempotente."""
+    with get_session() as session:
+        r = session.execute(text(
+            "DELETE FROM mrp_eventos WHERE nombre = :nombre AND sku = :sku"),
+            {"nombre": nombre, "sku": str(sku)})
         session.commit()
         return r.rowcount or 0
 
