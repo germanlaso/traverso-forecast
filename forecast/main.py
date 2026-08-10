@@ -256,11 +256,165 @@ def forecast_sku(req: ForecastRequest):
             extra_events=events,
             forecast_periods=req.periods,
             force_retrain=req.force_retrain,
+            # (10-08-2026) Esta pantalla es de ANALISIS: nunca debe escribir el
+            # cache de produccion. Con eventos el veto ya era automatico, pero
+            # `force_retrain=True` SIN eventos (el boton "Reentrenar") todavia
+            # pisaba el pickle. Es el incidente del 05-08 (§3.3): una pantalla de
+            # exploracion no puede romper el plan. Para entrenar de verdad estan
+            # /train/batch y retrain_modelos.py.
+            persistir=False,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception(f"Error forecast {req.sku}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Endpoints: Eventos comerciales ────────────────────────────────────────────
+# Los modelos Pydantic van ACA y no en la seccion de modelos de arriba, a
+# proposito: main.py es un archivo sensible y asi toda la feature vive en un
+# tramo contiguo que se revierte borrandolo. Los imports de eventos* son LOCALES
+# a cada endpoint por la misma razon: si algo falla en esos modulos, se cae este
+# grupo de endpoints y no el arranque de la API entera.
+#
+# FLUJO PENSADO PARA EL OPERADOR: declara UN periodo en fechas naturales y el
+# backend hace el resto. No se le pide identificar semanas ni fases, porque no
+# puede saberlo: el corte entre fases sale de un quiebre estructural de la serie.
+#   1. POST /eventos/analizar  -> el sistema propone 1 o 2 fases
+#   2. POST /eventos/preview   -> que habria pasado el anio pasado, en cajas
+#   3. POST /eventos           -> guarda
+
+class EventoFase(BaseModel):
+    etiqueta: str = "base"
+    fecha_desde: str
+    fecha_hasta: str
+    nivel: Optional[float] = None
+
+
+class EventoAnalizarRequest(BaseModel):
+    sku: str
+    fecha_desde: str
+    fecha_hasta: str
+    canal: Optional[str] = None
+    zona: Optional[str] = None
+
+
+class EventoPreviewRequest(BaseModel):
+    sku: str
+    fases: list[EventoFase]
+    canal: Optional[str] = None
+    zona: Optional[str] = None
+
+
+class EventoGuardarRequest(BaseModel):
+    nombre: str
+    sku: str
+    fases: list[EventoFase]
+    tipo: str = "pasado"
+    nota: Optional[str] = None
+    reemplazar: bool = True     # borra las filas previas de ese (nombre, sku)
+
+
+@app.get("/eventos", tags=["Eventos"])
+def eventos_listar(sku: Optional[str] = None, solo_activos: bool = False):
+    """Eventos cargados, y los regresores efectivos que produciran."""
+    try:
+        from db_mrp import get_eventos
+        from eventos import cargar_eventos_activos, expandir_a_domingos
+        filas = get_eventos(sku=sku, solo_activos=solo_activos)
+        for f in filas:
+            f["n_semanas"] = len(expandir_a_domingos(f["fecha_desde"], f["fecha_hasta"]))
+        return {"eventos": filas, "regresores": cargar_eventos_activos(sku=sku)}
+    except Exception as e:
+        logger.exception("Error listando eventos")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/eventos/analizar", tags=["Eventos"])
+def eventos_analizar(req: EventoAnalizarRequest):
+    """Propone las fases del periodo declarado y devuelve la serie para graficar.
+
+    Solo lectura y sin entrenar: es rapido.
+    """
+    try:
+        from eventos_deteccion import detectar_fases
+        df = get_sales_df()
+        return detectar_fases(df, req.sku, req.fecha_desde, req.fecha_hasta,
+                              canal=req.canal, zona=req.zona)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Error analizando evento {req.sku}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/eventos/preview", tags=["Eventos"])
+def eventos_preview(req: EventoPreviewRequest):
+    """Que habria pasado el anio pasado, con y sin la correccion.
+
+    LENTO (~5 s): entrena DOS modelos Prophet en memoria. Ninguno se persiste.
+    El frontend necesita spinner.
+    """
+    try:
+        from eventos_deteccion import preview_evento
+        df = get_sales_df()
+        fases = [f.model_dump() for f in req.fases]
+        return preview_evento(df, req.sku, fases, canal=req.canal, zona=req.zona)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Error en preview de evento {req.sku}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/eventos", tags=["Eventos"])
+def eventos_guardar(req: EventoGuardarRequest):
+    """Guarda un evento: una fila por fase. Idempotente si reemplazar=True."""
+    try:
+        from db_mrp import borrar_eventos, upsert_evento
+        from eventos import cargar_eventos_activos
+        if not req.fases:
+            raise HTTPException(status_code=400, detail="Sin fases que guardar.")
+        if req.tipo == "futuro":
+            # Un evento futuro NO puede ser un regresor (columna cero en todo el
+            # entrenamiento -> coeficiente no identificable). Necesita ajuste
+            # post-hoc del forecast, que es Fase 2 y no esta implementado. Y
+            # antes hay que resolver el doble conteo contra las OV de HANA.
+            raise HTTPException(
+                status_code=400,
+                detail=("Los eventos futuros todavia no se aplican: requieren "
+                        "ajuste post-hoc del forecast (Fase 2)."))
+        n_borradas = borrar_eventos(req.nombre, req.sku) if req.reemplazar else 0
+        ids = [upsert_evento(nombre=req.nombre, sku=req.sku,
+                             etiqueta=f.etiqueta, fecha_desde=f.fecha_desde,
+                             fecha_hasta=f.fecha_hasta, tipo=req.tipo,
+                             nota=req.nota) for f in req.fases]
+        return {"ok": True, "ids": ids, "filas_reemplazadas": n_borradas,
+                "regresores": cargar_eventos_activos(sku=req.sku)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error guardando evento {req.sku}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/eventos", tags=["Eventos"])
+def eventos_borrar(nombre: str, sku: str, solo_desactivar: bool = True):
+    """Desactiva (default) o borra un evento completo.
+
+    Desactivar es la operacion segura: deja la fila para auditoria y el cron
+    deja de usarla. `solo_desactivar=false` borra de verdad.
+    """
+    try:
+        if solo_desactivar:
+            from db_mrp import set_evento_activo
+            n = set_evento_activo(nombre, sku, False)
+            return {"ok": True, "desactivadas": n}
+        from db_mrp import borrar_eventos
+        return {"ok": True, "borradas": borrar_eventos(nombre, sku)}
+    except Exception as e:
+        logger.exception(f"Error borrando evento {sku}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -274,8 +428,20 @@ async def train_batch(req: TrainBatchRequest, background_tasks: BackgroundTasks)
     """
     import time
 
+    # (10-08-2026) Entrenar en lote CON eventos no guardaria nada: los eventos
+    # vetan la persistencia del pickle (ver INVARIANTE en run_sku_pipeline). El
+    # lote correria los 250 modelos y descartaria todo, en silencio. Mejor fallar
+    # rapido que dejar creer que se reentreno.
+    if req.events:
+        raise HTTPException(
+            status_code=400,
+            detail=("El entrenamiento en lote no admite eventos: un modelo "
+                    "entrenado con eventos no se persiste, asi que el lote no "
+                    "guardaria nada. Para probar eventos use /forecast o "
+                    "/eventos/preview."))
+
     df = get_sales_df()
-    events = [e.model_dump() for e in req.events] if req.events else None
+    events = None
     skus_to_train = req.skus if req.skus else sorted(df["sku"].unique().tolist())
 
     if not req.skus:

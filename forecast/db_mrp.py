@@ -621,6 +621,22 @@ def upsert_evento(nombre: str, sku: str, fecha_desde, fecha_hasta,
         return int(new_id)
 
 
+def set_evento_activo(nombre: str, sku: str, activo: bool) -> int:
+    """Activa o desactiva todas las filas de un (nombre, sku). Devuelve filas tocadas.
+
+    Desactivar es la operacion SEGURA para sacar un evento de produccion: la fila
+    queda para auditoria y cargar_eventos_activos() deja de devolverla, asi que el
+    cron vuelve al comportamiento previo sin borrar historia.
+    """
+    with get_session() as session:
+        r = session.execute(text(
+            "UPDATE mrp_eventos SET activo = :act "
+            "WHERE nombre = :nombre AND sku = :sku"),
+            {"act": bool(activo), "nombre": nombre, "sku": str(sku)})
+        session.commit()
+        return r.rowcount or 0
+
+
 def borrar_eventos(nombre: str, sku: str) -> int:
     """Borra todas las filas de un (nombre, sku). Para recarga idempotente."""
     with get_session() as session:
