@@ -315,6 +315,13 @@ function SkuRow({ s, semanas, celda, onToggleCelda, onOpenSku }) {
   );
 }
 
+// (11-08-2026) El drill-down eran dos celdas sueltas de la MISMA grilla que la fila
+// de semanas, con los mismos colores y casi la misma altura: se leian como filas
+// hermanas y no como detalle de la celda abierta. Se contiene en un panel con riel
+// izquierdo del mismo color que el `outline` de esa celda, para que el ojo las una.
+const PANEL_BG = "#F1EFE8";
+const PANEL_RAIL = "#333";
+
 function DiaDetalle({ s, wk, nSem }) {
   const dias = [];
   for (let i = 0; i < 7; i++) {
@@ -326,18 +333,28 @@ function DiaDetalle({ s, wk, nSem }) {
   }
   return (
     <React.Fragment>
-      <div style={{ gridColumn: "1", display: "flex", alignItems: "center", fontSize: 11, color: "#777", padding: "2px 8px" }}>
-        {s.sku} · semana del {wk.slice(8, 10)}/{wk.slice(5, 7)}
+      <div style={{ gridColumn: "1", display: "flex", alignItems: "center", gap: 5,
+                    fontSize: 11, color: "#6B6A65", padding: "7px 8px 8px 9px",
+                    background: PANEL_BG, borderLeft: `3px solid ${PANEL_RAIL}`,
+                    borderRadius: "6px 0 0 6px", marginBottom: 3 }}>
+        {/* el SKU no se repite: solo se puede abrir UNA celda a la vez y la fila de
+            arriba ya lo dice. El "↳" marca de quien depende este bloque. */}
+        <span style={{ color: PANEL_RAIL, fontWeight: 700 }}>↳</span>
+        <span>detalle diario · semana del {wk.slice(8, 10)}/{wk.slice(5, 7)}</span>
       </div>
-      <div style={{ gridColumn: `2 / span ${nSem}`, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3, padding: "2px 0 8px" }}>
+      <div style={{ gridColumn: `2 / span ${nSem}`, display: "grid",
+                    gridTemplateColumns: "repeat(7, 1fr)", gap: 3,
+                    background: PANEL_BG, borderRadius: "0 6px 6px 0",
+                    padding: "7px 8px 8px 0", marginBottom: 3 }}>
         {dias.map((d) => {
           const c = COLORS[d.sev];
           return (
             <div key={d.iso} style={{
-              minHeight: 34, borderRadius: 4, display: "flex", flexDirection: "column",
+              minHeight: 30, borderRadius: 3, display: "flex", flexDirection: "column",
               alignItems: "center", justifyContent: "center",
               background: c.bg, color: c.fg,
-              border: "0.5px solid " + (d.sev === 0 ? c.bd : "transparent"),
+              // sobre el panel gris, los dias OK en blanco se recortan solos
+              border: "0.5px solid " + (d.sev === 0 ? "#FFFFFF" : "transparent"),
             }}>
               <span style={{ fontSize: 9.5, color: d.sev >= 2 ? c.fg : "#999", whiteSpace: "nowrap" }}>
                 {d.dow} {d.dm}
