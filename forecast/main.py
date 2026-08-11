@@ -1152,7 +1152,7 @@ def get_proyeccion_diaria_live(sku: str):
 
     with SessionLocal() as s:
         row = s.execute(_sql(
-            "SELECT id, horizonte_sem, created_at, snapshot "
+            "SELECT id, horizonte_sem, created_at, timestamp_stock, snapshot "
             "FROM mrp_planes WHERE vigente LIMIT 1"
         )).mappings().first()
     if row is None:
@@ -1180,8 +1180,24 @@ def get_proyeccion_diaria_live(sku: str):
     def _cj(u):
         return round(u / upc, 1) if (u is not None and upc) else (None if u is None else 0.0)
 
-    # Entradas aprobadas VIVAS de este SKU: {fecha_iso: unidades}
-    entradas_vivas = {}
+    # (11-08-2026) UNA SOLA REGLA CON EL PLAN.
+    # Antes esta curva sumaba TODAS las aprobadas vivas, mientras el plan excluye las
+    # de `fer <= hoy` (cron_plan.py L281). Resultado: el 11-08 el modal de 251010105
+    # mostraba 0 dias de quiebre y el Mapa de Quiebres 1, con 900 cj de diferencia y
+    # nada en pantalla que lo explicara.
+    #
+    # Y la curva estaba MAS equivocada que el plan, no menos: de esas 900 cj solo
+    # habian llegado ~263, y esas ya estaban dentro del stock inicial del propio
+    # grafico -> las contaba DOS VECES. Es el mismo doble conteo contra el que
+    # advierte el comentario del filtro en cron_plan.
+    #
+    # Ahora la curva usa la regla del plan y lo pendiente se informa APARTE: un solo
+    # numero de quiebres, y al lado el aviso de la recepcion sin confirmar.
+    _hoy_plan = str(row["timestamp_stock"] or row["created_at"] or "")[:10]
+
+    entradas_plan = {}          # fer > hoy_plan  -> las que el plan cuenta
+    entradas_pend = {}          # fer <= hoy_plan -> recepcion de hoy o pasada
+    _of_pend = []
     try:
         for ap in listar_aprobadas_db():
             if str(ap.get("sku", "")) != sku:
@@ -1194,9 +1210,28 @@ def get_proyeccion_diaria_live(sku: str):
             # ingresa el operario y que usa el optimizer es cantidad_real_cj:
             # derivar SIEMPRE de ahi. Auditado 31-07-2026: 22 de 24 OF editadas mal.
             u = float(ap.get("cantidad_real_cj") or 0) * upc
-            entradas_vivas[fer] = entradas_vivas.get(fer, 0.0) + float(u or 0)
+            if _hoy_plan and fer <= _hoy_plan:
+                entradas_pend[fer] = entradas_pend.get(fer, 0.0) + float(u or 0)
+                _of_pend.append({"numero_of": ap.get("numero_of"),
+                                 "fecha_entrada": fer,
+                                 "cantidad_cj": float(ap.get("cantidad_real_cj") or 0)})
+            else:
+                entradas_plan[fer] = entradas_plan.get(fer, 0.0) + float(u or 0)
     except Exception:
-        entradas_vivas = {}
+        entradas_plan, entradas_pend, _of_pend = {}, {}, []
+    entradas_vivas = entradas_plan          # la curva usa la regla del plan
+
+    # Faltante confirmado por BALANCE DE INVENTARIO. Lo calcula cron_plan al generar
+    # el plan y queda en snapshot['alertas']; NO se recalcula aca porque exige
+    # consultas a SQL Server que tardan minutos (medido el 11-08). Los planes
+    # anteriores al 11-08-2026 no traen `faltante_u`: el front debe tolerar su
+    # ausencia y simplemente no dibujar la curva punteada.
+    _rp = next((a for a in (snap.get("alertas") or [])
+                if a.get("tipo") == "RECEPCION_PENDIENTE"
+                and str(a.get("sku")) == str(sku)), None)
+    # Solo lo NO recibido: sumar la OF completa repetiria el doble conteo, porque la
+    # parte ya recibida esta dentro del stock inicial.
+    _falt_u = max(0, int(round(float((_rp or {}).get("faltante_u") or 0))))
 
     # Recalculo del balance hacia adelante.
     # demanda_base[d] se despeja de la base congelada para NO recalcular forecast/OV:
@@ -1287,6 +1322,11 @@ def get_proyeccion_diaria_live(sku: str):
             "ss_u": c.get("ss_u"),
             "ss_cj": _cj(c.get("ss_u")),
             "entrada_aprobada_u": entrada_viva,
+            # (11-08-2026) Entrada que el plan NO cuenta (recepcion de hoy o pasada).
+            # El monto a DIBUJAR como pendiente es el FALTANTE de
+            # `recepcion_pendiente`, no esto: parte de esta cantidad ya puede estar
+            # dentro del stock inicial.
+            "entrada_pendiente_u": int(round(entradas_pend.get(fecha_iso, 0.0))),
             "estado": estado,
             # lineas de produccion del dia (para el tooltip de los graficos)
             "oft_lineas": _oft_lin.get(fecha_iso, []),
@@ -1358,6 +1398,21 @@ def get_proyeccion_diaria_live(sku: str):
         "horizonte_dias": int(row["horizonte_sem"] or 4) * 7,
         "encabezado": encabezado,
         "dias": dias,
+        # (11-08-2026) Lo que el plan NO cuenta, informado aparte en vez de mezclado
+        # en la curva. `faltante_u` es el unico monto seguro de sumar: sale del
+        # balance de inventario, no de la cantidad de la OF.
+        "recepcion_pendiente": {
+            "hay": bool(_of_pend),
+            "entradas_excluidas_u": int(round(sum(entradas_pend.values()))),
+            "entradas_excluidas_cj": _cj(int(round(sum(entradas_pend.values())))),
+            "ofs": _of_pend,
+            "faltante_u": _falt_u,
+            "faltante_cj": _cj(_falt_u) if _falt_u else 0.0,
+            "confirmado": bool(_rp),   # False = plan viejo, sin balance de inventario
+            "grado": (_rp or {}).get("grado"),
+            "pct_recibido": (_rp or {}).get("pct_recibido"),
+            "mensaje": (_rp or {}).get("mensaje"),
+        },
     }
 
 

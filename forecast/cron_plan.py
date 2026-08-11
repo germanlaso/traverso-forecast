@@ -39,7 +39,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("cron_plan")
 
 
-def _detectar_recepcion_pendiente(aprobadas, unidades_por_caja, hoy, umbral=0.80):
+def _detectar_recepcion_pendiente(aprobadas, unidades_por_caja, hoy,
+                                 umbral=0.80, umbral_parcial=0.20):
     """Alertas de OF lanzadas el ÚLTIMO DÍA HÁBIL que no se reflejan en el stock de HOY.
 
     Día HÁBIL, no calendario: un lunes hay que mirar las OF del viernes. Con
@@ -120,14 +121,45 @@ def _detectar_recepcion_pendiente(aprobadas, unidades_por_caja, hoy, umbral=0.80
         esperado = s_ayer.get(sku, 0.0) + of_cj - entregas.get(sku, 0.0)
         real = s_hoy.get(sku, 0.0)
         faltante = esperado - real
-        if faltante < umbral * of_cj:
-            continue
+        frac = (faltante / of_cj) if of_cj else 0.0
+
+        # (11-08-2026) BANDA PARCIAL. Antes el corte era `faltante < umbral` (0,80)
+        # y la recepción PARCIAL quedaba muda. No por poco margen: el 11-08,
+        # 251010105 tenía un faltante MÁXIMO de 637 cj sobre una OF de 900 y el
+        # umbral era 720, así que era ARITMÉTICAMENTE IMPOSIBLE que alertara. Era el
+        # único de los 11 SKU de ese día con un día de quiebre en el plan, y caía
+        # justo en la banda ciega. Los 7 que sí alertaron eran todos de recepción
+        # nula: la alerta funcionaba en los extremos y era ciega en el medio.
+        #
+        # El faltante parcial NO es ruido: son cajas que alguien tiene que decidir si
+        # van a llegar. Sigue siendo informativo — el cálculo del plan no se toca.
+        if frac < umbral_parcial:
+            continue                      # recibida: nada que informar
+        grado = "total" if frac >= umbral else "parcial"
+        pct_recibido = max(0.0, min(100.0, 100.0 * (1.0 - frac)))
+
         upc = int(unidades_por_caja.get(sku, 1) or 1)
+        refs_txt = ", ".join(x for x in refs.get(sku, []) if x)
+        if grado == "total":
+            msg = (f"OF de {of_cj:.0f} cj lanzada el {ayer.isoformat()} (último día "
+                   f"hábil) no se refleja en el stock de hoy (esperado "
+                   f"{esperado:.0f} cj, real {real:.0f} cj). Probable terminal report "
+                   f"pendiente: los quiebres de los primeros días de este SKU "
+                   f"podrían no ser reales.")
+        else:
+            msg = (f"Recepción PARCIAL: de la OF de {of_cj:.0f} cj lanzada el "
+                   f"{ayer.isoformat()} llegaron ~{of_cj - faltante:.0f} cj "
+                   f"({pct_recibido:.0f}%) y faltan ~{faltante:.0f} cj. El plan NO "
+                   f"cuenta las que faltan, así que los quiebres de los primeros "
+                   f"días de este SKU pueden no ser reales.")
+
         alertas.append({
             "sku": sku,
-            "tipo": "RECEPCION_PENDIENTE",
+            "tipo": "RECEPCION_PENDIENTE",   # NO cambiar: el Mapa de Quiebres filtra
+                                             # por este valor exacto (main.py L1477)
+            "grado": grado,                  # "total" | "parcial"  (aditivo)
             "fecha": hoy.isoformat(),
-            "numero_of": ", ".join(x for x in refs.get(sku, []) if x),
+            "numero_of": refs_txt,
             "of_cj": round(of_cj, 1),
             "stock_ayer_cj": round(s_ayer.get(sku, 0.0), 1),
             "entregas_ayer_cj": round(entregas.get(sku, 0.0), 1),
@@ -135,12 +167,8 @@ def _detectar_recepcion_pendiente(aprobadas, unidades_por_caja, hoy, umbral=0.80
             "real_cj": round(real, 1),
             "faltante_cj": round(faltante, 1),
             "faltante_u": int(round(faltante * upc)),
-            "mensaje": (
-                f"OF de {of_cj:.0f} cj lanzada el {ayer.isoformat()} (último día hábil) "
-                f"no se refleja en el "
-                f"stock de hoy (esperado {esperado:.0f} cj, real {real:.0f} cj). "
-                f"Probable terminal report pendiente: los quiebres de los primeros días "
-                f"de este SKU podrían no ser reales."),
+            "pct_recibido": round(pct_recibido, 1),
+            "mensaje": msg,
         })
     return alertas
 
@@ -521,10 +549,27 @@ def main():
     #     las 5 AM del día D+1 = `fecha_entrada_real`.
     #
     # POR QUÉ EL FILTRO DE entradas_fijas ES `fer > hoy_str` Y NO `>=`:
-    #   Una OF con `fecha_entrada_real == hoy` YA está contabilizada en el stock que
-    #   leímos hoy. Sumarla como entrada futura sería DOBLE CONTEO: el modelo creería
-    #   tener stock fantasma y produciría de menos -> quiebre real más adelante.
-    #   NO CAMBIAR a `>=`. (Se evaluó y descartó explícitamente el 29-07-2026.)
+    #   NO CAMBIAR a `>=`. (Se evaluó y descartó explícitamente el 29-07-2026, y se
+    #   revalidó el 11-08-2026.)
+    #
+    #   OJO CON LA JUSTIFICACIÓN: la versión original de este comentario decía que
+    #   "una OF con fecha_entrada_real == hoy YA está contabilizada en el stock que
+    #   leímos hoy". ESO ES FALSO y se midió: el 11-08-2026 había 11 OF con
+    #   recepción hoy y en 9 de ellas el stock NO las reflejaba (7 de recepción nula
+    #   + 2 parciales). Nadie debe razonar sobre esa premisa.
+    #
+    #   Las razones por las que el filtro SÍ se sostiene son otras dos:
+    #     a) DOBLE CONTEO. Si la recepción ya ocurrió (total o parcialmente), sumar
+    #        la OF cuenta dos veces lo que ya está en el stock -> el modelo cree
+    #        tener stock fantasma y produce de menos -> quiebre REAL más adelante.
+    #        Es el error caro: subcontar cuesta capacidad, sobrecontar cuesta
+    #        servicio. Y en una recepción PARCIAL no se sabe cuánto sumar sin el
+    #        balance de inventario.
+    #     b) NO INVENTAR STOCK QUE NO SE PUEDE CONFIRMAR. Es la misma postura que
+    #        aplica la alerta de abajo: el cálculo no se toca, se informa.
+    #
+    #   Lo que sí cambió el 11-08-2026: la alerta ahora cubre también la recepción
+    #   PARCIAL, que antes quedaba muda (ver _detectar_recepcion_pendiente).
     #
     # EL CASO QUE ESTA ALERTA CUBRE:
     #   Si al cerrar el turno el equipo de calidad no está disponible, el terminal
