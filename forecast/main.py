@@ -1233,6 +1233,25 @@ def get_proyeccion_diaria_live(sku: str):
     # parte ya recibida esta dentro del stock inicial.
     _falt_u = max(0, int(round(float((_rp or {}).get("faltante_u") or 0))))
 
+    # (11-08-2026) Solo se INFORMAN las recepciones RECIENTES.
+    # La EXCLUSION de la curva sigue aplicando a TODAS las de `fer <= hoy` (es la
+    # regla del plan; si no, la curva volveria a diverger del Mapa). Pero una OF con
+    # recepcion de hace tres meses no es una "recepcion pendiente": es un dato viejo
+    # en mrp_aprobaciones. Es extremadamente improbable que una recepcion siga
+    # pendiente al dia subsiguiente.
+    # El 11-08 el aviso listaba una OF del 26-05 junto a la de hoy y parecia que
+    # faltaban 1.850 cj cuando lo accionable eran 900.
+    # Ventana de 4 dias corridos, no 1: cubre el lunes mirando al viernes.
+    _DIAS_RECIENTE = 4
+    try:
+        from datetime import date as _d, timedelta as _tdd
+        _corte = (_d.fromisoformat(_hoy_plan) - _tdd(days=_DIAS_RECIENTE)).isoformat()
+    except Exception:
+        _corte = ""
+    _of_reciente = [o for o in _of_pend if o["fecha_entrada"] >= _corte]
+    _pend_reciente_u = sum(
+        v for k, v in entradas_pend.items() if k >= _corte)
+
     # Recalculo del balance hacia adelante.
     # demanda_base[d] se despeja de la base congelada para NO recalcular forecast/OV:
     #   demanda_base = stock_ini_base + oft_base + entrada_base - stock_fin_base
@@ -1402,10 +1421,15 @@ def get_proyeccion_diaria_live(sku: str):
         # en la curva. `faltante_u` es el unico monto seguro de sumar: sale del
         # balance de inventario, no de la cantidad de la OF.
         "recepcion_pendiente": {
-            "hay": bool(_of_pend),
-            "entradas_excluidas_u": int(round(sum(entradas_pend.values()))),
-            "entradas_excluidas_cj": _cj(int(round(sum(entradas_pend.values())))),
-            "ofs": _of_pend,
+            # `hay` y `ofs` = solo las recientes: son las accionables y las unicas que
+            # el aviso debe mostrar. Las viejas se cuentan aparte.
+            "hay": bool(_of_reciente),
+            "entradas_excluidas_u": int(round(_pend_reciente_u)),
+            "entradas_excluidas_cj": _cj(int(round(_pend_reciente_u))),
+            "ofs": _of_reciente,
+            "n_ofs_antiguas": len(_of_pend) - len(_of_reciente),
+            "stock_plan_cj": encabezado.get("stock_fisico_cj"),
+            "fecha_plan": _hoy_plan,
             "faltante_u": _falt_u,
             "faltante_cj": _cj(_falt_u) if _falt_u else 0.0,
             "confirmado": bool(_rp),   # False = plan viejo, sin balance de inventario
