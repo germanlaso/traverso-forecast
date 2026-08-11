@@ -92,16 +92,26 @@ function TooltipLineas({ active, payload, label }) {
 
 function KPI({ label, value, color, sub, sub2, aviso }) {
   return (
-    <div style={{ background: C.grayLt, borderRadius: 8, padding: "10px 14px", minWidth: 110 }}>
-      <div style={{ fontSize: 10.5, color: C.textMuted, textTransform: "uppercase", letterSpacing: .3 }}>{label}</div>
-      <div style={{ fontSize: 21, fontWeight: 700, color: color || C.text, marginTop: 2 }}>{value}</div>
+    // (11-08-2026) `flex: 1 1 0` + minWidth chico: las 7 tarjetas se reparten el
+    // ancho y entran en UNA linea. El flexWrap del contenedor queda como red por si
+    // la ventana es muy angosta.
+    <div style={{ background: C.grayLt, borderRadius: 8, padding: "8px 10px",
+                  flex: "1 1 0", minWidth: 84 }}>
+      <div style={{ fontSize: 9.5, color: C.textMuted, textTransform: "uppercase",
+                    letterSpacing: .2, whiteSpace: "nowrap", overflow: "hidden",
+                    textOverflow: "ellipsis" }} title={label}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: color || C.text, marginTop: 1,
+                    whiteSpace: "nowrap" }}>{value}</div>
       {sub && (
-        <div style={{ fontSize: 10.5, color: aviso ? C.amber : C.textMuted, marginTop: 2 }}
-             title={aviso || undefined}>
+        <div style={{ fontSize: 9.5, color: aviso ? C.amber : C.textMuted, marginTop: 1,
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+             title={aviso || sub}>
           {sub}{aviso ? " ⚠" : ""}
         </div>
       )}
-      {sub2 && <div style={{ fontSize: 9.5, color: C.textMuted, marginTop: 1 }}>{sub2}</div>}
+      {sub2 && <div style={{ fontSize: 9, color: C.textMuted, marginTop: 1,
+                             whiteSpace: "nowrap", overflow: "hidden",
+                             textOverflow: "ellipsis" }} title={sub2}>{sub2}</div>}
     </div>
   );
 }
@@ -156,6 +166,12 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
 // que la barra DESAPARECÍA al aprobar aunque el balance de stock la siguiera contando.
 // Lo APROBADO manda para el cálculo; lo propuesto queda como referencia visual (barra
 // más tenue, con borde punteado).
+  // "2026-08-11" -> "11-08": el año es ruido en un horizonte de 8 semanas.
+  const fechaCorta = (iso) => {
+    const s = String(iso || "");
+    return s.length >= 10 ? `${s.slice(8, 10)}-${s.slice(5, 7)}` : s;
+  };
+
   const serie = dias.map((x) => ({
     fecha: String(x.fecha).slice(5),          // MM-DD
     stock: x.stock_fin_cj,
@@ -279,7 +295,8 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
           {!cargando && !err && serie.length > 0 && (
             <>
               {/* KPIs */}
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12,
+                            alignItems: "stretch" }}>
                 <KPI label="Stock inicial" value={`${fmtN(stockIni)} cj`}
                      sub={hayEmp ? `TRA ${fmt1(emp.T_cj)} · MON ${fmt1(emp.M_cj)}` : null}
                      aviso={avisoEmp}
@@ -292,30 +309,36 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                      color={stockMin < 0 ? C.red : stockMin === 0 ? C.amber : C.text} />
                 <KPI label="Días en quiebre" value={nQuiebre} color={nQuiebre ? C.red : C.teal} />
                 <KPI label="Días bajo SS" value={nBajoSS} color={nBajoSS ? C.amber : C.teal} />
-                <KPI label="Días con producción" value={nOft} sub={`${dias.length} días`} />
+                <KPI label="Días c/ producción" value={nOft} sub={`de ${dias.length}`} />
               </div>
 
-              {/* (11-08-2026) Aviso de recepción pendiente: explica por qué la curva
-                  puede diferir de lo que hay físicamente, en vez de dejar al
-                  planificador comparando números que no cuadran. */}
+              {/* (11-08-2026) Aviso de recepción pendiente. Arranca por la
+                  CONSECUENCIA ("el quiebre puede no ser real") y no por el mecanismo:
+                  es lo único que el planificador necesita para decidir si aprueba el
+                  OFT que el plan propuso para cubrir ese quiebre. */}
               {rp?.hay && (
                 <div style={{ background: C.amberLt, border: `0.5px solid ${C.amber}`,
                               borderRadius: 8, padding: "9px 12px", marginBottom: 12,
-                              fontSize: 12, lineHeight: 1.5, color: "#633806" }}>
-                  <b>Hay entradas que el plan no cuenta.</b>{" "}
-                  {(rp.ofs || []).map((o) => `${o.numero_of} (${fmt1(o.cantidad_cj)} cj, `
-                    + `recepción ${o.fecha_entrada})`).join(" · ")}
-                  {rp.confirmado ? (
-                    <>
-                      {" "}Del balance de inventario faltan <b>{fmt1(rp.faltante_cj)} cj</b>
-                      {rp.pct_recibido != null && ` (llegó ~${Math.round(rp.pct_recibido)}%)`}.
-                      {" "}La línea punteada muestra cómo quedaría el stock si esas cajas
-                      se confirman.
-                    </>
-                  ) : (
-                    <> El plan vigente es anterior a esta verificación, así que no se
-                       puede estimar cuánto falta. Se recalcula en la próxima corrida.</>
-                  )}
+                              fontSize: 12.5, lineHeight: 1.55, color: "#633806" }}>
+                  <b>Recepción pendiente{nQuiebre > 0 ? " — el quiebre puede no ser real" : ""}</b>
+                  <div style={{ marginTop: 3 }}>
+                    El plan calculó con el stock del {fechaCorta(rp.fecha_plan)}
+                    {rp.stock_plan_cj != null && ` (${fmt1(rp.stock_plan_cj)} cj)`} y
+                    {" "}no cuenta {(rp.ofs || []).length > 1 ? "las OF" : "la OF"}{" "}
+                    {(rp.ofs || []).map((o, k) => (
+                      <React.Fragment key={o.numero_of || k}>
+                        {k > 0 && " · "}
+                        <b>{o.numero_of}</b>, de <b>{fmt1(o.cantidad_cj)} cj</b>, con
+                        {" "}recepción {o.fecha_entrada === rp.fecha_plan ? "hoy " : ""}
+                        {fechaCorta(o.fecha_entrada)}
+                      </React.Fragment>
+                    ))}.
+                    {faltCj > 0 && (
+                      <> Del balance de inventario faltan <b>{fmt1(faltCj)} cj</b>
+                        {rp.pct_recibido != null && ` (llegó ~${Math.round(rp.pct_recibido)}%)`};
+                        {" "}la línea punteada muestra cómo quedaría el stock si se confirman.</>
+                    )}
+                  </div>
                 </div>
               )}
 
