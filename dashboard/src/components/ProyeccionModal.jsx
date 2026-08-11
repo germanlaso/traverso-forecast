@@ -173,6 +173,30 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
     aprobLineas: x.aprob_lineas || [],
   }));
 
+  // (11-08-2026) RECEPCIÓN PENDIENTE.
+  // La curva sólida usa la misma regla que el plan (`fer > hoy`), así que ahora el
+  // conteo de quiebres coincide con el Mapa. Lo pendiente va como curva PUNTEADA,
+  // separada, porque no está confirmado.
+  //
+  // Se suma el FALTANTE del balance de inventario, NO la cantidad de la OF: la parte
+  // ya recibida está dentro del stock inicial, y sumarla otra vez es justo el doble
+  // conteo que este cambio vino a corregir (el 11-08 el modal mostraba 797,5 cj
+  // cuando lo correcto era ~534,5).
+  //
+  // `confirmado` es false en planes anteriores al 11-08-2026: sin balance no se
+  // dibuja nada, sólo se avisa que hay entradas que el plan no cuenta.
+  const rp = d?.recepcion_pendiente || null;
+  const faltCj = rp?.confirmado ? (rp.faltante_cj || 0) : 0;
+  const totPendU = dias.reduce((a, x) => a + (x.entrada_pendiente_u || 0), 0);
+  if (faltCj > 0 && totPendU > 0) {
+    let acum = 0;
+    serie.forEach((s2, i) => {
+      // reparto proporcional a dónde caían las entradas excluidas
+      acum += faltCj * ((dias[i].entrada_pendiente_u || 0) / totPendU);
+      s2.pend = Math.round(((s2.stock_disp ?? 0) + acum) * 10) / 10;
+    });
+  }
+
   // Bandas de campaña (granel de planta y formato de linea), solo si la regla
   // afecta a este SKU.
   const bandas = bandasCampana({
@@ -271,6 +295,30 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                 <KPI label="Días con producción" value={nOft} sub={`${dias.length} días`} />
               </div>
 
+              {/* (11-08-2026) Aviso de recepción pendiente: explica por qué la curva
+                  puede diferir de lo que hay físicamente, en vez de dejar al
+                  planificador comparando números que no cuadran. */}
+              {rp?.hay && (
+                <div style={{ background: C.amberLt, border: `0.5px solid ${C.amber}`,
+                              borderRadius: 8, padding: "9px 12px", marginBottom: 12,
+                              fontSize: 12, lineHeight: 1.5, color: "#633806" }}>
+                  <b>Hay entradas que el plan no cuenta.</b>{" "}
+                  {(rp.ofs || []).map((o) => `${o.numero_of} (${fmt1(o.cantidad_cj)} cj, `
+                    + `recepción ${o.fecha_entrada})`).join(" · ")}
+                  {rp.confirmado ? (
+                    <>
+                      {" "}Del balance de inventario faltan <b>{fmt1(rp.faltante_cj)} cj</b>
+                      {rp.pct_recibido != null && ` (llegó ~${Math.round(rp.pct_recibido)}%)`}.
+                      {" "}La línea punteada muestra cómo quedaría el stock si esas cajas
+                      se confirman.
+                    </>
+                  ) : (
+                    <> El plan vigente es anterior a esta verificación, así que no se
+                       puede estimar cuánto falta. Se recalcula en la próxima corrida.</>
+                  )}
+                </div>
+              )}
+
               {/* Gráfico */}
               <div style={{ height: 330 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -291,6 +339,11 @@ export default function ProyeccionModal({ sku, descripcion, onClose,
                          barSize={5} />
                     <Bar dataKey="pedidos" name="Pedidos (OV)" fill={C.purple} fillOpacity={0.65}
                          barSize={5} />
+                    {faltCj > 0 && (
+                      <Line type="monotone" dataKey="pend" name="Si llega lo pendiente"
+                            stroke={C.teal} strokeWidth={1.6} strokeDasharray="5 3"
+                            dot={false} connectNulls />
+                    )}
                     <Line type="monotone" dataKey="stock_disp" name="Stock disponible" stroke={C.purple}
                           strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="ss" name="Stock seguridad" stroke={C.amber}

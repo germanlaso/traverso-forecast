@@ -265,8 +265,18 @@ function SkuRow({ s, semanas, celda, onToggleCelda, onOpenSku }) {
           {s.descripcion}
         </span>
         {s.recepcion_pendiente && (
-          <span style={{ fontSize: 11, color: "#B4790F", display: "inline-flex", alignItems: "center", gap: 3 }}>
+          <span style={{ fontSize: 11, color: "#B4790F", display: "inline-flex", alignItems: "center", gap: 3 }}
+                title={s.recepcion_info?.mensaje || undefined}>
+            {/* (11-08-2026) Se muestra el FALTANTE cuando el plan lo trae: "recepción
+                pend." sola no dice si faltan 20 cajas o 900. Los planes anteriores al
+                11-08-2026 no lo tienen y se degradan al texto de siempre. */}
             ⚠ recepción pend.
+            {s.recepcion_info?.faltante_cj > 0 && (
+              <b>{` −${Math.round(s.recepcion_info.faltante_cj)} cj`}</b>
+            )}
+            {s.recepcion_info?.grado === "parcial" && s.recepcion_info?.pct_recibido != null && (
+              <span style={{ opacity: .8 }}>{` (llegó ~${Math.round(s.recepcion_info.pct_recibido)}%)`}</span>
+            )}
           </span>
         )}
       </div>

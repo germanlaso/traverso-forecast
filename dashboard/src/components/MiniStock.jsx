@@ -126,6 +126,9 @@ export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto 
     oft: x.oft_cajas || 0,
     aprobada: x.entrada_aprobada_u ? x.entrada_aprobada_u / upc : 0,
     pedidos: x.pedidos_cj || 0,
+    // (11-08-2026) Entrada que el plan NO cuenta (recepción de hoy o pasada). Se usa
+    // abajo para no descontar dos veces en la simulación.
+    pendiente: x.entrada_pendiente_u ? x.entrada_pendiente_u / upc : 0,
   }));
 
   // ── Simulación: desplazamiento vertical desde la fecha de entrada ──────────
@@ -142,7 +145,15 @@ export default function MiniStock({ sku, fechaFoco, labelFoco = "entrada", alto 
 
   if (haySim) {
     const ajuste = {};
-    if (simFechaOrig && simReemp) ajuste[simFechaOrig] = (ajuste[simFechaOrig] || 0) - simReemp;
+    // (11-08-2026) OJO: `reemplazaCj` se resta porque se asume que esa OF YA está en
+    // la curva del backend. Desde que el endpoint aplica la regla del plan
+    // (`fer > hoy`), una OF con recepción HOY quedó FUERA de la curva — restarla
+    // descontaría cajas que nunca se sumaron y el piso simulado saldría demasiado
+    // bajo. Si la fecha original tiene entrada pendiente, no hay nada que restar.
+    const origExcluida = simFechaOrig
+      ? (serie.find((x) => x.iso === simFechaOrig)?.pendiente || 0) > 0
+      : false;
+    if (simFechaOrig && simReemp && !origExcluida) ajuste[simFechaOrig] = (ajuste[simFechaOrig] || 0) - simReemp;
     if (simFecha && simCant) ajuste[simFecha] = (ajuste[simFecha] || 0) + simCant;
     let acum = 0;
     serie.forEach((x) => {

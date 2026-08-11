@@ -1528,9 +1528,14 @@ def get_quiebres_grid():
     encab_all = snap.get("encabezado_sku") or {}
     alertas = snap.get("alertas") or []
 
-    # SKU con recepcion pendiente (marca "posible falso" en los primeros dias)
-    rp_skus = {a.get("sku") for a in alertas
+    # SKU con recepcion pendiente (marca "posible falso" en los primeros dias).
+    # (11-08-2026) Se guarda tambien la alerta COMPLETA: "recepcion pendiente" a secas
+    # no dice si faltan 20 cajas o 900, y esa magnitud es lo que permite decidir si
+    # aprobar el OFT que el plan genero para cubrir el quiebre. Los planes anteriores
+    # a esta fecha no traen faltante_cj y el front degrada al texto de siempre.
+    rp_info = {str(a.get("sku")): a for a in alertas
                if a.get("tipo") == "RECEPCION_PENDIENTE" and a.get("sku")}
+    rp_skus = set(rp_info)
 
     # 2) params: linea_preferida (agrupacion) + descripcion / upc de respaldo
     try:
@@ -1617,6 +1622,14 @@ def get_quiebres_grid():
             "upc": upc,
             "linea_preferida": cod_linea,
             "recepcion_pendiente": sku in rp_skus,
+            "recepcion_info": ({
+                "faltante_cj": (rp_info[str(sku)] or {}).get("faltante_cj"),
+                "of_cj": (rp_info[str(sku)] or {}).get("of_cj"),
+                "grado": (rp_info[str(sku)] or {}).get("grado"),
+                "pct_recibido": (rp_info[str(sku)] or {}).get("pct_recibido"),
+                "numero_of": (rp_info[str(sku)] or {}).get("numero_of"),
+                "mensaje": (rp_info[str(sku)] or {}).get("mensaje"),
+            } if str(sku) in rp_info else None),
             "peor_sev": peor,
             "peor_nivel": NIVELES[peor],
             "semanas": semanas_sku,   # keyed por semana iso
