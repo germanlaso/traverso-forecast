@@ -1483,6 +1483,17 @@ def _construir_modelo(
             aprobadas_u_dl[key] = aprobadas_u_dl.get(key, 0) + u_ap
             aprobadas_skus_dl.setdefault(key, set()).add(sku_ap)
 
+    # (12-08-2026) OF aprobadas de SKU que NO estan en el universo del optimizador
+    # (tipicamente MTO: cron_plan los saltea del pipeline de forecast). Ocupan
+    # capacidad y slot -- la linea fisicamente corre con ellas -- pero no pueden
+    # generar OFT. Se informa una sola vez: dentro del bucle (dia, linea) seria ruido.
+    _ap_fuera = sorted({s for _ss in aprobadas_skus_dl.values() for s in _ss
+                        if s not in m.pares_sku_linea})
+    if _ap_fuera:
+        logger.info(
+            f"[V6.37] {len(_ap_fuera)} SKU con OF aprobada FUERA del universo del "
+            f"optimizador (ocupan capacidad, no generan OFT): {_ap_fuera}")
+
     # Detectar (linea, dia) ya saturados solo por aprobadas (politica decidida:
     # se asume capacidad libre 0 con advertencia, el operador decide que hacer).
     for (d_ap, l_ap), u_ap in aprobadas_u_dl.items():
@@ -1570,7 +1581,25 @@ def _construir_modelo(
 
             # Prohibir OFT nueva (asig=1) para SKUs ya aprobados ese (d, l)
             for s in skus_ap_dl:
-                if l in m.pares_sku_linea[s]:
+                # (12-08-2026) `.get(s, [])` y NO `[s]`.
+                # `skus_ap_dl` sale de las OF APROBADAS (arriba, sin filtrar contra el
+                # universo), mientras `pares_sku_linea` solo tiene los SKU del universo
+                # del optimizador. Una OF aprobada de un SKU FUERA del universo
+                # -- tipicamente un MTO, que no lleva forecast -- tiraba KeyError y
+                # mataba el plan entero al construir el modelo, antes de optimizar
+                # nada. Paso el 12-08-2026 con 210038250 (MTO, C3Porrones): el cron
+                # murio en la Pasada A y ese dia no hubo plan.
+                #
+                # Saltear es la conducta CORRECTA, no un parche: si el SKU no esta en
+                # el universo no existe la variable m.asig[(d, s, l)], asi que la
+                # restriccion no tiene sentido. La OCUPACION DE CAPACIDAD de esa OF si
+                # se sigue contando (aprobadas_u_dl y el slot de N_MAX), que es lo
+                # unico que el optimizador necesita saber de ella.
+                #
+                # Auditados los 10 accesos a pares_sku_linea el 12-08-2026: este era
+                # el UNICO que itera algo distinto de `skus`/`m.skus`. El de mas
+                # arriba en esta misma funcion ya usaba este patron defensivo.
+                if l in m.pares_sku_linea.get(s, []):
                     m.model.Add(m.asig[(d, s, l)] == 0)
 
             # SKUs candidatos a OFT nueva ese (d, l)
