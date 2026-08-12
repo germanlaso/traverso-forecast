@@ -626,10 +626,22 @@ def main():
     # ── 7. GATE ──────────────────────────────────────────────────────────────
     from persistencia import evaluar_gate_n1, persistir_plan, promover_plan
     aceptable, det = evaluar_gate_n1(rich)
-    log.info(f"[7/8] gate: aceptable={aceptable} | G1={det['g1_sin_quiebres']} "
-             f"G2={det['g2_lineas_ok']} | min_stock={det['min_stock']} "
-             f"max_uso={det['max_uso_linea_pct']} | negativos={det['n_celdas_negativas']} "
+    # (12-08-2026) Antes esta linea imprimia `negativos=0` TODOS los dias, porque
+    # salia de stock_diario, que esta CLAMPEADO a 0. En el plan 141 decia
+    # `negativos=0` con 49 dias de quiebre en el plan. Cualquiera que leyera el log
+    # entendia "este plan no tiene quiebres", y era falso.
+    # Ahora se loguean las DOS definiciones, etiquetadas, desde detalle_diario:
+    #   intradia = criterio del MRP y de lo que muestra el dashboard
+    #   cierre   = comparable con el Q* de la Pasada A (barrera anclada en `fin`)
+    # G1 ya no bloquea: mide. Lo que bloquea es el status y G2 (ver persistencia.py).
+    _q = det.get("quiebres") or {}
+    log.info(f"[7/8] gate: aceptable={aceptable} (status + G2) | "
+             f"G2={det['g2_lineas_ok']} max_uso={det['max_uso_linea_pct']} "
              f"sobrecargas={det['n_lineas_sobrecargadas']}")
+    log.info(f"[7/8] quiebres del plan: {_q.get('n_dias_quiebre')} dias / "
+             f"{_q.get('n_sku_quiebre')} SKU | intradia={_q.get('n_celdas_disp_neg')} "
+             f"cierre={_q.get('n_celdas_fin_neg')} | min_disp={_q.get('min_stock_disp_u')}u "
+             f"min_fin={_q.get('min_stock_fin_u')}u  (medicion, NO bloquea)")
 
     # solo promovemos si el gate pasa Y la frescura del stock es OK
     promover = aceptable and frescura_ok and not args.no_promote

@@ -102,12 +102,83 @@ def promover_plan(plan_id: int, session: Optional[Session] = None) -> None:
         _promover(s)
         s.commit()
 
-# ── Gate de aceptacion N1 (G1 + G2) ─────────────────────────────────────────
-# G1: 0 quiebres reales -> ningun stock_diario[sku][fecha] < 0.
-#     (NO se cuenta sobre alertas "QUIEBRE" -umbral- ni stock_final_cajas -clampeado-)
-# G2: ninguna linea sobrecargada -> uso_linea[linea][fecha] <= 100 (en %, 100 = llena OK).
+# ── Gate de aceptacion N1 ───────────────────────────────────────────────────
+#
+# (12-08-2026) G1 DEJO DE SER BLOQUEANTE Y PASO A SER UNA MEDICION.
+#
+# El comentario original de este bloque decia que G1 contaba "quiebres reales"
+# sobre stock_diario, y explicitaba que NO usaba stock_final_cajas porque estaba
+# clampeado. La intencion era correcta; la premisa, FALSA: `stock_diario` TAMBIEN
+# esta clampeado a 0. Medido el 12-08 sobre el plan 141 (206 SKU, 11.536 celdas):
+#
+#     stock_diario   -> 0 celdas < 0, minimo 0.0 EXACTO   <- imposible, es el clamp
+#     detalle_diario -> 49 dias con estado=QUIEBRE
+#                       49 con stock_disp_u < 0 (intradia)
+#                       27 con stock_fin_u  < 0 (cierre)
+#
+# O sea que G1 reportaba `negativos=0` TODOS los dias por construccion: no podia
+# fallar, y por lo tanto no controlaba nada. Cada "aceptable=True" del cron daba
+# una garantia que no existia.
+#
+# POR QUE NO SE ARREGLA SOLO CAMBIANDO LA FUENTE: la pasada A demuestra que hay
+# quiebres INEVITABLES (Q* = 43 el 12-08). Con la fuente correcta y el criterio de
+# cero, el gate rechazaria TODOS los planes y el cron nunca volveria a promover.
+# El problema no era solo la medicion: el CRITERIO nunca tuvo sentido.
+#
+# POLITICA VIGENTE (decidida el 12-08): el plan se promueve igual y se avisa por
+# separado (cron_plan_alerta.py). Siendo asi, contar quiebres no puede ser una
+# condicion de bloqueo. G1 MIDE E INFORMA; lo que bloquea es:
+#   - status no operable (INFEASIBLE / vacio)
+#   - G2: linea sobrecargada -> uso_linea > 100%, que es una imposibilidad FISICA
+#
+# Se reportan las DOS mediciones de quiebre, etiquetadas. Publicar una sola
+# repetiria el error del 11-08: dos numeros correctos que parecen contradecirse
+# porque nadie dijo que miden.
+#   intradia (stock_disp_u < 0) = criterio del MRP y de lo que muestra el dashboard
+#   cierre   (stock_fin_u  < 0) = comparable con la barrera de N2 (anclada en `fin`)
+#
 # G3 (cerrar OPTIMAL) NO entra al gate: es deuda que no bloquea el cron.
 _G2_TOL = 1e-6  # tolerancia de floats: 100.0 exacto es aceptable, no sobrecarga
+
+
+def medir_quiebres(resultado: dict) -> dict:
+    """Cuenta quiebres del plan sobre `detalle_diario`, que NO esta clampeado.
+
+    No decide nada: solo mide. Devuelve las dos definiciones por separado mas los
+    minimos reales, en unidades.
+    """
+    dd = resultado.get("detalle_diario") or {}
+    n_estado = n_disp = n_fin = 0
+    min_disp = min_fin = None
+    skus = set()
+    muestra = []
+    for sku, serie in dd.items():
+        for f, c in serie.items():
+            sdp = c.get("stock_disp_u")
+            sfn = c.get("stock_fin_u")
+            if c.get("estado") == "QUIEBRE":
+                n_estado += 1
+                skus.add(sku)
+                if len(muestra) < 10:
+                    muestra.append({"sku": sku, "fecha": f,
+                                    "stock_disp_u": sdp, "stock_fin_u": sfn})
+            if sdp is not None:
+                if sdp < 0:
+                    n_disp += 1
+                min_disp = sdp if min_disp is None else min(min_disp, sdp)
+            if sfn is not None:
+                if sfn < 0:
+                    n_fin += 1
+                min_fin = sfn if min_fin is None else min(min_fin, sfn)
+    return {
+        "n_dias_quiebre": n_estado,        # estado == QUIEBRE (criterio del MRP)
+        "n_sku_quiebre": len(skus),
+        "n_celdas_disp_neg": n_disp,       # intradia
+        "n_celdas_fin_neg": n_fin,         # cierre
+        "min_stock_disp_u": min_disp,
+        "min_stock_fin_u": min_fin,
+        "muestra_quiebres": muestra,
+    }
 
 
 def evaluar_gate_n1(resultado: dict) -> tuple[bool, dict]:
@@ -137,7 +208,10 @@ def evaluar_gate_n1(resultado: dict) -> tuple[bool, dict]:
         (v for serie in sd.values() for v in serie.values()),
         default=None,
     )
-    g1 = (len(negativos) == 0)
+    g1 = (len(negativos) == 0)   # se conserva por trazabilidad; NO decide (ver arriba)
+
+    # Medicion REAL de quiebres, sobre datos sin clampear.
+    q = medir_quiebres(resultado)
 
     # ── G2: ninguna linea > 100% ──
     sobrecargas = [
@@ -152,17 +226,25 @@ def evaluar_gate_n1(resultado: dict) -> tuple[bool, dict]:
     )
     g2 = (len(sobrecargas) == 0)
 
-    aceptable = bool(operable and g1 and g2)
+    # (12-08-2026) G1 fuera de la condicion: mide, no bloquea. Ver el bloque de
+    # comentarios de arriba. En la practica no cambia el comportamiento -- G1 dio
+    # verde todos los dias por construccion -- pero deja de dar una garantia falsa.
+    aceptable = bool(operable and g2)
 
     detalle = {
         "aceptable": aceptable,
         "status": status,
         "operable": operable,
-        "g1_sin_quiebres": g1,
+        "g1_sin_quiebres": g1,        # informativo: NO entra en `aceptable`
+        "g1_es_bloqueante": False,    # explicito, para que nadie lo asuma
         "g2_lineas_ok": g2,
+        # `min_stock` y `n_celdas_negativas` salen de stock_diario, que esta
+        # CLAMPEADO: se conservan por compatibilidad del log y del snapshot, pero
+        # NO son la medicion de quiebres. La real es `quiebres`.
         "min_stock": min_stock,
         "n_celdas_negativas": len(negativos),
         "celdas_negativas": negativos[:10],   # muestra acotada
+        "quiebres": q,
         "max_uso_linea_pct": max_uso,
         "n_lineas_sobrecargadas": len(sobrecargas),
         "lineas_sobrecargadas": sobrecargas[:10],
