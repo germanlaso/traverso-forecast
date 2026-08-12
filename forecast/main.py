@@ -1903,6 +1903,49 @@ def post_explicacion_endpoint(payload: ExplicacionFaltante):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Conciliación OF/TR (Fase 2) — lectura de mrp_of_sap. NO toca el solver.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/of/cumplimiento", tags=["Conciliacion OF"])
+def get_of_cumplimiento(solo_pt: bool = False):
+    """Cumplimiento a nivel OF: producido vs planificado, estado (completa/corta/
+    sobre/pendiente), ratio y ventana de recibos. solo_pt=True excluye granel (9x).
+    Lectura pura de mrp_of_sap (materializado por cron_of_sap.py)."""
+    try:
+        from db_mrp import get_of_sap_cumplimiento
+        filas = get_of_sap_cumplimiento(solo_pt=solo_pt)
+        # resumen para los KPIs (evita reccontar en el frontend)
+        resumen = {"completa": 0, "corta": 0, "sobre": 0, "pendiente": 0}
+        for r in filas:
+            resumen[r["estado"]] = resumen.get(r["estado"], 0) + 1
+        return {"solo_pt": solo_pt, "total": len(filas),
+                "resumen": resumen, "filas": filas}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/of/recepcion/{orden}", tags=["Conciliacion OF"])
+def get_of_recepcion(orden: str):
+    """Serie de recepción diaria de una OF (drill-down de parciales en el tiempo)."""
+    try:
+        from db_mrp import get_of_sap_recepcion_diaria
+        return {"orden": orden, "serie": get_of_sap_recepcion_diaria(orden)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/of/tendencia", tags=["Conciliacion OF"])
+def get_of_tendencia(solo_pt: bool = False):
+    """Fill-rate mensual (por mes de fecha inicio planificada) para el gráfico de
+    tendencia. Devuelve conteos por estado y el % de completas sobre OF cerradas."""
+    try:
+        from db_mrp import get_of_sap_tendencia_mensual
+        return {"solo_pt": solo_pt, "serie": get_of_sap_tendencia_mensual(solo_pt=solo_pt)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Diagnóstico de parámetros MRP (línea / SKU) — read-only (Fase 1)
 # ─────────────────────────────────────────────────────────────────────────────
 

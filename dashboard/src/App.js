@@ -11,6 +11,7 @@ import Campanas from './components/Campanas';
 import MapaQuiebres from './components/MapaQuiebres';
 import MiniStock from './components/MiniStock';
 import Eventos from './components/Eventos';
+import ConciliacionOF from './components/ConciliacionOF';
 
 const API = process.env.REACT_APP_API_BASE || '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -688,7 +689,7 @@ function AppInner() {
 
       {/* Tabs */}
       <div className="no-print" style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
-        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stockdiario','📊 Stock Diario'],['quiebres','🔴 Mapa de Quiebres'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria'],['faltantes','📉 Faltantes'],['campanas','🗓️ Campañas'],['eventos','🎯 Eventos'],['parametros','⚙️ Parámetros']].map(([tab,label]) => (
+        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stockdiario','📊 Stock Diario'],['quiebres','🔴 Mapa de Quiebres'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria'],['faltantes','📉 Faltantes'],['conciliacion','🏭 Conciliación OF'],['campanas','🗓️ Campañas'],['eventos','🎯 Eventos'],['parametros','⚙️ Parámetros']].map(([tab,label]) => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:500,background:'transparent',color:activeTab===tab?C.teal:C.textMuted,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
             {label}
@@ -1292,6 +1293,7 @@ function AppInner() {
           ordenesAprobadas={ordenesAprobadas}
         />}
         {activeTab === 'faltantes' && <Faltantes />}
+        {activeTab === 'conciliacion' && <ConciliacionOF />}
         {activeTab === 'campanas' && <Campanas />}
         {activeTab === 'eventos' && <Eventos skus={skus} />}
         {activeTab === 'parametros' && <ParametrosDiagnostico />}

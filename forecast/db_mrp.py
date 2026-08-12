@@ -1329,3 +1329,55 @@ def get_of_sap_recepcion_diaria(orden: str) -> list[dict]:
     return [{"fecha": r["fecha_tr"].isoformat(),
              "producido": float(r["producido"] or 0),
              "n_recibos": int(r["n_recibos"])} for r in rows]
+
+
+def get_of_sap_tendencia_mensual(solo_pt: bool = False) -> list[dict]:
+    """Fill-rate mensual: por mes de fecha_ini_planif, cuántas OF completa/corta/
+    sobre/pendiente y el % de completas. Para el gráfico de tendencia (Fase 2).
+
+    Agrega a nivel OF primero (planificada MAX, producida SUM) y después por mes,
+    para no contar una OF varias veces por sus recibos.
+    """
+    filtro = "WHERE es_granel = FALSE" if solo_pt else ""
+    with get_session() as session:
+        rows = session.execute(text(f"""
+            WITH por_of AS (
+                SELECT
+                    orden_produccion,
+                    MIN(fecha_ini_planif)                 AS ini,
+                    MAX(cant_planificada)                 AS plan,
+                    SUM(cant_producida)                   AS prod,
+                    BOOL_AND(pendiente)                   AS todo_pend
+                FROM mrp_of_sap
+                {filtro}
+                GROUP BY orden_produccion
+            )
+            SELECT
+                TO_CHAR(DATE_TRUNC('month', ini), 'YYYY-MM') AS mes,
+                COUNT(*)                                     AS n_of,
+                COUNT(*) FILTER (WHERE todo_pend)            AS pendiente,
+                COUNT(*) FILTER (WHERE NOT todo_pend AND plan > 0
+                                 AND ABS(prod/plan - 1) < 1e-4)             AS completa,
+                COUNT(*) FILTER (WHERE NOT todo_pend AND plan > 0
+                                 AND prod/plan < 0.9999)                    AS corta,
+                COUNT(*) FILTER (WHERE NOT todo_pend AND plan > 0
+                                 AND prod/plan > 1.0001)                    AS sobre
+            FROM por_of
+            WHERE ini IS NOT NULL
+            GROUP BY DATE_TRUNC('month', ini)
+            ORDER BY DATE_TRUNC('month', ini)
+        """)).mappings().all()
+
+    out = []
+    for r in rows:
+        n = int(r["n_of"] or 0)
+        comp = int(r["completa"] or 0)
+        # fill-rate = completas sobre las OF con producción decidida (excluye pendientes)
+        cerradas = n - int(r["pendiente"] or 0)
+        out.append({
+            "mes": r["mes"], "n_of": n,
+            "completa": comp, "corta": int(r["corta"] or 0),
+            "sobre": int(r["sobre"] or 0), "pendiente": int(r["pendiente"] or 0),
+            "fill_rate": round(100 * comp / cerradas, 1) if cerradas else None,
+        })
+    return out
