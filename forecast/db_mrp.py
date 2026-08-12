@@ -523,6 +523,9 @@ def crear_tablas_params():
         """))
         session.commit()
 
+    # Conciliación OF/TR (Fase 1): tabla independiente, se crea aquí también.
+    crear_tablas_of_sap()
+
 
 # ─── V6 Campanas de linea ────────────────────────────────────────────────────
 
@@ -1148,3 +1151,181 @@ def limpiar_explicaciones_huerfanas() -> int:
         """)).rowcount
         session.commit()
     return n
+
+# ─── Conciliación OF/TR (Fase 1) ─────────────────────────────────────────────
+# Mide OF ingresadas a SAP y su recepción (Terminal Report), SIN tocar el solver.
+# Grano: UNA FILA POR RECIBO. PK verificada con dato el 12-08:
+# (orden_produccion, terminal_report, batchnum) única sobre todo el dataset.
+# Tabla INDEPENDIENTE de la fuente: el SP es ventana móvil de ~6 meses y descarta
+# lo viejo; esta tabla acumula y sobrevive a eso. Ver DISENO_conciliacion_of.md.
+
+def crear_tablas_of_sap():
+    """Crea mrp_of_sap si no existe. Idempotente. La llama crear_tablas_params()."""
+    with get_session() as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS mrp_of_sap (
+                orden_produccion   VARCHAR(20)   NOT NULL,
+                terminal_report    VARCHAR(20)   NOT NULL DEFAULT '',  -- '' = pendiente
+                batchnum           VARCHAR(40)   NOT NULL DEFAULT '',
+                sku                VARCHAR(30)   NOT NULL DEFAULT '',
+                descripcion        VARCHAR(160)  DEFAULT '',
+                cant_planificada   NUMERIC(14,2) DEFAULT 0,   -- total OF (se repite por fila; NO sumar)
+                cant_producida     NUMERIC(14,2) DEFAULT 0,   -- por recibo (SÍ se suma)
+                cant_lote          NUMERIC(14,2) DEFAULT 0,
+                fecha_ini_planif   DATE,                      -- ancla de consistencia (100% cobertura)
+                fecha_fin_planif   DATE,
+                fecha_tr           DATE,                      -- NULL si pendiente
+                fecha_vcto_lote    DATE,
+                linea              VARCHAR(40)   DEFAULT '',   -- '' = "Sin Asignar" (98,9% hoy)
+                lote               VARCHAR(40)   DEFAULT '',
+                codigo_almacen     VARCHAR(20)   DEFAULT '',   -- bodega, NO línea
+                es_granel          BOOLEAN       DEFAULT FALSE,
+                pendiente          BOOLEAN       DEFAULT FALSE, -- cant_producida == 0
+                ingested_at        TIMESTAMP     DEFAULT NOW(),
+                updated_at         TIMESTAMP     DEFAULT NOW(),
+                PRIMARY KEY (orden_produccion, terminal_report, batchnum)
+            );
+            CREATE INDEX IF NOT EXISTS ix_of_sap_sku       ON mrp_of_sap (sku);
+            CREATE INDEX IF NOT EXISTS ix_of_sap_fecha_tr  ON mrp_of_sap (fecha_tr);
+            CREATE INDEX IF NOT EXISTS ix_of_sap_fecha_ini ON mrp_of_sap (fecha_ini_planif);
+            CREATE INDEX IF NOT EXISTS ix_of_sap_pend      ON mrp_of_sap (pendiente);
+        """))
+        session.commit()
+    logger.info("[MRP_DB] mrp_of_sap inicializada.")
+
+
+def upsert_of_sap_bulk(filas: list[dict]) -> dict:
+    """UPSERT acumulativo de filas-recibo (salida de hana_of.leer_of_tr()).
+
+    ACUMULA, no reemplaza: nunca borra filas que ya no vengan del SP (la ventana
+    móvil las descartó, pero para nosotros son histórico). Actualiza las que cambian
+    (típico: una pendiente que pasa a recibida -> se llenan tr/fecha/producida).
+    """
+    if not filas:
+        logger.info("[MRP_DB] upsert_of_sap_bulk: 0 filas, nada que hacer.")
+        return {"filas": 0, "ejecutadas": 0}
+
+    sql = text("""
+        INSERT INTO mrp_of_sap (
+            orden_produccion, terminal_report, batchnum, sku, descripcion,
+            cant_planificada, cant_producida, cant_lote,
+            fecha_ini_planif, fecha_fin_planif, fecha_tr, fecha_vcto_lote,
+            linea, lote, codigo_almacen, es_granel, pendiente, updated_at
+        ) VALUES (
+            :orden_produccion, :terminal_report, :batchnum, :sku, :descripcion,
+            :cant_planificada, :cant_producida, :cant_lote,
+            :fecha_ini_planif, :fecha_fin_planif, :fecha_tr, :fecha_vcto_lote,
+            :linea, :lote, :codigo_almacen, :es_granel, :pendiente, NOW()
+        )
+        ON CONFLICT (orden_produccion, terminal_report, batchnum) DO UPDATE SET
+            sku              = EXCLUDED.sku,
+            descripcion      = EXCLUDED.descripcion,
+            cant_planificada = EXCLUDED.cant_planificada,
+            cant_producida   = EXCLUDED.cant_producida,
+            cant_lote        = EXCLUDED.cant_lote,
+            fecha_ini_planif = EXCLUDED.fecha_ini_planif,
+            fecha_fin_planif = EXCLUDED.fecha_fin_planif,
+            fecha_tr         = EXCLUDED.fecha_tr,
+            fecha_vcto_lote  = EXCLUDED.fecha_vcto_lote,
+            linea            = EXCLUDED.linea,
+            lote             = EXCLUDED.lote,
+            codigo_almacen   = EXCLUDED.codigo_almacen,
+            es_granel        = EXCLUDED.es_granel,
+            pendiente        = EXCLUDED.pendiente,
+            updated_at       = NOW()
+    """)
+
+    def _p(f):
+        return {
+            "orden_produccion": f["orden_produccion"],
+            "terminal_report":  f["terminal_report"],
+            "batchnum":         f["batchnum"],
+            "sku":              f["sku"],
+            "descripcion":      f["descripcion"][:160],
+            "cant_planificada": float(f["cant_planificada"]),
+            "cant_producida":   float(f["cant_producida"]),
+            "cant_lote":        float(f["cant_lote"]),
+            "fecha_ini_planif": f["fecha_ini_planif"],
+            "fecha_fin_planif": f["fecha_fin_planif"],
+            "fecha_tr":         f["fecha_tr"],
+            "fecha_vcto_lote":  f["fecha_vcto_lote"],
+            "linea":            f["linea"][:40],
+            "lote":             f["lote"][:40],
+            "codigo_almacen":   f["codigo_almacen"][:20],
+            "es_granel":        bool(f["es_granel"]),
+            "pendiente":        bool(f["pendiente"]),
+        }
+
+    with get_session() as session:
+        session.execute(sql, [_p(f) for f in filas])
+        session.commit()
+    logger.info("[MRP_DB] upsert_of_sap_bulk: %d filas procesadas (UPSERT).", len(filas))
+    return {"filas": len(filas), "ejecutadas": len(filas)}
+
+
+def get_of_sap_cumplimiento(solo_pt: bool = False) -> list[dict]:
+    """Vista de CUMPLIMIENTO a nivel OF (agrega los recibos).
+
+    planificada: MAX (se repite idéntica por fila; nunca sumar).
+    producida:   SUM (cada recibo aporta). ratio, estado, nº recibos, ventana TR.
+    """
+    filtro = "WHERE es_granel = FALSE" if solo_pt else ""
+    with get_session() as session:
+        rows = session.execute(text(f"""
+            SELECT
+                orden_produccion,
+                MAX(sku)              AS sku,
+                MAX(descripcion)      AS descripcion,
+                BOOL_OR(es_granel)    AS es_granel,
+                MAX(cant_planificada) AS planificada,
+                SUM(cant_producida)   AS producida,
+                MIN(fecha_ini_planif) AS fecha_ini_planif,
+                MIN(fecha_tr)         AS primer_tr,
+                MAX(fecha_tr)         AS ultimo_tr,
+                COUNT(*) FILTER (WHERE NOT pendiente) AS n_recibos,
+                BOOL_AND(pendiente)   AS todo_pendiente
+            FROM mrp_of_sap
+            {filtro}
+            GROUP BY orden_produccion
+            ORDER BY MIN(fecha_ini_planif) DESC NULLS LAST
+        """)).mappings().all()
+
+    out = []
+    for r in rows:
+        plan = float(r["planificada"] or 0)
+        prod = float(r["producida"] or 0)
+        ratio = (prod / plan) if plan > 0 else 0.0
+        if r["todo_pendiente"]:
+            estado = "pendiente"
+        elif abs(ratio - 1) < 1e-4:
+            estado = "completa"
+        elif ratio < 1:
+            estado = "corta"
+        else:
+            estado = "sobre"
+        out.append({
+            "orden_produccion": r["orden_produccion"],
+            "sku": r["sku"], "descripcion": r["descripcion"],
+            "es_granel": bool(r["es_granel"]),
+            "planificada": plan, "producida": prod,
+            "ratio": round(ratio, 4), "estado": estado,
+            "fecha_ini_planif": (r["fecha_ini_planif"].isoformat() if r["fecha_ini_planif"] else None),
+            "primer_tr": (r["primer_tr"].isoformat() if r["primer_tr"] else None),
+            "ultimo_tr": (r["ultimo_tr"].isoformat() if r["ultimo_tr"] else None),
+            "n_recibos": int(r["n_recibos"] or 0),
+        })
+    return out
+
+
+def get_of_sap_recepcion_diaria(orden: str) -> list[dict]:
+    """Serie de recepción por día de una OF (para los parciales en el tiempo)."""
+    with get_session() as session:
+        rows = session.execute(text("""
+            SELECT fecha_tr, SUM(cant_producida) AS producido, COUNT(*) AS n_recibos
+            FROM mrp_of_sap
+            WHERE orden_produccion = :o AND NOT pendiente AND fecha_tr IS NOT NULL
+            GROUP BY fecha_tr ORDER BY fecha_tr
+        """), {"o": orden}).mappings().all()
+    return [{"fecha": r["fecha_tr"].isoformat(),
+             "producido": float(r["producido"] or 0),
+             "n_recibos": int(r["n_recibos"])} for r in rows]
