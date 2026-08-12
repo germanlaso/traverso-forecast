@@ -1945,6 +1945,50 @@ def get_of_tendencia(solo_pt: bool = False):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/of/adopcion", tags=["Conciliacion OF"])
+def get_of_adopcion(desde: str | None = None, hasta: str | None = None,
+                    linea: str | None = None, categoria: str | None = None,
+                    sku: str | None = None):
+    """KPI de ADOPCIÓN: cobertura semanal de SKU planificados por el sistema sobre
+    los SKU de PT que la planta produjo (SAP). Match por SKU en la misma semana
+    (no por fecha, ver DISENO §10.1). Devuelve serie semanal (la curva del
+    nacimiento), agregado por línea inferida, y el contexto de OF fuera del sistema.
+    Filtros opcionales: intervalo de fechas, línea, categoría, SKU."""
+    try:
+        from db_mrp import get_of_sap_adopcion
+        return get_of_sap_adopcion(desde=desde, hasta=hasta, linea=linea,
+                                   categoria=categoria, sku=sku)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/of/filtros", tags=["Conciliacion OF"])
+def get_of_filtros():
+    """Opciones para los selectores del tablero: categorías, líneas y rango de fechas
+    disponible en mrp_of_sap. Read-only."""
+    try:
+        from db_mrp import SessionLocal
+        from sqlalchemy import text as _t
+        with SessionLocal() as s:
+            cats = [r[0] for r in s.execute(_t(
+                "SELECT DISTINCT categoria FROM mrp_sku_params "
+                "WHERE categoria IS NOT NULL AND categoria <> '' ORDER BY 1")).all()]
+            lins = [r[0] for r in s.execute(_t(
+                "SELECT DISTINCT linea_preferida FROM mrp_sku_params "
+                "WHERE linea_preferida IS NOT NULL AND linea_preferida <> '' ORDER BY 1")).all()]
+            rango = s.execute(_t(
+                "SELECT MIN(fecha_ini_planif), MAX(fecha_ini_planif) FROM mrp_of_sap "
+                "WHERE fecha_ini_planif IS NOT NULL")).first()
+        return {
+            "categorias": cats,
+            "lineas": lins,
+            "min_fecha": rango[0].isoformat() if rango and rango[0] else None,
+            "max_fecha": rango[1].isoformat() if rango and rango[1] else None,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Diagnóstico de parámetros MRP (línea / SKU) — read-only (Fase 1)
 # ─────────────────────────────────────────────────────────────────────────────
