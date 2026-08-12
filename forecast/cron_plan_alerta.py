@@ -199,11 +199,74 @@ def _cuerpo(crit, avis, ctx) -> str:
     return "\n".join(L)
 
 
+def prevuelo(imprimir_solo=False) -> int:
+    """PRE-VUELO: corre el ciclo completo del plan en dry-run y avisa si se rompe.
+
+    POR QUÉ ES UN PROCESO EXTERNO Y NO UN BLOQUE DENTRO DE cron_plan.py: el caso
+    que hay que detectar es justamente que cron_plan CRASHEE. Si el aviso viviera
+    adentro, un traceback impediría que se ejecute — exactamente lo del 12-08.
+
+    Corre con los TL del solver en 5 s: no interesa la calidad del plan, solo que
+    el ciclo NO SE ROMPA. Tarda ~2 min en vez de ~90.
+    """
+    import os
+    import subprocess
+
+    env = dict(os.environ)
+    # TL cortos: el pre-vuelo mide que no crashee, no que el plan sea bueno.
+    # OJO: el TL de la Pasada A lo controla N2_TL_A, NO --time-limit.
+    env["N2_TL_A"] = "5"
+    env["N2_TL_C"] = "5"
+    cmd = [sys.executable, "/app/cron_plan.py", "--dry-run", "--skip-refresh",
+           "--no-promote", "--horizonte", "8", "--time-limit", "5"]
+
+    logger.info("Pre-vuelo: %s", " ".join(cmd))
+    try:
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True,
+                           timeout=1200, cwd="/app")
+        salida = (r.stdout or "") + (r.stderr or "")
+        ok = (r.returncode == 0) and ("Traceback" not in salida)
+        rc = r.returncode
+    except subprocess.TimeoutExpired:
+        salida, ok, rc = "El pre-vuelo excedió los 20 minutos.", False, -1
+    except Exception as e:
+        salida, ok, rc = f"{type(e).__name__}: {e}", False, -2
+
+    if ok:
+        logger.info("Pre-vuelo OK: el ciclo completo corre sin errores.")
+        if imprimir_solo:
+            print("Pre-vuelo OK.")
+        return 0
+
+    # Solo las últimas líneas: el traceback y el contexto inmediato.
+    cola = "\n".join(salida.strip().splitlines()[-25:])
+    cuerpo = (
+        f"El PRE-VUELO del plan falló (exit {rc}).\n\n"
+        f"El ciclo se rompe con los datos de hoy, así que el cron de las 06:00 "
+        f"probablemente NO genere plan.\n"
+        f"Hay tiempo de arreglarlo antes.\n\n"
+        f"Últimas líneas:\n\n{cola}\n")
+    logger.error("Pre-vuelo FALLÓ (exit %s)", rc)
+    if imprimir_solo:
+        print(cuerpo)
+        return 1
+    import os as _os
+    from enviar_faltantes import enviar_alerta
+    enviar_alerta(f"[Traverso] PRE-VUELO del plan FALLÓ — {_hoy_chile()}", cuerpo,
+                  destinatarios=_os.environ.get("PLAN_ALERTA"))
+    return 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="imprime, no envía")
     ap.add_argument("--forzar", action="store_true", help="envía aunque esté todo OK")
+    ap.add_argument("--prevuelo", action="store_true",
+                    help="corre el ciclo del plan en dry-run y avisa si se rompe")
     args = ap.parse_args()
+
+    if args.prevuelo:
+        return prevuelo(imprimir_solo=args.dry_run)
 
     try:
         crit, avis, ctx = revisar()

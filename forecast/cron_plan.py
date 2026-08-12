@@ -180,6 +180,13 @@ def main():
     ap.add_argument("--skip-refresh", action="store_true", help="no refrescar stock (test)")
     ap.add_argument("--no-pedidos", action="store_true", help="no netear OV de HANA (test/A-B)")
     ap.add_argument("--no-promote", action="store_true", help="persistir sin promover (test: no pisa el vigente)")
+    # (12-08-2026) PRE-VUELO. Corre el ciclo COMPLETO y hace rollback: no deja fila
+    # en mrp_planes ni toca el vigente. Sirve para detectar que el ciclo se rompe
+    # ANTES de las 6 AM. El 12-08 el cron murio con un KeyError al construir el
+    # modelo, disparado por 5 OF de SKU MTO aprobadas la tarde anterior a las 17:00:
+    # un pre-vuelo a las 20:00 lo habria cazado con 10 horas de margen.
+    ap.add_argument("--dry-run", action="store_true",
+                    help="corre todo el ciclo y hace rollback (pre-vuelo: no persiste)")
     args = ap.parse_args()
 
     hoy = dt.date.today()
@@ -644,7 +651,7 @@ def main():
              f"min_fin={_q.get('min_stock_fin_u')}u  (medicion, NO bloquea)")
 
     # solo promovemos si el gate pasa Y la frescura del stock es OK
-    promover = aceptable and frescura_ok and not args.no_promote
+    promover = aceptable and frescura_ok and not args.no_promote and not args.dry_run
     if args.no_promote:
         log.info("[7/8] --no-promote: se persiste para inspección pero NO se promueve (vigente intacto)")
     if aceptable and not frescura_ok:
@@ -662,7 +669,15 @@ def main():
                 aceptable=aceptable,
                 session=s,
             )
-            if promover:
+            if args.dry_run:
+                # El INSERT se EJECUTA y se ROLLBACKEA, en vez de saltearse: asi el
+                # pre-vuelo cubre tambien la serializacion del snapshot (json.dumps
+                # + el whitelist CLAVES_SNAPSHOT de persistencia.py), que es otra
+                # falla silenciosa documentada. No queda fila en mrp_planes.
+                s.rollback()
+                log.info("[8/8] DRY-RUN: rollback, no se persiste nada. "
+                         "El ciclo completo corrio sin errores.")
+            elif promover:
                 promover_plan(plan_id, session=s)
                 s.commit()
                 log.info(f"[8/8] plan id={plan_id} PERSISTIDO y PROMOVIDO (vigente)")
@@ -674,7 +689,10 @@ def main():
         log.error(f"[8/8] error al persistir/promover: {e}")
         sys.exit(6)
 
-    log.info(f"=== CRON PLAN fin OK | plan_id={plan_id} | promovido={promover} ===")
+    if args.dry_run:
+        log.info("=== CRON PLAN fin OK | DRY-RUN (sin persistir) ===")
+    else:
+        log.info(f"=== CRON PLAN fin OK | plan_id={plan_id} | promovido={promover} ===")
     sys.exit(0)
 
 
