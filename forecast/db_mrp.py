@@ -1386,140 +1386,160 @@ def get_of_sap_tendencia_mensual(solo_pt: bool = False) -> list[dict]:
 def get_of_sap_adopcion(desde: str | None = None, hasta: str | None = None,
                         linea: str | None = None, categoria: str | None = None,
                         sku: str | None = None) -> dict:
-    """KPI de ADOPCIÓN: de los SKU de PT activos que la planta produjo (SAP) en cada
-    semana, cuántos el sistema también tenía planificados/aprobados esa semana.
+    """KPI de ADOPCIÓN por UNIDADES (cajas): de las cajas que el sistema planificó,
+    cuántas se materializaron como OF en SAP.
 
-    Match por SKU en la MISMA semana (NO por fecha exacta: la desalineación es de ~21
-    días, ver DISENO §10.1). Semana = lunes de fecha_ini_planif (SAP) y de
-    fecha_lanzamiento_real (aprobaciones).
+    Definición (validada con dato, DISENO §11):
+      · Unidad de medida: CAJAS. SAP cant_planificada y sistema cantidad_real_cj están
+        ambas en cajas (verificado: coinciden exacto, NO usar cantidad_real_u que está
+        en unidades y daría el cociente dividido por u_por_caja).
+      · Match: una OF de SAP corresponde a una aprobación del sistema si el
+        fecha_lanzamiento_real del sistema cae DENTRO del tramo [ini, fin] de la OF.
+        Sin tolerancia. El tramo ancho del dato viejo absorbe el desfase creación/
+        producción; el dato nuevo (ini=fin=lanzamiento) exige coincidencia exacta.
+      · Topeado por SKU: min(cajas_SAP, cajas_sistema) / cajas_sistema  (∈ [0,1]).
+        Si SAP produjo ≥ lo planificado, ese SKU cuenta 100% adoptado.
+      · Semana = semana ISO (lunes) del fecha_lanzamiento_real del sistema.
+      · Agregación semanal ponderada por volumen: Σ min(sap,plan) / Σ plan.
+      · Denominador = cajas planificadas por el SISTEMA (activos, PT). Las semanas sin
+        plan no aparecen (no se mide adopción de un plan inexistente).
 
-    Universo (denominador): SKU activos, de PT (no granel), que el sistema CONOCE
-    (están en mrp_sku_params). MTO incluidos: una OF MTO aprobada entra al solver, así
-    que cuenta como planificada (DISENO §10.3).
-
-    Línea inferida por mrp_sku_params.linea_preferida (SAP no la trae, §10.4).
+    Universo: SKU activos, PT (no granel), conocidos. MTO incluidos (§10.3).
+    Línea inferida por linea_preferida (§10.4).
 
     Devuelve:
-      serie:     [{semana, producidos, planificados, pct}]  — la curva del nacimiento
-      por_linea: [{linea, producidos, planificados, pct}]   — agregado del período
-      fuera_sistema: {of, sku}  — OF/SKU de PT con SKU desconocido (contexto, §10.5)
+      serie:     [{semana, plan_cj, sap_cj, pct}]        — curva del nacimiento
+      por_linea: [{linea, plan_cj, sap_cj, pct}]         — agregado del período
+      por_sku:   [{sku, descripcion, linea, plan_cj, sap_cj, pct}]  — detalle auditable
+      fuera_sistema: {of, sku}                            — contexto (SKU desconocidos)
     """
-    # Filtros opcionales aplicados en el CTE de OF de SAP.
-    cond_of = ["m.fecha_ini_planif IS NOT NULL", "m.es_granel = FALSE"]
-    p: dict = {}
-    if desde:
-        cond_of.append("m.fecha_ini_planif >= :desde"); p["desde"] = desde
-    if hasta:
-        cond_of.append("m.fecha_ini_planif <= :hasta"); p["hasta"] = hasta
-    if sku:
-        cond_of.append("m.sku LIKE :sku"); p["sku"] = f"%{sku}%"
-    cond_of_sql = " AND ".join(cond_of)
+    import pandas as _pd
 
-    # Filtros sobre params (línea/categoría) — se aplican al JOIN con el universo.
-    cond_par = ["sp.activo = TRUE"]
-    if linea:
-        cond_par.append("sp.linea_preferida = :linea"); p["linea"] = linea
-    if categoria:
-        cond_par.append("sp.categoria = :categoria"); p["categoria"] = categoria
-    cond_par_sql = " AND ".join(cond_par)
+    params = {p["sku"]: p for p in get_all_sku_params()}
+    activos = {k for k, v in params.items() if v.get("activo")}
+
+    # filtros de universo (linea/categoria) sobre params
+    def _pasa_filtro(sk):
+        if sk not in activos:
+            return False
+        pr = params.get(sk, {})
+        if linea and (pr.get("linea_preferida") or "") != linea:
+            return False
+        if categoria and (pr.get("categoria") or "") != categoria:
+            return False
+        if sku and sku not in str(sk):
+            return False
+        return True
 
     with get_session() as session:
-        # ── Serie semanal ────────────────────────────────────────────────────
-        serie = session.execute(text(f"""
-            WITH of_sem AS (   -- SKU producidos por semana (PT, con filtros)
-                SELECT DISTINCT
-                    DATE_TRUNC('week', m.fecha_ini_planif)::date AS semana,
-                    m.sku
-                FROM mrp_of_sap m
-                WHERE {cond_of_sql}
-            ),
-            univ AS (          -- restringir al universo: activos, conocidos, +filtros
-                SELECT o.semana, o.sku
-                FROM of_sem o
-                JOIN mrp_sku_params sp ON sp.sku = o.sku
-                WHERE {cond_par_sql}
-            ),
-            ap_sem AS (        -- SKU con aprobación por semana
-                SELECT DISTINCT
-                    DATE_TRUNC('week', a.fecha_lanzamiento_real)::date AS semana,
-                    o.sku
-                FROM mrp_aprobaciones a
-                JOIN mrp_ordenes o ON o.numero_of = a.numero_of
-                WHERE a.estado = 'APROBADA' AND a.fecha_lanzamiento_real IS NOT NULL
-            )
-            SELECT
-                u.semana,
-                COUNT(DISTINCT u.sku)                                   AS producidos,
-                COUNT(DISTINCT u.sku) FILTER (WHERE ap.sku IS NOT NULL) AS planificados
-            FROM univ u
-            LEFT JOIN ap_sem ap ON ap.semana = u.semana AND ap.sku = u.sku
-            GROUP BY u.semana
-            ORDER BY u.semana
-        """), p).mappings().all()
+        # aprobaciones del sistema (plan): sku, fecha lanzamiento, cajas
+        ap_rows = session.execute(text("""
+            SELECT o.sku AS sku, a.fecha_lanzamiento_real AS fla,
+                   a.cantidad_real_cj AS cj
+            FROM mrp_aprobaciones a
+            JOIN mrp_ordenes o ON o.numero_of = a.numero_of
+            WHERE a.estado = 'APROBADA' AND a.fecha_lanzamiento_real IS NOT NULL
+        """)).mappings().all()
 
-        # ── Agregado por línea (del período filtrado) ────────────────────────
-        por_linea = session.execute(text(f"""
-            WITH of_sem AS (
-                SELECT DISTINCT
-                    DATE_TRUNC('week', m.fecha_ini_planif)::date AS semana,
-                    m.sku
-                FROM mrp_of_sap m
-                WHERE {cond_of_sql}
-            ),
-            univ AS (
-                SELECT o.semana, o.sku, sp.linea_preferida AS linea
-                FROM of_sem o
-                JOIN mrp_sku_params sp ON sp.sku = o.sku
-                WHERE {cond_par_sql}
-            ),
-            ap_sem AS (
-                SELECT DISTINCT
-                    DATE_TRUNC('week', a.fecha_lanzamiento_real)::date AS semana,
-                    o.sku
-                FROM mrp_aprobaciones a
-                JOIN mrp_ordenes o ON o.numero_of = a.numero_of
-                WHERE a.estado = 'APROBADA' AND a.fecha_lanzamiento_real IS NOT NULL
-            )
-            SELECT
-                COALESCE(NULLIF(u.linea, ''), '(sin línea)')            AS linea,
-                COUNT(DISTINCT u.sku)                                   AS producidos,
-                COUNT(DISTINCT u.sku) FILTER (WHERE ap.sku IS NOT NULL) AS planificados
-            FROM univ u
-            LEFT JOIN ap_sem ap ON ap.semana = u.semana AND ap.sku = u.sku
-            GROUP BY 1
-            ORDER BY producidos DESC
-        """), p).mappings().all()
+        # OF de SAP: sku, tramo [ini,fin], cajas planificadas (por OF)
+        of_rows = session.execute(text("""
+            SELECT sku, orden_produccion,
+                   MIN(fecha_ini_planif) AS ini, MAX(fecha_fin_planif) AS fin,
+                   MAX(cant_planificada) AS cj_sap
+            FROM mrp_of_sap
+            WHERE es_granel = FALSE AND fecha_ini_planif IS NOT NULL
+            GROUP BY sku, orden_produccion
+        """)).mappings().all()
 
-        # ── Contexto: OF de PT con SKU DESCONOCIDO (fuera del sistema) ────────
-        fuera = session.execute(text(f"""
-            SELECT
-                COUNT(DISTINCT m.orden_produccion) AS of,
-                COUNT(DISTINCT m.sku)              AS sku
+        # contexto: OF con SKU desconocido
+        fuera = session.execute(text("""
+            SELECT COUNT(DISTINCT m.orden_produccion) AS of, COUNT(DISTINCT m.sku) AS sku
             FROM mrp_of_sap m
             LEFT JOIN mrp_sku_params sp ON sp.sku = m.sku
-            WHERE {cond_of_sql} AND sp.sku IS NULL
-        """), p).mappings().first()
+            WHERE m.es_granel = FALSE AND sp.sku IS NULL
+        """)).mappings().first()
 
-    def _fila(r):
-        prod = int(r["producidos"] or 0)
-        plan = int(r["planificados"] or 0)
-        return {"producidos": prod, "planificados": plan,
-                "pct": round(100 * plan / prod, 1) if prod else None}
+    ap = _pd.DataFrame(ap_rows)
+    of = _pd.DataFrame(of_rows)
+    if ap.empty or of.empty:
+        return {"serie": [], "por_linea": [], "por_sku": [],
+                "fuera_sistema": {"of": int((fuera or {}).get("of") or 0),
+                                  "sku": int((fuera or {}).get("sku") or 0)}}
 
+    ap["sku"] = ap["sku"].astype(str).str.strip()
+    ap["fla"] = _pd.to_datetime(ap["fla"])
+    ap["cj"] = _pd.to_numeric(ap["cj"], errors="coerce").fillna(0)
+    of["sku"] = of["sku"].astype(str).str.strip()
+    of["ini"] = _pd.to_datetime(of["ini"])
+    of["fin"] = _pd.to_datetime(of["fin"])
+    of["cj_sap"] = _pd.to_numeric(of["cj_sap"], errors="coerce").fillna(0)
+
+    # filtros de fecha sobre la semana de lanzamiento del sistema
+    if desde:
+        ap = ap[ap["fla"] >= _pd.Timestamp(desde)]
+    if hasta:
+        ap = ap[ap["fla"] <= _pd.Timestamp(hasta)]
+
+    # index de OF por sku para el match por tramo
+    of_por_sku = {}
+    for _, o in of.iterrows():
+        of_por_sku.setdefault(o["sku"], []).append(o)
+
+    filas = []  # (semana, sku, plan_cj, mat_cj)
+    for _, a in ap.iterrows():
+        if not _pasa_filtro(a["sku"]):
+            continue
+        # cajas de SAP cuyo tramo [ini,fin] contiene el lanzamiento del sistema
+        sap_cj = 0.0
+        for o in of_por_sku.get(a["sku"], []):
+            fin = o["fin"] if _pd.notna(o["fin"]) else o["ini"]
+            if _pd.notna(o["ini"]) and o["ini"] <= a["fla"] <= fin:
+                sap_cj += float(o["cj_sap"])
+        plan_cj = float(a["cj"])
+        mat_cj = min(sap_cj, plan_cj)  # topeado
+        sem = a["fla"].to_period("W").start_time.date().isoformat()
+        filas.append((sem, a["sku"], plan_cj, mat_cj))
+
+    df = _pd.DataFrame(filas, columns=["sem", "sku", "plan", "mat"])
+
+    def _pct(mat, plan):
+        return round(100 * mat / plan, 1) if plan > 0 else None
+
+    # serie semanal (ponderada por volumen)
     serie_out = []
-    for r in serie:
-        f = _fila(r)
-        f["semana"] = r["semana"].isoformat()
-        serie_out.append(f)
+    if not df.empty:
+        for sem, g in df.groupby("sem"):
+            plan = g["plan"].sum(); mat = g["mat"].sum()
+            serie_out.append({"semana": sem, "plan_cj": round(plan, 0),
+                              "sap_cj": round(mat, 0), "pct": _pct(mat, plan)})
+        serie_out.sort(key=lambda r: r["semana"])
 
+    # por linea (agregado del periodo)
     linea_out = []
-    for r in por_linea:
-        f = _fila(r)
-        f["linea"] = r["linea"]
-        linea_out.append(f)
+    if not df.empty:
+        df["linea"] = df["sku"].map(lambda s: (params.get(s, {}).get("linea_preferida") or "(sin línea)"))
+        for ln, g in df.groupby("linea"):
+            plan = g["plan"].sum(); mat = g["mat"].sum()
+            linea_out.append({"linea": ln, "plan_cj": round(plan, 0),
+                              "sap_cj": round(mat, 0), "pct": _pct(mat, plan)})
+        linea_out.sort(key=lambda r: -r["plan_cj"])
+
+    # por sku (detalle auditable del periodo)
+    sku_out = []
+    if not df.empty:
+        for sk, g in df.groupby("sku"):
+            plan = g["plan"].sum(); mat = g["mat"].sum()
+            pr = params.get(sk, {})
+            sku_out.append({"sku": sk, "descripcion": pr.get("descripcion", ""),
+                            "linea": pr.get("linea_preferida") or "(sin línea)",
+                            "plan_cj": round(plan, 0), "sap_cj": round(mat, 0),
+                            "pct": _pct(mat, plan)})
+        sku_out.sort(key=lambda r: -r["plan_cj"])
 
     return {
         "serie": serie_out,
         "por_linea": linea_out,
-        "fuera_sistema": {"of": int(fuera["of"] or 0), "sku": int(fuera["sku"] or 0)},
+        "por_sku": sku_out,
+        "fuera_sistema": {"of": int((fuera or {}).get("of") or 0),
+                          "sku": int((fuera or {}).get("sku") or 0)},
     }

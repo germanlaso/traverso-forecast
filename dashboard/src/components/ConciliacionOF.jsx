@@ -115,6 +115,12 @@ export default function ConciliacionOF() {
   const chartAdop = useMemo(
     () => serie.map((r, i) => ({ ...r, name: fmtSem(r.semana), parcial: i === serie.length - 1 })),
     [serie]);
+  // SKU agrupados por línea, para el detalle auditable dentro de cada encabezado
+  const skusPorLinea = useMemo(() => {
+    const m = {};
+    (adopcion?.por_sku || []).forEach((x) => { (m[x.linea] = m[x.linea] || []).push(x); });
+    return m;
+  }, [adopcion]);
 
   const resumen = cumpl?.resumen || null;
   const filasC = cumpl?.filas || [];
@@ -227,7 +233,7 @@ export default function ConciliacionOF() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 10, marginBottom: 16 }}>
               <KPI label="Adopción (últ. sem. consolidada)"
                    value={fmtP(ultConsolidada?.pct)} color={C.teal}
-                   sub={ultConsolidada ? `sem ${fmtSem(ultConsolidada.semana)} · ${ultConsolidada.planificados}/${ultConsolidada.producidos} SKU` : ""} />
+                   sub={ultConsolidada ? `sem ${fmtSem(ultConsolidada.semana)} · ${fmtN(ultConsolidada.sap_cj)}/${fmtN(ultConsolidada.plan_cj)} cj` : ""} />
               <KPI label="Semana en curso (parcial)"
                    value={fmtP(ultParcial?.pct)} color={C.gray}
                    sub={ultParcial ? `sem ${fmtSem(ultParcial.semana)} · aún abierta` : ""} />
@@ -237,7 +243,8 @@ export default function ConciliacionOF() {
             </div>
 
             <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 6 }}>
-              Cobertura semanal: % de SKU producidos (SAP) que el sistema también planificó esa semana
+              Adopción semanal: % de cajas planificadas por el sistema que se materializaron como OF en SAP
+              (topeado por SKU, ponderado por volumen)
             </div>
             <ResponsiveContainer width="100%" height={240}>
               <LineChart data={chartAdop} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
@@ -245,7 +252,9 @@ export default function ConciliacionOF() {
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }} interval="preserveStartEnd" />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: C.textMuted }} tickFormatter={(v) => `${v}%`} />
                 <Tooltip
-                  formatter={(v, k) => k === "pct" ? [`${v}%`, "Adopción"] : [fmtN(v), k]}
+                  formatter={(v, k) => k === "pct" ? [`${v}%`, "Adopción"]
+                    : k === "plan_cj" ? [fmtN(v), "Plan (cj)"]
+                    : k === "sap_cj" ? [fmtN(v), "SAP (cj)"] : [fmtN(v), k]}
                   labelFormatter={(l) => `Semana ${l}`}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: `0.5px solid ${C.border}` }} />
                 <Line type="monotone" dataKey="pct" stroke={C.teal} strokeWidth={2}
@@ -254,12 +263,13 @@ export default function ConciliacionOF() {
             </ResponsiveContainer>
 
             <div style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: "18px 0 10px" }}>
-              Por línea (línea inferida del sistema)
+              Por línea (línea inferida del sistema) — clic para ver el detalle por SKU
             </div>
             <div style={{ border: `0.5px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
               {(adopcion.por_linea || []).map((L, i) => {
                 const abierto = !!lineaAbierta[L.linea];
                 const total = (adopcion.por_linea || []).length;
+                const skus = skusPorLinea[L.linea] || [];
                 return (
                   <div key={L.linea} style={{ borderBottom: i < total - 1 ? `0.5px solid ${C.border}` : "none" }}>
                     <div onClick={() => setLineaAbierta((e) => ({ ...e, [L.linea]: !e[L.linea] }))}
@@ -271,7 +281,7 @@ export default function ConciliacionOF() {
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
                         <span style={{ fontSize: 12, color: C.textMuted }}>
-                          {L.planificados}/{L.producidos} SKU
+                          {fmtN(L.sap_cj)}/{fmtN(L.plan_cj)} cj
                         </span>
                         <span style={{ fontSize: 14, fontWeight: 700, color: C.teal, minWidth: 54, textAlign: "right" }}>
                           {fmtP(L.pct)}
@@ -282,10 +292,36 @@ export default function ConciliacionOF() {
                       </div>
                     </div>
                     {abierto && (
-                      <div style={{ padding: "8px 14px 12px 34px", fontSize: 12, color: C.textMuted, background: C.tealLt }}>
-                        {L.producidos} SKU producidos en esta línea (según SAP, línea inferida por
-                        <code style={{ margin: "0 4px" }}>linea_preferida</code>); {L.planificados} pasaron
-                        por el sistema en la semana de producción. Cobertura {fmtP(L.pct)}.
+                      <div style={{ padding: "4px 14px 12px 34px", background: C.tealLt }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr>
+                              {["SKU", "Descripción", "Plan (cj)", "SAP (cj)", "Adopción"].map((h, hi) => (
+                                <th key={h} style={{ ...s.th, background: "transparent",
+                                  textAlign: hi >= 2 ? "right" : "left" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {skus.map((x) => (
+                              <tr key={x.sku}>
+                                <td style={{ ...s.td, fontWeight: 600, color: C.teal, borderBottom: "none" }}>{x.sku}</td>
+                                <td style={{ ...s.td, color: C.textMuted, borderBottom: "none" }}>{x.descripcion}</td>
+                                <td style={{ ...s.td, textAlign: "right", borderBottom: "none" }}>{fmtN(x.plan_cj)}</td>
+                                <td style={{ ...s.td, textAlign: "right", borderBottom: "none" }}>{fmtN(x.sap_cj)}</td>
+                                <td style={{ ...s.td, textAlign: "right", fontWeight: 700, borderBottom: "none",
+                                  color: (x.pct ?? 0) >= 99.9 ? C.teal : (x.pct ?? 0) >= 70 ? C.amber : C.red }}>
+                                  {fmtP(x.pct)}
+                                </td>
+                              </tr>
+                            ))}
+                            {skus.length === 0 && (
+                              <tr><td colSpan={5} style={{ ...s.td, color: C.textMuted, borderBottom: "none" }}>
+                                Sin SKU planificados por el sistema en esta línea.
+                              </td></tr>
+                            )}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>
@@ -293,8 +329,9 @@ export default function ConciliacionOF() {
               })}
             </div>
             <div style={{ fontSize: 11, color: C.textMuted, marginTop: 8 }}>
-              La línea se infiere del SKU (SAP no la registra: 98,9% "Sin Asignar"). 13 SKU corren en
-              &gt;1 línea; su asignación es aproximada. La última semana del gráfico está en curso.
+              Cajas: plan del sistema (cantidad_real_cj) vs OF en SAP (cant_planificada), match cuando el
+              lanzamiento del sistema cae dentro del tramo [ini, fin] de la OF. Adopción topeada al 100% por SKU.
+              La línea se infiere del SKU (SAP no la registra). La última semana está en curso.
             </div>
           </>
         )}
