@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   ResponsiveContainer, LineChart, Line, Brush,
+  BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip,
 } from "recharts";
 
@@ -27,9 +28,9 @@ const fmtN  = (n) => Math.round(n ?? 0).toLocaleString("es-CL");
 const fmtP  = (n) => (n == null ? "—" : `${n.toFixed(1)}%`);
 const fmtSem = (s) => { const p = String(s).split("-"); return p.length === 3 ? `${p[2]}-${p[1]}` : s; };
 
-const EST_LABEL = { completa: "Completa", corta: "Corta", sobre: "Sobre", pendiente: "Pendiente" };
-const estColor = (e) => e === "completa" ? C.teal : e === "corta" ? C.red : e === "sobre" ? C.amber : C.gray;
-const estBg    = (e) => e === "completa" ? C.tealLt : e === "corta" ? C.redLt : e === "sobre" ? C.amberLt : C.grayLt;
+// Color por umbral de cumplimiento (rojo <90, ámbar 90-99, verde >=100)
+const cumplColor = (p) => p == null ? C.textMuted : p < 90 ? C.red : p < 100 ? C.amber : C.teal;
+const cumplBg    = (p) => p == null ? C.grayLt : p < 90 ? C.redLt : p < 100 ? C.amberLt : C.tealLt;
 
 function KPI({ label, value, color, sub }) {
   return (
@@ -52,11 +53,10 @@ export default function ConciliacionOF() {
   const [skuFiltro, setSkuFiltro] = useState("");
 
   const [adopcion, setAdopcion] = useState(null);
-  const [soloPt, setSoloPt] = useState(false);
-  const [cumpl, setCumpl] = useState(null);
-  const [tendencia, setTendencia] = useState([]);
-  const [filtroEstado, setFiltroEstado] = useState("todo");
-  const [expandido, setExpandido] = useState({});
+  const [cumplSku, setCumplSku] = useState(null);   // {periodo, buckets:[...]}
+  const [cumplEvol, setCumplEvol] = useState([]);   // barras: cumplimiento % por semana
+  const [semanaSel, setSemanaSel] = useState(null); // bucket (semana) seleccionado
+  const [lineaAbiertaC, setLineaAbiertaC] = useState({}); // colapsables en cumplimiento
   const [lineaAbierta, setLineaAbierta] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -86,25 +86,24 @@ export default function ConciliacionOF() {
   useEffect(() => {
     if (vista !== "cumplimiento") return;
     setLoading(true); setError(null);
-    const qs = new URLSearchParams({ solo_pt: soloPt ? "true" : "false" });
-    fetch(`${API}/of/cumplimiento?${qs}`).then((r) => r.json()).then((d) => {
-      setCumpl(d); setLoading(false);
+    const qs = new URLSearchParams();
+    if (desde) qs.set("desde", desde);
+    if (hasta) qs.set("hasta", hasta);
+    if (linea) qs.set("linea", linea);
+    if (categoria) qs.set("categoria", categoria);
+    if (skuFiltro) qs.set("sku", skuFiltro);
+    fetch(`${API}/of/cumplimiento_sku?periodo=semana&${qs}`).then((r) => r.json()).then((d) => {
+      setCumplSku(d);
+      // seleccionar la última semana por defecto
+      const bs = d.buckets || [];
+      setSemanaSel(bs.length ? bs[bs.length - 1].bucket : null);
+      setLoading(false);
     }).catch((e) => { setError(String(e)); setLoading(false); });
-    fetch(`${API}/of/tendencia?${qs}`).then((r) => r.json()).then((d) => {
-      setTendencia(d.serie || []);
-    }).catch(() => setTendencia([]));
-  }, [vista, soloPt]);
+    fetch(`${API}/of/cumplimiento_evolutivo?${qs}`).then((r) => r.json()).then((d) => {
+      setCumplEvol(d.serie || []);
+    }).catch(() => setCumplEvol([]));
+  }, [vista, desde, hasta, linea, categoria, skuFiltro]);
 
-  const toggleOF = async (orden) => {
-    if (expandido[orden]) {
-      setExpandido((e) => { const n = { ...e }; delete n[orden]; return n; });
-      return;
-    }
-    try {
-      const d = await fetch(`${API}/of/recepcion/${orden}`).then((r) => r.json());
-      setExpandido((e) => ({ ...e, [orden]: d.serie || [] }));
-    } catch { setExpandido((e) => ({ ...e, [orden]: [] })); }
-  };
 
   const serie = adopcion?.serie || [];
   const ultConsolidada = useMemo(() => {
@@ -122,21 +121,26 @@ export default function ConciliacionOF() {
     setBrush({ start: 0, end: Math.max(0, serie.length - 1) });
   }, [serie.length]);
 
-  // Resumen del tramo seleccionado (ponderado por plan; semanas plan=0 no pesan)
+  // Resumen del tramo seleccionado. OJO: el % se calcula topeando POR SKU y después
+  // sumando (Σ min(sap,plan)_sku / Σ plan_sku), NO min de las sumas — si no, el
+  // exceso de un SKU tapa el déficit de otro y da 100% falso. Sale de skuTramo, que
+  // ya trae min(sap,plan) por SKU. Las cajas del recuadro sí son las brutas del tramo.
   const resumenTramo = useMemo(() => {
     const a = Math.min(brush.start, brush.end);
     const b = Math.max(brush.start, brush.end);
     const sel = serie.slice(a, b + 1);
     if (sel.length === 0) return null;
-    const plan = sel.reduce((s, r) => s + (r.plan_cj || 0), 0);
-    const sap = sel.reduce((s, r) => s + (r.sap_cj || 0), 0);
-    const pct = plan > 0 ? Math.round(1000 * Math.min(sap, plan) / plan) / 10 : null;
+    const planBruto = sel.reduce((s, r) => s + (r.plan_cj || 0), 0);
+    const sapBruto = sel.reduce((s, r) => s + (r.sap_cj || 0), 0);
     return {
       desde: sel[0].semana, hasta: sel[sel.length - 1].semana,
-      semanas: sel.length, plan, sap, pct,
+      semanas: sel.length, plan: planBruto, sap: sapBruto,
       unaSemana: sel.length === 1,
     };
   }, [serie, brush]);
+
+  // Adopción del tramo: topeada por SKU (desde skuTramo) y ponderada por plan.
+  // Se define más abajo porque depende de skuTramo; se calcula en adopcionTramoPct.
 
   // Semanas (isoformat) cubiertas por el tramo del brush → para filtrar el detalle
   const semanasTramo = useMemo(() => {
@@ -182,18 +186,39 @@ export default function ConciliacionOF() {
     return m;
   }, [skuTramo]);
 
-  const resumen = cumpl?.resumen || null;
-  const filasC = cumpl?.filas || [];
-  const totalC = resumen ? Object.values(resumen).reduce((a, b) => a + b, 0) : 0;
-  const cerradas = resumen ? totalC - (resumen.pendiente || 0) : 0;
-  const fillRate = cerradas ? 100 * (resumen.completa || 0) / cerradas : null;
-  const filasCF = useMemo(() => {
-    let f = filasC;
-    if (filtroEstado !== "todo") f = f.filter((r) => r.estado === filtroEstado);
-    if (skuFiltro) f = f.filter((r) => String(r.sku).includes(skuFiltro));
-    return f;
-  }, [filasC, filtroEstado, skuFiltro]);
-  const chartTend = useMemo(() => (tendencia || []).map((r) => ({ ...r, name: r.mes })), [tendencia]);
+  // Adopción del tramo, topeada por SKU y ponderada por plan (Σ sap_topeado / Σ plan).
+  // skuTramo.sap_cj ya es min(sap,plan) por SKU, así que sumarlo da el numerador correcto.
+  const adopcionTramoPct = useMemo(() => {
+    const plan = skuTramo.reduce((s, x) => s + (x.plan_cj || 0), 0);
+    const sap = skuTramo.reduce((s, x) => s + (x.sap_cj || 0), 0);
+    return plan > 0 ? Math.round(1000 * sap / plan) / 10 : null;
+  }, [skuTramo]);
+
+  // Datos del gráfico de barras (cumplimiento % por semana)
+  const chartBarras = useMemo(
+    () => (cumplEvol || []).map((r) => ({ ...r, name: fmtSem(r.semana) })), [cumplEvol]);
+
+  // Bucket (semana) seleccionado en las barras
+  const bucketSel = useMemo(
+    () => (cumplSku?.buckets || []).find((b) => b.bucket === semanaSel) || null,
+    [cumplSku, semanaSel]);
+
+  // Filas de la semana seleccionada, agrupadas por línea (colapsable)
+  const cumplPorLinea = useMemo(() => {
+    if (!bucketSel) return [];
+    const grupos = {};
+    bucketSel.filas.forEach((f) => {
+      const ln = f.linea || "(sin línea)";
+      const g = grupos[ln] || (grupos[ln] = { linea: ln, filas: [], solicitado: 0, producido: 0 });
+      g.filas.push(f);
+      g.solicitado += f.solicitado || 0;
+      g.producido += f.producido || 0;
+    });
+    return Object.values(grupos).map((g) => ({
+      ...g,
+      pct: g.solicitado > 0 ? Math.round(1000 * g.producido / g.solicitado) / 10 : null,
+    })).sort((a, b) => b.solicitado - a.solicitado);
+  }, [bucketSel]);
 
   const s = {
     card:  { background: "#fff", border: `0.5px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 14 },
@@ -260,21 +285,28 @@ export default function ConciliacionOF() {
           {vista === "cumplimiento" && (
             <>
               <div>
-                <div style={s.lbl}>Estado</div>
-                <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} style={s.inp}>
-                  <option value="todo">Todos</option>
-                  <option value="completa">Completa</option>
-                  <option value="corta">Corta</option>
-                  <option value="sobre">Sobre</option>
-                  <option value="pendiente">Pendiente</option>
+                <div style={s.lbl}>Desde</div>
+                <input type="date" value={desde} min={filtros?.min_fecha} max={hasta}
+                  onChange={(e) => setDesde(e.target.value)} style={s.inp} />
+              </div>
+              <div>
+                <div style={s.lbl}>Hasta</div>
+                <input type="date" value={hasta} min={desde} max={filtros?.max_fecha}
+                  onChange={(e) => setHasta(e.target.value)} style={s.inp} />
+              </div>
+              <div>
+                <div style={s.lbl}>Línea</div>
+                <select value={linea} onChange={(e) => setLinea(e.target.value)} style={s.inp}>
+                  <option value="">Todas</option>
+                  {(filtros?.lineas || []).map((l) => <option key={l} value={l}>{l}</option>)}
                 </select>
               </div>
               <div>
-                <div style={s.lbl}>Alcance</div>
-                <label style={{ fontSize: 13, color: C.text, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                  <input type="checkbox" checked={soloPt} onChange={(e) => setSoloPt(e.target.checked)} />
-                  Excluir granel
-                </label>
+                <div style={s.lbl}>Categoría</div>
+                <select value={categoria} onChange={(e) => setCategoria(e.target.value)} style={s.inp}>
+                  <option value="">Todas</option>
+                  {(filtros?.categorias || []).map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
               </div>
             </>
           )}
@@ -298,7 +330,7 @@ export default function ConciliacionOF() {
                    value={fmtP(ultParcial?.pct)} color={C.gray}
                    sub={ultParcial ? `sem ${fmtSem(ultParcial.semana)} · aún abierta` : ""} />
               <KPI label="Adopción período seleccionado"
-                   value={fmtP(resumenTramo?.pct)} color={C.purple}
+                   value={fmtP(adopcionTramoPct)} color={C.purple}
                    sub={resumenTramo ? (resumenTramo.unaSemana
                         ? `sem ${fmtSem(resumenTramo.desde)}`
                         : `${fmtSem(resumenTramo.desde)}→${fmtSem(resumenTramo.hasta)} · ${resumenTramo.semanas} sem`) : "arrastrá el gráfico"} />
@@ -318,7 +350,7 @@ export default function ConciliacionOF() {
                       : `Tramo ${fmtSem(resumenTramo.desde)} → ${fmtSem(resumenTramo.hasta)} (${resumenTramo.semanas} sem)`}
                   </div>
                   <div>
-                    adopción <strong>{fmtP(resumenTramo.pct)}</strong> · plan {fmtN(resumenTramo.plan)} cj · SAP {fmtN(resumenTramo.sap)} cj
+                    adopción <strong>{fmtP(adopcionTramoPct)}</strong> · plan {fmtN(resumenTramo.plan)} cj · SAP {fmtN(resumenTramo.sap)} cj
                   </div>
                 </div>
               )}
@@ -420,104 +452,108 @@ export default function ConciliacionOF() {
           </>
         )}
 
-        {vista === "cumplimiento" && cumpl && (
+        {vista === "cumplimiento" && (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10, marginBottom: 16 }}>
-              <KPI label="Fill-rate" value={fmtP(fillRate)} color={C.teal} sub="completas / OF cerradas" />
-              <KPI label="Completas" value={fmtN(resumen?.completa)} color={C.teal} />
-              <KPI label="Cortas" value={fmtN(resumen?.corta)} color={C.red} sub="produjo de menos" />
-              <KPI label="Sobre" value={fmtN(resumen?.sobre)} color={C.amber} sub="produjo de más" />
-              <KPI label="Pendientes" value={fmtN(resumen?.pendiente)} color={C.gray} sub="sin producir" />
-            </div>
-
+            {/* Gráfico de barras: cumplimiento % por semana; clic selecciona la semana */}
             <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 6 }}>
-              Fill-rate mensual (% de OF completas sobre las cerradas del mes)
+              Cumplimiento semanal (Producido / Solicitado, sin topear). Clic en una barra para ver el detalle.
             </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={chartTend} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={chartBarras} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: C.textMuted }} tickFormatter={(v) => `${v}%`} />
-                <Tooltip formatter={(v, k) => k === "fill_rate" ? [`${v}%`, "Fill-rate"] : [fmtN(v), k]}
-                  labelFormatter={(l) => `Mes ${l}`}
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 10, fill: C.textMuted }} tickFormatter={(v) => `${v}%`} />
+                <Tooltip
+                  formatter={(v, k, item) => {
+                    const p = item?.payload || {};
+                    return [`${v}% · sol ${fmtN(p.solicitado)} · prod ${fmtN(p.producido)} cj`, "Cumplimiento"];
+                  }}
+                  labelFormatter={(l) => `Semana ${l}`}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: `0.5px solid ${C.border}` }} />
-                <Line type="monotone" dataKey="fill_rate" stroke={C.teal} strokeWidth={2}
-                      dot={{ r: 3, fill: C.teal }} connectNulls />
-              </LineChart>
+                <Bar dataKey="pct" radius={[3, 3, 0, 0]} cursor="pointer"
+                     onClick={(d) => d && d.semana && setSemanaSel(d.semana)}>
+                  {chartBarras.map((r) => (
+                    <Cell key={r.semana} fill={cumplColor(r.pct)}
+                          fillOpacity={r.semana === semanaSel ? 1 : 0.55}
+                          stroke={r.semana === semanaSel ? C.text : "none"} strokeWidth={1} />
+                  ))}
+                </Bar>
+              </BarChart>
             </ResponsiveContainer>
 
-            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: "18px 0 10px" }}>
-              Órdenes · {fmtN(filasCF.length)} {filtroEstado !== "todo" ? EST_LABEL[filtroEstado].toLowerCase() : ""}
-            </div>
-            <div style={{ overflowX: "auto", border: `0.5px solid ${C.border}`, borderRadius: 8 }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    {["", "OF", "SKU", "Descripción", "Estado", "Planif.", "Produc.", "Cumpl.", "Inicio", "Recibos"].map((h, i) => (
-                      <th key={h || i} style={{ ...s.th, textAlign: (i >= 5 && i <= 7) ? "right" : "left" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filasCF.slice(0, 500).map((r, gi) => {
-                    const abierto = expandido[r.orden_produccion] !== undefined;
-                    const ser = expandido[r.orden_produccion] || [];
-                    const puede = r.n_recibos > 0;
+            {/* Detalle de la semana seleccionada, por línea colapsable */}
+            {bucketSel ? (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                              margin: "18px 0 10px" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
+                    Semana {fmtSem(bucketSel.bucket)} — detalle por línea
+                  </div>
+                  <div style={{ fontSize: 13, color: cumplColor(bucketSel.total.pct), fontWeight: 700 }}>
+                    Total {fmtP(bucketSel.total.pct)} · {fmtN(bucketSel.total.producido)}/{fmtN(bucketSel.total.solicitado)} cj
+                  </div>
+                </div>
+                <div style={{ border: `0.5px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+                  {cumplPorLinea.map((L, i) => {
+                    const abierto = !!lineaAbiertaC[L.linea];
                     return (
-                      <React.Fragment key={r.orden_produccion}>
-                        <tr onClick={() => puede && toggleOF(r.orden_produccion)}
-                            style={{ background: gi % 2 === 0 ? "#fff" : C.grayLt, cursor: puede ? "pointer" : "default" }}>
-                          <td style={{ ...s.td, textAlign: "center", color: C.textMuted, width: 26 }}>
-                            {puede ? (abierto ? "▼" : "▶") : ""}
-                          </td>
-                          <td style={{ ...s.td, fontWeight: 700, color: C.tealMid }}>{r.orden_produccion}</td>
-                          <td style={{ ...s.td, fontWeight: 600, color: C.teal }}>
-                            {r.sku}{r.es_granel && <span title="Granel/semi" style={{ color: C.purple }}> ●</span>}
-                          </td>
-                          <td style={{ ...s.td, color: C.textMuted }}>{r.descripcion}</td>
-                          <td style={s.td}>
-                            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20,
-                              color: estColor(r.estado), background: estBg(r.estado) }}>
-                              {EST_LABEL[r.estado] || r.estado}
+                      <div key={L.linea} style={{ borderBottom: i < cumplPorLinea.length - 1 ? `0.5px solid ${C.border}` : "none" }}>
+                        <div onClick={() => setLineaAbiertaC((e) => ({ ...e, [L.linea]: !e[L.linea] }))}
+                             style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                                      padding: "10px 14px", cursor: "pointer", background: i % 2 ? C.grayLt : "#fff" }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+                            <span style={{ color: C.textMuted, marginRight: 8 }}>{abierto ? "▼" : "▶"}</span>
+                            {L.linea} <span style={{ color: C.textMuted, fontWeight: 400 }}>· {L.filas.length} SKU</span>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                            <span style={{ fontSize: 12, color: C.textMuted }}>
+                              {fmtN(L.producido)}/{fmtN(L.solicitado)} cj
                             </span>
-                          </td>
-                          <td style={{ ...s.td, textAlign: "right" }}>{fmtN(r.planificada)}</td>
-                          <td style={{ ...s.td, textAlign: "right" }}>{fmtN(r.producida)}</td>
-                          <td style={{ ...s.td, textAlign: "right", fontWeight: 700, color: estColor(r.estado) }}>
-                            {fmtP(r.ratio * 100)}
-                          </td>
-                          <td style={{ ...s.td, color: C.textMuted }}>{r.fecha_ini_planif || "—"}</td>
-                          <td style={{ ...s.td, textAlign: "right", color: C.textMuted }}>{r.n_recibos}</td>
-                        </tr>
+                            <span style={{ fontSize: 12, fontWeight: 700, padding: "2px 10px", borderRadius: 20,
+                              minWidth: 54, textAlign: "center",
+                              color: cumplColor(L.pct), background: cumplBg(L.pct) }}>
+                              {fmtP(L.pct)}
+                            </span>
+                          </div>
+                        </div>
                         {abierto && (
-                          <tr style={{ background: C.tealLt }}>
-                            <td style={s.td}></td>
-                            <td style={s.td} colSpan={9}>
-                              {ser.length === 0 ? (
-                                <span style={{ fontSize: 12, color: C.textMuted }}>Sin recibos.</span>
-                              ) : (
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                                  {ser.map((d) => (
-                                    <span key={d.fecha} style={{ fontSize: 12, padding: "3px 10px", borderRadius: 6,
-                                      background: "#fff", border: `0.5px solid ${C.border}`, color: C.text }}>
-                                      {d.fecha}: <strong>{fmtN(d.producido)}</strong>
-                                      {d.n_recibos > 1 && <span style={{ color: C.textMuted }}> ({d.n_recibos})</span>}
-                                    </span>
+                          <div style={{ padding: "4px 14px 12px 34px", background: C.grayLt }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                              <thead>
+                                <tr>
+                                  {["SKU", "Descripción", "Solicitado", "Producido", "Cumpl."].map((h, hi) => (
+                                    <th key={h} style={{ ...s.th, background: "transparent",
+                                      textAlign: hi >= 2 ? "right" : "left" }}>{h}</th>
                                   ))}
-                                </div>
-                              )}
-                            </td>
-                          </tr>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {L.filas.sort((a, b) => b.solicitado - a.solicitado).map((f) => (
+                                  <tr key={f.sku}>
+                                    <td style={{ ...s.td, fontWeight: 600, color: C.teal, borderBottom: "none" }}>{f.sku}</td>
+                                    <td style={{ ...s.td, color: C.textMuted, borderBottom: "none" }}>{f.descripcion}</td>
+                                    <td style={{ ...s.td, textAlign: "right", borderBottom: "none" }}>{fmtN(f.solicitado)}</td>
+                                    <td style={{ ...s.td, textAlign: "right", borderBottom: "none" }}>{fmtN(f.producido)}</td>
+                                    <td style={{ ...s.td, textAlign: "right", fontWeight: 700, borderBottom: "none",
+                                      color: cumplColor(f.pct) }}>{fmtP(f.pct)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         )}
-                      </React.Fragment>
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
-            {filasCF.length > 500 && (
-              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 8 }}>
-                Mostrando 500 de {fmtN(filasCF.length)}. Usá los filtros para acotar.
+                </div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginTop: 8 }}>
+                  Cumplimiento = Producido (TR) / Solicitado (OF), sin topear: &gt;100% indica sobreproducción.
+                  Umbral: rojo &lt;90%, ámbar 90-99%, verde ≥100%. Semana por centro del tramo [ini, fin].
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 13, color: C.textMuted, padding: "20px 0" }}>
+                Seleccioná una semana en el gráfico para ver el detalle.
               </div>
             )}
           </>
