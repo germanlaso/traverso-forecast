@@ -1502,17 +1502,44 @@ def get_of_sap_adopcion(desde: str | None = None, hasta: str | None = None,
 
     df = _pd.DataFrame(filas, columns=["sem", "sku", "plan", "mat"])
 
+    # Cajas SAP producidas por semana (centro del tramo), universo activos PT.
+    # Sirve para las semanas SIN plan del sistema: se muestran como 0% con el SAP de contexto.
+    def _centro_sem(o):
+        ini = o["ini"]; fin = o["fin"] if _pd.notna(o["fin"]) else o["ini"]
+        if _pd.isna(ini):
+            return None
+        centro = ini + (fin - ini) / 2
+        return centro.to_period("W").start_time.date().isoformat()
+    sap_por_sem = {}
+    for _, o in of.iterrows():
+        if not _pasa_filtro(o["sku"]):
+            continue
+        w = _centro_sem(o)
+        if w:
+            sap_por_sem[w] = sap_por_sem.get(w, 0.0) + float(o["cj_sap"])
+
     def _pct(mat, plan):
         return round(100 * mat / plan, 1) if plan > 0 else None
 
     # serie semanal (ponderada por volumen)
+    # - semana CON plan: pct = mat/plan, pesa con plan_cj real
+    # - semana SIN plan pero con producción SAP: plan_cj=0, sap_cj=cajas SAP, pct=0
+    #   (aparece en el gráfico en 0%, pesa 0 en cualquier promedio ponderado)
     serie_out = []
+    semanas_con_plan = set()
     if not df.empty:
         for sem, g in df.groupby("sem"):
             plan = g["plan"].sum(); mat = g["mat"].sum()
+            semanas_con_plan.add(sem)
             serie_out.append({"semana": sem, "plan_cj": round(plan, 0),
-                              "sap_cj": round(mat, 0), "pct": _pct(mat, plan)})
-        serie_out.sort(key=lambda r: r["semana"])
+                              "sap_cj": round(mat, 0),
+                              "pct": _pct(mat, plan) if plan > 0 else 0.0})
+    # semanas con producción SAP y SIN plan del sistema -> 0%
+    for w, sap_cj in sap_por_sem.items():
+        if w not in semanas_con_plan and sap_cj > 0:
+            serie_out.append({"semana": w, "plan_cj": 0.0,
+                              "sap_cj": round(sap_cj, 0), "pct": 0.0})
+    serie_out.sort(key=lambda r: r["semana"])
 
     # por linea (agregado del periodo)
     linea_out = []
@@ -1536,10 +1563,27 @@ def get_of_sap_adopcion(desde: str | None = None, hasta: str | None = None,
                             "pct": _pct(mat, plan)})
         sku_out.sort(key=lambda r: -r["plan_cj"])
 
+    # por sku-semana (detalle desglosado): el frontend lo reagrega al tramo que se
+    # seleccione con el brush del gráfico. Una fila por (semana, sku) con plan y mat
+    # ya topeado. El browser suma sobre el tramo -> tabla y KPI del período reactivos
+    # sin ir al backend en cada arrastre.
+    sku_sem_out = []
+    if not df.empty:
+        for (sem, sk), g in df.groupby(["sem", "sku"]):
+            pr = params.get(sk, {})
+            sku_sem_out.append({
+                "semana": sem, "sku": sk,
+                "descripcion": pr.get("descripcion", ""),
+                "linea": pr.get("linea_preferida") or "(sin línea)",
+                "plan_cj": round(g["plan"].sum(), 0),
+                "sap_cj": round(g["mat"].sum(), 0),
+            })
+
     return {
         "serie": serie_out,
         "por_linea": linea_out,
         "por_sku": sku_out,
+        "por_sku_semana": sku_sem_out,
         "fuera_sistema": {"of": int((fuera or {}).get("of") or 0),
                           "sku": int((fuera or {}).get("sku") or 0)},
     }

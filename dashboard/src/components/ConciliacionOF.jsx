@@ -115,13 +115,6 @@ export default function ConciliacionOF() {
   const chartAdop = useMemo(
     () => serie.map((r, i) => ({ ...r, name: fmtSem(r.semana), parcial: i === serie.length - 1 })),
     [serie]);
-  // SKU agrupados por línea, para el detalle auditable dentro de cada encabezado
-  const skusPorLinea = useMemo(() => {
-    const m = {};
-    (adopcion?.por_sku || []).forEach((x) => { (m[x.linea] = m[x.linea] || []).push(x); });
-    return m;
-  }, [adopcion]);
-
   // Rango seleccionado en el brush del gráfico (índices sobre chartAdop)
   const [brush, setBrush] = useState({ start: 0, end: 0 });
   useEffect(() => {
@@ -137,7 +130,6 @@ export default function ConciliacionOF() {
     if (sel.length === 0) return null;
     const plan = sel.reduce((s, r) => s + (r.plan_cj || 0), 0);
     const sap = sel.reduce((s, r) => s + (r.sap_cj || 0), 0);
-    // adopción ponderada = SAP materializado / plan; si plan=0 en todo el tramo, null
     const pct = plan > 0 ? Math.round(1000 * Math.min(sap, plan) / plan) / 10 : null;
     return {
       desde: sel[0].semana, hasta: sel[sel.length - 1].semana,
@@ -145,6 +137,50 @@ export default function ConciliacionOF() {
       unaSemana: sel.length === 1,
     };
   }, [serie, brush]);
+
+  // Semanas (isoformat) cubiertas por el tramo del brush → para filtrar el detalle
+  const semanasTramo = useMemo(() => {
+    const a = Math.min(brush.start, brush.end);
+    const b = Math.max(brush.start, brush.end);
+    return new Set(serie.slice(a, b + 1).map((r) => r.semana));
+  }, [serie, brush]);
+
+  // Detalle por SKU reagregado al tramo seleccionado (desde por_sku_semana)
+  const skuTramo = useMemo(() => {
+    const det = adopcion?.por_sku_semana || [];
+    const acc = {};
+    det.forEach((r) => {
+      if (!semanasTramo.has(r.semana)) return;
+      const a = acc[r.sku] || (acc[r.sku] = {
+        sku: r.sku, descripcion: r.descripcion, linea: r.linea, plan_cj: 0, sap_cj: 0 });
+      a.plan_cj += r.plan_cj || 0;
+      a.sap_cj += r.sap_cj || 0;
+    });
+    return Object.values(acc).map((x) => ({
+      ...x,
+      pct: x.plan_cj > 0 ? Math.round(1000 * Math.min(x.sap_cj, x.plan_cj) / x.plan_cj) / 10 : null,
+    })).sort((p, q) => q.plan_cj - p.plan_cj);
+  }, [adopcion, semanasTramo]);
+
+  // Por línea reagregado al tramo (para los encabezados colapsables)
+  const lineaTramo = useMemo(() => {
+    const acc = {};
+    skuTramo.forEach((x) => {
+      const a = acc[x.linea] || (acc[x.linea] = { linea: x.linea, plan_cj: 0, sap_cj: 0 });
+      a.plan_cj += x.plan_cj; a.sap_cj += x.sap_cj;
+    });
+    return Object.values(acc).map((l) => ({
+      ...l,
+      pct: l.plan_cj > 0 ? Math.round(1000 * Math.min(l.sap_cj, l.plan_cj) / l.plan_cj) / 10 : null,
+    })).sort((p, q) => q.plan_cj - p.plan_cj);
+  }, [skuTramo]);
+
+  // SKU agrupados por línea, ya filtrados al tramo, para el detalle dentro de cada línea
+  const skusPorLineaTramo = useMemo(() => {
+    const m = {};
+    skuTramo.forEach((x) => { (m[x.linea] = m[x.linea] || []).push(x); });
+    return m;
+  }, [skuTramo]);
 
   const resumen = cumpl?.resumen || null;
   const filasC = cumpl?.filas || [];
@@ -261,9 +297,11 @@ export default function ConciliacionOF() {
               <KPI label="Semana en curso (parcial)"
                    value={fmtP(ultParcial?.pct)} color={C.gray}
                    sub={ultParcial ? `sem ${fmtSem(ultParcial.semana)} · aún abierta` : ""} />
-              <KPI label="OF fuera del sistema"
-                   value={fmtN(adopcion.fuera_sistema?.of)} color={C.purple}
-                   sub={`${fmtN(adopcion.fuera_sistema?.sku)} SKU desconocidos (granel/semi)`} />
+              <KPI label="Adopción período seleccionado"
+                   value={fmtP(resumenTramo?.pct)} color={C.purple}
+                   sub={resumenTramo ? (resumenTramo.unaSemana
+                        ? `sem ${fmtSem(resumenTramo.desde)}`
+                        : `${fmtSem(resumenTramo.desde)}→${fmtSem(resumenTramo.hasta)} · ${resumenTramo.semanas} sem`) : "arrastrá el gráfico"} />
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 6 }}>
@@ -308,13 +346,14 @@ export default function ConciliacionOF() {
             </ResponsiveContainer>
 
             <div style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: "18px 0 10px" }}>
-              Por línea (línea inferida del sistema) — clic para ver el detalle por SKU
+              Por línea {resumenTramo && !(brush.start === 0 && brush.end === serie.length - 1)
+                ? `· tramo ${fmtSem(resumenTramo.desde)}→${fmtSem(resumenTramo.hasta)}` : "· período completo"} — clic para el detalle por SKU
             </div>
             <div style={{ border: `0.5px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
-              {(adopcion.por_linea || []).map((L, i) => {
+              {lineaTramo.map((L, i) => {
                 const abierto = !!lineaAbierta[L.linea];
-                const total = (adopcion.por_linea || []).length;
-                const skus = skusPorLinea[L.linea] || [];
+                const total = lineaTramo.length;
+                const skus = skusPorLineaTramo[L.linea] || [];
                 return (
                   <div key={L.linea} style={{ borderBottom: i < total - 1 ? `0.5px solid ${C.border}` : "none" }}>
                     <div onClick={() => setLineaAbierta((e) => ({ ...e, [L.linea]: !e[L.linea] }))}
