@@ -1587,3 +1587,150 @@ def get_of_sap_adopcion(desde: str | None = None, hasta: str | None = None,
         "fuera_sistema": {"of": int((fuera or {}).get("of") or 0),
                           "sku": int((fuera or {}).get("sku") or 0)},
     }
+
+
+def get_of_cumplimiento_sku(periodo: str = "semana",
+                            desde: str | None = None, hasta: str | None = None,
+                            linea: str | None = None, categoria: str | None = None,
+                            sku: str | None = None) -> dict:
+    """Cumplimiento de OF por SKU, estilo reporte de Producción (Solicitado vs
+    Producido, %). SIN topear (puede pasar 100% = sobreproducción, ver DISENO §12).
+
+    periodo='semana': bucket por semana del CENTRO del tramo [ini,fin].
+    periodo='dia'   : bucket por fecha ÚNICA (si fecha_ini=fecha_fin, dato nuevo de
+                      Producción) o por fecha_tr (si es tramo, dato viejo). Las OF con
+                      tramo y sin TR (pendientes) no entran al diario.
+
+    Solicitado = cajas planificadas (cant_planificada, MAX por OF — no se repite).
+    Producido  = cajas recibidas (cant_producida, SUM de los recibos de la OF).
+    Cumplimiento = Producido / Solicitado (crudo).
+
+    Devuelve {periodo, buckets:[{bucket, filas:[{sku,descripcion,solicitado,
+    producido,pct}], total:{solicitado,producido,pct}}]}.
+    """
+    cond = ["es_granel = FALSE"]
+    p: dict = {}
+    if sku:
+        cond.append("sku LIKE :sku"); p["sku"] = f"%{sku}%"
+    cond_sql = " AND ".join(cond)
+
+    # expresión de bucket según periodo
+    if periodo == "dia":
+        # fecha única si ini=fin, si no la fecha del TR (producción efectiva)
+        bucket_expr = """
+            CASE WHEN fecha_ini_planif = fecha_fin_planif THEN fecha_ini_planif
+                 ELSE fecha_tr END
+        """
+    else:
+        # centro del tramo [ini,fin] -> semana ISO (lunes)
+        bucket_expr = """
+            DATE_TRUNC('week',
+                (fecha_ini_planif
+                 + ((COALESCE(fecha_fin_planif, fecha_ini_planif) - fecha_ini_planif) / 2))
+            )::date
+        """
+
+    with get_session() as session:
+        # primero agregamos a nivel OF (planificada MAX, producida SUM), con su bucket,
+        # después sumamos por (bucket, sku)
+        rows = session.execute(text(f"""
+            WITH por_of AS (
+                SELECT orden_produccion, sku,
+                       {bucket_expr} AS bucket,
+                       MAX(cant_planificada) AS solicitado,
+                       SUM(cant_producida)   AS producido
+                FROM mrp_of_sap
+                WHERE {cond_sql}
+                GROUP BY orden_produccion, sku, fecha_ini_planif, fecha_fin_planif, fecha_tr
+            )
+            SELECT bucket, sku,
+                   SUM(solicitado) AS solicitado,
+                   SUM(producido)  AS producido
+            FROM por_of
+            WHERE bucket IS NOT NULL
+            GROUP BY bucket, sku
+            ORDER BY bucket, SUM(solicitado) DESC
+        """), p).mappings().all()
+
+        # descripción y línea/categoría por SKU (para etiquetas y filtros)
+        meta = {r["sku"]: r for r in session.execute(text("""
+            SELECT sku, descripcion, linea_preferida, categoria FROM mrp_sku_params
+        """)).mappings().all()}
+
+    # filtros de linea/categoria (sobre params) + fecha (sobre bucket) en python
+    def _pasa(sk, bucket):
+        m = meta.get(sk, {})
+        if linea and (m.get("linea_preferida") or "") != linea:
+            return False
+        if categoria and (m.get("categoria") or "") != categoria:
+            return False
+        if desde and str(bucket) < desde:
+            return False
+        if hasta and str(bucket) > hasta:
+            return False
+        return True
+
+    # armar buckets
+    buckets = {}
+    for r in rows:
+        b = r["bucket"].isoformat()
+        sk = r["sku"]
+        if not _pasa(sk, r["bucket"]):
+            continue
+        sol = float(r["solicitado"] or 0)
+        pro = float(r["producido"] or 0)
+        m = meta.get(sk, {})
+        buckets.setdefault(b, []).append({
+            "sku": sk, "descripcion": m.get("descripcion", ""),
+            "linea": m.get("linea_preferida") or "(sin línea)",
+            "solicitado": round(sol, 0), "producido": round(pro, 0),
+            "pct": round(100 * pro / sol, 1) if sol > 0 else None,
+        })
+
+    out = []
+    for b in sorted(buckets.keys()):
+        filas = buckets[b]
+        tsol = sum(f["solicitado"] for f in filas)
+        tpro = sum(f["producido"] for f in filas)
+        out.append({
+            "bucket": b, "filas": filas,
+            "total": {"solicitado": round(tsol, 0), "producido": round(tpro, 0),
+                      "pct": round(100 * tpro / tsol, 1) if tsol > 0 else None},
+        })
+    return {"periodo": periodo, "buckets": out}
+
+
+def get_of_cumplimiento_evolutivo(linea: str | None = None,
+                                  categoria: str | None = None) -> list[dict]:
+    """Cumplimiento global por semana (centro del tramo) para el gráfico evolutivo.
+    Producido/Solicitado agregado de todos los SKU de PT. Sin topear."""
+    cond = ["es_granel = FALSE"]
+    with get_session() as session:
+        rows = session.execute(text(f"""
+            WITH por_of AS (
+                SELECT orden_produccion, sku,
+                       DATE_TRUNC('week',
+                         (fecha_ini_planif
+                          + ((COALESCE(fecha_fin_planif, fecha_ini_planif) - fecha_ini_planif) / 2))
+                       )::date AS sem,
+                       MAX(cant_planificada) AS solicitado,
+                       SUM(cant_producida)   AS producido
+                FROM mrp_of_sap
+                WHERE {" AND ".join(cond)}
+                GROUP BY orden_produccion, sku, fecha_ini_planif, fecha_fin_planif
+            )
+            SELECT po.sem, SUM(po.solicitado) AS solicitado, SUM(po.producido) AS producido
+            FROM por_of po
+            JOIN mrp_sku_params sp ON sp.sku = po.sku
+            WHERE po.sem IS NOT NULL
+              AND (:linea IS NULL OR sp.linea_preferida = :linea)
+              AND (:categoria IS NULL OR sp.categoria = :categoria)
+            GROUP BY po.sem ORDER BY po.sem
+        """), {"linea": linea, "categoria": categoria}).mappings().all()
+    out = []
+    for r in rows:
+        sol = float(r["solicitado"] or 0); pro = float(r["producido"] or 0)
+        out.append({"semana": r["sem"].isoformat(),
+                    "solicitado": round(sol, 0), "producido": round(pro, 0),
+                    "pct": round(100 * pro / sol, 1) if sol > 0 else None})
+    return out

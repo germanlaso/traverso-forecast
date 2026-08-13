@@ -1989,6 +1989,31 @@ def get_of_filtros():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/of/cumplimiento_sku", tags=["Conciliacion OF"])
+def get_of_cumplimiento_sku_ep(periodo: str = "semana",
+                               desde: str | None = None, hasta: str | None = None,
+                               linea: str | None = None, categoria: str | None = None,
+                               sku: str | None = None):
+    """Cumplimiento por SKU (Solicitado vs Producido, sin topear), estilo reporte de
+    Producción. periodo='dia' (fecha única o TR) o 'semana' (centro del tramo)."""
+    try:
+        from db_mrp import get_of_cumplimiento_sku
+        return get_of_cumplimiento_sku(periodo=periodo, desde=desde, hasta=hasta,
+                                       linea=linea, categoria=categoria, sku=sku)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/of/cumplimiento_evolutivo", tags=["Conciliacion OF"])
+def get_of_cumplimiento_evolutivo_ep(linea: str | None = None, categoria: str | None = None):
+    """Cumplimiento global por semana (centro del tramo) para el gráfico evolutivo."""
+    try:
+        from db_mrp import get_of_cumplimiento_evolutivo
+        return {"serie": get_of_cumplimiento_evolutivo(linea=linea, categoria=categoria)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Diagnóstico de parámetros MRP (línea / SKU) — read-only (Fase 1)
 # ─────────────────────────────────────────────────────────────────────────────
