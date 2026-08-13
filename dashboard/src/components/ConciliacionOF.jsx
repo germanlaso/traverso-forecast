@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import {
-  ResponsiveContainer, LineChart, Line,
+  ResponsiveContainer, LineChart, Line, Brush,
   XAxis, YAxis, CartesianGrid, Tooltip,
 } from "recharts";
 
@@ -121,6 +121,30 @@ export default function ConciliacionOF() {
     (adopcion?.por_sku || []).forEach((x) => { (m[x.linea] = m[x.linea] || []).push(x); });
     return m;
   }, [adopcion]);
+
+  // Rango seleccionado en el brush del gráfico (índices sobre chartAdop)
+  const [brush, setBrush] = useState({ start: 0, end: 0 });
+  useEffect(() => {
+    // al cambiar la serie, el brush cubre todo por defecto
+    setBrush({ start: 0, end: Math.max(0, serie.length - 1) });
+  }, [serie.length]);
+
+  // Resumen del tramo seleccionado (ponderado por plan; semanas plan=0 no pesan)
+  const resumenTramo = useMemo(() => {
+    const a = Math.min(brush.start, brush.end);
+    const b = Math.max(brush.start, brush.end);
+    const sel = serie.slice(a, b + 1);
+    if (sel.length === 0) return null;
+    const plan = sel.reduce((s, r) => s + (r.plan_cj || 0), 0);
+    const sap = sel.reduce((s, r) => s + (r.sap_cj || 0), 0);
+    // adopción ponderada = SAP materializado / plan; si plan=0 en todo el tramo, null
+    const pct = plan > 0 ? Math.round(1000 * Math.min(sap, plan) / plan) / 10 : null;
+    return {
+      desde: sel[0].semana, hasta: sel[sel.length - 1].semana,
+      semanas: sel.length, plan, sap, pct,
+      unaSemana: sel.length === 1,
+    };
+  }, [serie, brush]);
 
   const resumen = cumpl?.resumen || null;
   const filasC = cumpl?.filas || [];
@@ -242,23 +266,44 @@ export default function ConciliacionOF() {
                    sub={`${fmtN(adopcion.fuera_sistema?.sku)} SKU desconocidos (granel/semi)`} />
             </div>
 
-            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 6 }}>
-              Adopción semanal: % de cajas planificadas por el sistema que se materializaron como OF en SAP
-              (topeado por SKU, ponderado por volumen)
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 6 }}>
+              <div style={{ fontSize: 12, color: C.textMuted, maxWidth: "60%" }}>
+                Adopción semanal: % de cajas planificadas por el sistema que se materializaron como OF en SAP
+                (topeado por SKU, ponderado por volumen). Arrastrá la barra inferior para seleccionar un tramo.
+              </div>
+              {resumenTramo && (
+                <div style={{ background: C.tealLt, border: `0.5px solid ${C.teal}`, borderRadius: 8,
+                              padding: "6px 12px", fontSize: 12, color: C.tealMid, textAlign: "right" }}>
+                  <div style={{ fontWeight: 700 }}>
+                    {resumenTramo.unaSemana
+                      ? `Semana ${fmtSem(resumenTramo.desde)}`
+                      : `Tramo ${fmtSem(resumenTramo.desde)} → ${fmtSem(resumenTramo.hasta)} (${resumenTramo.semanas} sem)`}
+                  </div>
+                  <div>
+                    adopción <strong>{fmtP(resumenTramo.pct)}</strong> · plan {fmtN(resumenTramo.plan)} cj · SAP {fmtN(resumenTramo.sap)} cj
+                  </div>
+                </div>
+              )}
             </div>
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveContainer width="100%" height={260}>
               <LineChart data={chartAdop} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} vertical={false} />
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }} interval="preserveStartEnd" />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: C.textMuted }} tickFormatter={(v) => `${v}%`} />
                 <Tooltip
-                  formatter={(v, k) => k === "pct" ? [`${v}%`, "Adopción"]
-                    : k === "plan_cj" ? [fmtN(v), "Plan (cj)"]
-                    : k === "sap_cj" ? [fmtN(v), "SAP (cj)"] : [fmtN(v), k]}
+                  formatter={(v, k, item) => {
+                    if (k !== "pct") return null;
+                    const p = item?.payload || {};
+                    return [`${v}% · plan ${fmtN(p.plan_cj)} cj · SAP ${fmtN(p.sap_cj)} cj`, "Adopción"];
+                  }}
                   labelFormatter={(l) => `Semana ${l}`}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: `0.5px solid ${C.border}` }} />
                 <Line type="monotone" dataKey="pct" stroke={C.teal} strokeWidth={2}
                       dot={{ r: 3, fill: C.teal }} connectNulls />
+                <Brush dataKey="name" height={22} stroke={C.teal} travellerWidth={8}
+                       tickFormatter={fmtSem}
+                       onChange={(r) => { if (r && r.startIndex != null)
+                         setBrush({ start: r.startIndex, end: r.endIndex }); }} />
               </LineChart>
             </ResponsiveContainer>
 
