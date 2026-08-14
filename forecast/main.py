@@ -1063,6 +1063,16 @@ def _proyeccion_sin_demanda(sku, snap, row, _dd):
 
     # Stock disponible actual (consolidado Traverso+Montaner, 3 bodegas).
     # Firma real (misma que usa /plan): devuelve (stocks_actuales, alertas_vcto).
+    #
+    # (14-08-2026) FIX unidad: `calcular_stock_disponible` devuelve CAJAS
+    # ("stock ya viene en cajas, sin conversión" — su docstring; el parametro
+    # unidades_por_caja esta marcado como IGNORADO). El valor se guardaba tal
+    # cual en `stock_ini_u`, que el resto de la funcion trata como UNIDADES, y
+    # despues `_cj()` lo dividia por upc para "pasarlo a cajas": el dashboard
+    # mostraba stock_real / upc. Medido en 121010290: 4.664 cj reales -> 156 cj
+    # en pantalla (4664/30). Solo afecta a los SKU que NO entraron al MRP (los
+    # que pasan por esta funcion); los del plan salen del snapshot, ya correctos
+    # — por eso 121010210 se veia bien y 121010290 no.
     stock_ini_u = 0
     try:
         _df = load_stock_parquet()
@@ -1070,10 +1080,11 @@ def _proyeccion_sin_demanda(sku, snap, row, _dd):
             df_raw=_df, unidades_por_caja={str(sku): upc})
         _v = _stocks.get(str(sku)) if isinstance(_stocks, dict) else None
         if isinstance(_v, dict):
+            # Rama defensiva: si alguna vez devuelve dict, esas claves YA son unidades.
             stock_ini_u = int(round(float(
                 _v.get("disponible_u", _v.get("stock_u", 0)) or 0)))
         elif _v is not None:
-            stock_ini_u = int(round(float(_v)))
+            stock_ini_u = int(round(float(_v) * upc))   # CAJAS -> unidades
     except Exception as _e:
         logger.warning(f"[proyeccion sin demanda] stock de {sku} no disponible: {_e}")
 
