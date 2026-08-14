@@ -2552,12 +2552,27 @@ def optimizar_plan(
     # la restricción stock_u[d,s] <= cap_bodega se viola desde el día 0.
     # Se filtran del modelo y se reporta al usuario para que ajuste cap_bodega
     # en SKU_PARAMS o revise el dato de stock.
+    #
+    # (14-08-2026) COHERENCIA CON pedidos_abiertos. El filtro sacaba el SKU de
+    # sku_params_rich / forecast_rich / stock_inicial_rich / entradas_aprobadas_rich
+    # pero NO de `pedidos_abiertos`. Aguas abajo, optimizar_plan_v12_rich L487-493
+    # RE-INGRESA al modelo cualquier SKU con pedido ("un SKU con pedido abierto
+    # entra aunque su forecast sea 0"). Resultado: el SKU volvia con su demanda de
+    # OV pero con stock_inicial=0 y SIN params (upc cae al default 1, cap_bodega al
+    # default), o sea demanda que NADIE puede producir -> quiebres inevitables
+    # espurios que inflan Q* y descondicionan la pasada A.
+    # Sacarlo tambien de pedidos_abiertos es lo correcto de negocio: si su stock ya
+    # supera la capacidad de bodega, esa OV se sirve con inventario existente; no
+    # hay nada que producir. NOTA: `pedidos_abiertos` es el dict del caller y se
+    # muta -> se trabaja sobre una copia para no alterar el estado de cron_plan.
+    pedidos_abiertos = dict(pedidos_abiertos or {})
     skus_filtrados_cap_bodega = []
     for sku in list(sku_params_rich.keys()):
         cap_u = sku_params_rich[sku].get("cap_bodega_u", 0) or 0
         stock_u = stock_inicial_rich.get(sku, 0) or 0
         if cap_u and stock_u > cap_u:
             upc = sku_params_rich[sku].get("u_por_caja", 1) or 1
+            _dem_cj = sum((pedidos_abiertos.get(sku) or {}).values())
             skus_filtrados_cap_bodega.append({
                 "sku": sku,
                 "descripcion": sku_params_rich[sku].get("descripcion", ""),
@@ -2565,18 +2580,27 @@ def optimizar_plan(
                 "stock_actual_cj": round(stock_u / upc, 1),
                 "cap_bodega_u": int(cap_u),
                 "cap_bodega_cj": round(cap_u / upc, 1),
+                "ov_descartada_cj": round(float(_dem_cj), 1),
                 "razon": "stock_inicial > cap_bodega (genera infactibilidad estructural)",
             })
             sku_params_rich.pop(sku, None)
             forecast_rich.pop(sku, None)
             stock_inicial_rich.pop(sku, None)
             entradas_aprobadas_rich.pop(sku, None)
+            pedidos_abiertos.pop(sku, None)   # <- evita el re-ingreso sin stock
 
     if skus_filtrados_cap_bodega:
         logger.warning(
             f"[V6.12-mini] {len(skus_filtrados_cap_bodega)} SKUs filtrados del optimizador "
             f"por stock>cap_bodega: {[s['sku'] for s in skus_filtrados_cap_bodega]}"
         )
+        _con_ov = [(s["sku"], s["ov_descartada_cj"])
+                   for s in skus_filtrados_cap_bodega if s["ov_descartada_cj"] > 0]
+        if _con_ov:
+            logger.warning(
+                f"[V6.12-mini] de esos, {len(_con_ov)} tenian OV abierta que TAMBIEN se "
+                f"descarta (su sobre-stock la cubre): {_con_ov}"
+            )
 
     # (06-08 DIAG) Exclusion manual de SKU para aislar la causa del INFEASIBLE.
     if N2_DIAG_EXCLUIR_SKU:
