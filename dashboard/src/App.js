@@ -12,6 +12,7 @@ import MapaQuiebres from './components/MapaQuiebres';
 import MiniStock from './components/MiniStock';
 import Eventos from './components/Eventos';
 import ConciliacionOF from './components/ConciliacionOF';
+import Landing from './components/Landing';
 
 const API = process.env.REACT_APP_API_BASE || '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -37,6 +38,15 @@ const BACKEND_URL = process.env.REACT_APP_API_BASE
 // Para volver al comportamiento anterior, dejar TABS_ANCHAS vacío.
 const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion','campanas']);
 const MAIN_MAXW_ANCHO = 1800;
+
+// ── Modelo de navegación en dos niveles (mismos keys de tab de siempre) ──
+const NAV = [
+  { key:'home', label:'🏠 Inicio', tab:'home' },
+  { key:'forecast', label:'📈 Forecast', tabs:[['forecast','Forecast de Demanda'],['eventos','Eventos']] },
+  { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
+  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación']] },
+  { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
+];
 
 const C = {
   teal:'#1D9E75',tealLt:'#E1F5EE',tealMid:'#0F6E56',
@@ -262,7 +272,8 @@ function AppInner() {
   const [periods, setPeriods] = useState(26);
   const [canal, setCanal] = useState('');
   const [canales, setCanales] = useState([]);
-  const [activeTab, setActiveTab] = useState('forecast');
+  const [activeTab, setActiveTab] = useState('home');
+  const [activeSection, setActiveSection] = useState('home');
   const [stockSku, setStockSku] = useState('');  // SKU pre-seleccionado en tab stock
   const [stockNav,  setStockNav]  = useState(0);   // contador para forzar navegación
 
@@ -678,7 +689,7 @@ function AppInner() {
               fontWeight: 600,
               cursor: 'pointer'
             }}
-            onClick={() => { setActiveTab('plan'); }}
+            onClick={() => { setActiveSection('planificacion'); setActiveTab('plan'); }}
             title="Click para ir al plan y regenerar">
               ⚠ Plan desactualizado — Regenerar
             </span>
@@ -687,18 +698,39 @@ function AppInner() {
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Navegación — nivel 1: secciones */}
       <div className="no-print" style={{background:'#fff',borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
-        {[['forecast','📈 Forecast de Demanda'],['plan','🏭 Plan de Producción'],['stockdiario','📊 Stock Diario'],['quiebres','🔴 Mapa de Quiebres'],['detalle','🔧 Detalle Producción'],['programacion','📅 Programación Diaria'],['faltantes','📉 Faltantes'],['conciliacion','🏭 Conciliación OF'],['campanas','🗓️ Campañas'],['eventos','🎯 Eventos'],['parametros','⚙️ Parámetros']].map(([tab,label]) => (
-          <button key={tab} onClick={() => setActiveTab(tab)}
-            style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:500,background:'transparent',color:activeTab===tab?C.teal:C.textMuted,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
-            {label}
-          </button>
-        ))}
+        {NAV.map(sec => {
+          const activa = activeSection === sec.key;
+          return (
+            <button key={sec.key} onClick={() => { setActiveSection(sec.key); setActiveTab(sec.tab ? sec.tab : sec.tabs[0][0]); }}
+              style={{padding:'12px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:600,background:'transparent',color:activa?C.teal:C.textMuted,borderBottom:activa?`2px solid ${C.teal}`:'2px solid transparent',transition:'all .15s'}}>
+              {sec.label}
+            </button>
+          );
+        })}
       </div>
+
+      {/* Navegación — nivel 2: submenús de la sección activa */}
+      {(() => {
+        const sec = NAV.find(n => n.key === activeSection);
+        if (!sec || !sec.tabs) return null;
+        return (
+          <div className="no-print" style={{background:C.grayLt,borderBottom:`1px solid ${C.border}`,padding:'0 24px',display:'flex',gap:4}}>
+            {sec.tabs.map(([tab,label]) => (
+              <button key={tab} onClick={() => setActiveTab(tab)}
+                style={{padding:'8px 16px',border:'none',cursor:'pointer',fontSize:12,fontWeight:activeTab===tab?700:500,background:activeTab===tab?'#fff':'transparent',color:activeTab===tab?C.teal:C.gray,borderBottom:activeTab===tab?`2px solid ${C.teal}`:'2px solid transparent',borderRadius:'6px 6px 0 0',transition:'all .15s'}}>
+                {label}
+              </button>
+            ))}
+          </div>
+        );
+      })()}
 
       <div style={{...s.main, maxWidth: TABS_ANCHAS.has(activeTab) ? MAIN_MAXW_ANCHO : s.main.maxWidth}}>
         {error && <div style={s.alert('error')}>{error}</div>}
+
+        {activeTab === 'home' && <Landing onNavegar={(tab, section) => { setActiveSection(section); setActiveTab(tab); }} />}
 
         {/* ══ FORECAST TAB ══ */}
         {activeTab === 'forecast' && (
