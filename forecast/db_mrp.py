@@ -1596,7 +1596,10 @@ def get_of_cumplimiento_sku(periodo: str = "semana",
     """Cumplimiento de OF por SKU, estilo reporte de Producción (Solicitado vs
     Producido, %). SIN topear (puede pasar 100% = sobreproducción, ver DISENO §12).
 
-    periodo='semana': bucket por semana del CENTRO del tramo [ini,fin].
+    periodo='semana': bucket por semana ISO de la MASA de TR (más cajas
+                      producidas; empate -> semana más temprana). OF sin TR
+                      -> centro del tramo. Ancla TEMPORAL (O11) hasta que
+                      Producción cargue ini=fin en la fecha real.
     periodo='dia'   : bucket por fecha ÚNICA (si fecha_ini=fecha_fin, dato nuevo de
                       Producción) o por fecha_tr (si es tramo, dato viejo). Las OF con
                       tramo y sin TR (pendientes) no entran al diario.
@@ -1614,43 +1617,71 @@ def get_of_cumplimiento_sku(periodo: str = "semana",
         cond.append("sku LIKE :sku"); p["sku"] = f"%{sku}%"
     cond_sql = " AND ".join(cond)
 
-    # expresión de bucket según periodo
-    if periodo == "dia":
-        # fecha única si ini=fin, si no la fecha del TR (producción efectiva)
-        bucket_expr = """
-            CASE WHEN fecha_ini_planif = fecha_fin_planif THEN fecha_ini_planif
-                 ELSE fecha_tr END
-        """
-    else:
-        # centro del tramo [ini,fin] -> semana ISO (lunes)
-        bucket_expr = """
-            DATE_TRUNC('week',
-                (fecha_ini_planif
-                 + ((COALESCE(fecha_fin_planif, fecha_ini_planif) - fecha_ini_planif) / 2))
-            )::date
-        """
-
     with get_session() as session:
-        # primero agregamos a nivel OF (planificada MAX, producida SUM), con su bucket,
-        # después sumamos por (bucket, sku)
-        rows = session.execute(text(f"""
-            WITH por_of AS (
-                SELECT orden_produccion, sku,
-                       {bucket_expr} AS bucket,
-                       MAX(cant_planificada) AS solicitado,
-                       SUM(cant_producida)   AS producido
-                FROM mrp_of_sap
-                WHERE {cond_sql}
-                GROUP BY orden_produccion, sku, fecha_ini_planif, fecha_fin_planif, fecha_tr
-            )
-            SELECT bucket, sku,
-                   SUM(solicitado) AS solicitado,
-                   SUM(producido)  AS producido
-            FROM por_of
-            WHERE bucket IS NOT NULL
-            GROUP BY bucket, sku
-            ORDER BY bucket, SUM(solicitado) DESC
-        """), p).mappings().all()
+        # Ancla temporal O11: la OF se imputa a la semana ISO donde está la MASA de
+        # producción (más cajas de TR; empate -> semana más temprana). Si la OF no
+        # produjo (pendiente), cae al centro del tramo [ini,fin]. Se retira cuando
+        # Producción cargue ini=fin en la fecha real.
+        # Ya NO se agrupa por fecha_tr: la OF se colapsa entera (1 fila por
+        # orden+sku), lo que corrige de paso el doble conteo de planificada del
+        # multi-recibo. periodo='dia' conserva su lógica anterior.
+        if periodo == "dia":
+            rows = session.execute(text(f"""
+                WITH por_of AS (
+                    SELECT orden_produccion, sku,
+                           CASE WHEN fecha_ini_planif = fecha_fin_planif THEN fecha_ini_planif
+                                ELSE fecha_tr END AS bucket,
+                           MAX(cant_planificada) AS solicitado,
+                           SUM(cant_producida)   AS producido
+                    FROM mrp_of_sap
+                    WHERE {cond_sql}
+                    GROUP BY orden_produccion, sku, fecha_ini_planif, fecha_fin_planif, fecha_tr
+                )
+                SELECT bucket, sku,
+                       SUM(solicitado) AS solicitado,
+                       SUM(producido)  AS producido
+                FROM por_of
+                WHERE bucket IS NOT NULL
+                GROUP BY bucket, sku
+                ORDER BY bucket, SUM(solicitado) DESC
+            """), p).mappings().all()
+        else:
+            rows = session.execute(text(f"""
+                WITH masa AS (
+                    SELECT DISTINCT ON (orden_produccion)
+                           orden_produccion,
+                           DATE_TRUNC('week', fecha_tr)::date AS sem_masa
+                    FROM mrp_of_sap
+                    WHERE fecha_tr IS NOT NULL AND es_granel = FALSE
+                    GROUP BY orden_produccion, DATE_TRUNC('week', fecha_tr)
+                    ORDER BY orden_produccion, SUM(cant_producida) DESC,
+                             DATE_TRUNC('week', fecha_tr) ASC
+                ),
+                por_of AS (
+                    SELECT s.orden_produccion, s.sku,
+                           COALESCE(
+                               masa.sem_masa,
+                               DATE_TRUNC('week',
+                                   (s.fecha_ini_planif
+                                    + ((COALESCE(s.fecha_fin_planif, s.fecha_ini_planif) - s.fecha_ini_planif) / 2))
+                               )::date
+                           ) AS bucket,
+                           MAX(s.cant_planificada) AS solicitado,
+                           SUM(s.cant_producida)   AS producido
+                    FROM mrp_of_sap s
+                    LEFT JOIN masa ON masa.orden_produccion = s.orden_produccion
+                    WHERE {cond_sql}
+                    GROUP BY s.orden_produccion, s.sku, s.fecha_ini_planif,
+                             s.fecha_fin_planif, masa.sem_masa
+                )
+                SELECT bucket, sku,
+                       SUM(solicitado) AS solicitado,
+                       SUM(producido)  AS producido
+                FROM por_of
+                WHERE bucket IS NOT NULL
+                GROUP BY bucket, sku
+                ORDER BY bucket, SUM(solicitado) DESC
+            """), p).mappings().all()
 
         # descripción y línea/categoría por SKU (para etiquetas y filtros)
         meta = {r["sku"]: r for r in session.execute(text("""
@@ -1702,22 +1733,39 @@ def get_of_cumplimiento_sku(periodo: str = "semana",
 
 def get_of_cumplimiento_evolutivo(linea: str | None = None,
                                   categoria: str | None = None) -> list[dict]:
-    """Cumplimiento global por semana (centro del tramo) para el gráfico evolutivo.
+    """Cumplimiento global por semana (semana-masa de TR; pendiente -> centro)
+    para el gráfico evolutivo. MISMA ancla que get_of_cumplimiento_sku (O11):
+    si difieren, barras y detalle se desincronizan.
     Producido/Solicitado agregado de todos los SKU de PT. Sin topear."""
     cond = ["es_granel = FALSE"]
     with get_session() as session:
         rows = session.execute(text(f"""
-            WITH por_of AS (
-                SELECT orden_produccion, sku,
-                       DATE_TRUNC('week',
-                         (fecha_ini_planif
-                          + ((COALESCE(fecha_fin_planif, fecha_ini_planif) - fecha_ini_planif) / 2))
-                       )::date AS sem,
-                       MAX(cant_planificada) AS solicitado,
-                       SUM(cant_producida)   AS producido
+            WITH masa AS (
+                SELECT DISTINCT ON (orden_produccion)
+                       orden_produccion,
+                       DATE_TRUNC('week', fecha_tr)::date AS sem_masa
                 FROM mrp_of_sap
+                WHERE fecha_tr IS NOT NULL AND es_granel = FALSE
+                GROUP BY orden_produccion, DATE_TRUNC('week', fecha_tr)
+                ORDER BY orden_produccion, SUM(cant_producida) DESC,
+                         DATE_TRUNC('week', fecha_tr) ASC
+            ),
+            por_of AS (
+                SELECT s.orden_produccion, s.sku,
+                       COALESCE(
+                           masa.sem_masa,
+                           DATE_TRUNC('week',
+                             (s.fecha_ini_planif
+                              + ((COALESCE(s.fecha_fin_planif, s.fecha_ini_planif) - s.fecha_ini_planif) / 2))
+                           )::date
+                       ) AS sem,
+                       MAX(s.cant_planificada) AS solicitado,
+                       SUM(s.cant_producida)   AS producido
+                FROM mrp_of_sap s
+                LEFT JOIN masa ON masa.orden_produccion = s.orden_produccion
                 WHERE {" AND ".join(cond)}
-                GROUP BY orden_produccion, sku, fecha_ini_planif, fecha_fin_planif
+                GROUP BY s.orden_produccion, s.sku, s.fecha_ini_planif,
+                         s.fecha_fin_planif, masa.sem_masa
             )
             SELECT po.sem, SUM(po.solicitado) AS solicitado, SUM(po.producido) AS producido
             FROM por_of po
