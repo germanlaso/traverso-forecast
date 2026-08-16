@@ -283,6 +283,7 @@ export default function ParametrosDiagnostico() {
     return { ...m, sku: m.lista[i].sku, descripcion: m.lista[i].descripcion, indice: i };
   });
   const [filtro, setFiltro]   = useState("todos");     // todos | alertas | errores
+  const [busqueda, setBusqueda] = useState("");        // buscar SKU por codigo o nombre
   const [ocultos, setOcultos] = useState({});          // {codigoAlerta: true} -> chip apagado
 
   useEffect(() => {
@@ -305,8 +306,15 @@ export default function ParametrosDiagnostico() {
 
   const visible = (a) => !ocultos[a.codigo];
 
+  // coincidencia de texto: por código de SKU o por nombre (descripción)
+  const q = busqueda.trim().toLowerCase();
+  const coincideTexto = (it) => !q
+    || String(it.sku).toLowerCase().includes(q)
+    || (it.descripcion || "").toLowerCase().includes(q);
+
   // aplica filtros a los SKU de una línea
   const skusFiltrados = (linea) => (linea.skus || []).filter((it) => {
+    if (!coincideTexto(it)) return false;
     const al = (it.alertas || []).filter(visible);
     if (filtro === "errores") return al.some((a) => a.nivel === "error");
     if (filtro === "alertas") return al.some((a) => a.nivel === "error" || a.nivel === "warn");
@@ -325,6 +333,12 @@ export default function ParametrosDiagnostico() {
 
   const r = data.resumen || {};
   const sobrecargadas = (data.lineas || []).filter((l) => (l.derivados?.carga_pct ?? 0) > 100);
+
+  const buscando = q.length > 0;
+  const sinLineaFiltrados = (data.sin_linea || []).filter(coincideTexto);
+  const totalHits = buscando
+    ? (data.lineas || []).reduce((n, l) => n + skusFiltrados(l).length, 0) + sinLineaFiltrados.length
+    : null;
 
   return (
     <div style={{ padding: "16px 24px 40px" }}>
@@ -358,6 +372,25 @@ export default function ParametrosDiagnostico() {
 
       {/* Controles */}
       <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+        {/* Buscador por SKU (código o nombre) */}
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="Buscar SKU (código o nombre)…"
+            style={{ padding: "5px 10px", fontSize: 11.5, borderRadius: 6,
+                     border: `1px solid ${busqueda ? C.teal : C.border}`,
+                     background: "#fff", color: C.text, width: 230, outline: "none" }} />
+          {busqueda && (
+            <button onClick={() => setBusqueda("")} title="Limpiar búsqueda"
+              style={{ padding: "5px 9px", fontSize: 11.5, borderRadius: 6, cursor: "pointer",
+                       border: `1px solid ${C.border}`, background: "#fff", color: C.textMuted }}>✕</button>
+          )}
+          {buscando && (
+            <span style={{ fontSize: 11, color: C.textMuted }}>
+              {totalHits} {totalHits === 1 ? "coincidencia" : "coincidencias"}
+            </span>
+          )}
+        </div>
+
         <div style={{ display: "flex", gap: 4 }}>
           {[["todos", "Todos"], ["alertas", "Con alertas"], ["errores", "Solo errores"]].map(([k, lbl]) => (
             <button key={k} onClick={() => setFiltro(k)} style={{
@@ -408,12 +441,18 @@ export default function ParametrosDiagnostico() {
         })}
       </div>
 
+      {buscando && totalHits === 0 && (
+        <div style={{ padding: "16px 4px", color: C.textMuted, fontSize: 12.5 }}>
+          Sin coincidencias para “{busqueda}”.
+        </div>
+      )}
+
       {/* Líneas */}
       {(data.lineas || []).map((l) => {
         const d = l.derivados || {};
         const items = skusFiltrados(l);
-        const open = !!abierta[l.codigo];
-        if (filtro !== "todos" && items.length === 0) return null;
+        const open = buscando ? true : !!abierta[l.codigo];
+        if (items.length === 0 && (filtro !== "todos" || buscando)) return null;
         return (
           <div key={l.codigo} style={s.card}>
             {/* Encabezado de línea */}
@@ -587,10 +626,10 @@ export default function ParametrosDiagnostico() {
       })}
 
       {/* SKU sin línea asignada */}
-      {(data.sin_linea || []).length > 0 && (
+      {sinLineaFiltrados.length > 0 && (
         <div style={{ ...s.card, marginTop: 16 }}>
           <div style={{ padding: "10px 14px", fontWeight: 700, fontSize: 13, background: C.grayLt }}>
-            Sin línea asignada · {data.sin_linea.length}
+            Sin línea asignada · {sinLineaFiltrados.length}
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -598,7 +637,7 @@ export default function ParametrosDiagnostico() {
                 <th key={h} style={{ ...s.th, textAlign: i === 4 ? "right" : "left" }}>{h}</th>))}</tr>
             </thead>
             <tbody>
-              {data.sin_linea.map((it) => (
+              {sinLineaFiltrados.map((it) => (
                 <tr key={it.sku}>
                   <td style={{ ...s.td, fontWeight: 600 }}>{it.sku}</td>
                   <td style={s.td}>{it.descripcion}</td>
