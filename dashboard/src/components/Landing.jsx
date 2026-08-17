@@ -28,7 +28,7 @@ const ACCESOS = [
       ['programacion', 'Programación Diaria'] ] },
   { seccion: 'control', titulo: '📊 Control', items: [
       ['stockdiario', 'Stock Diario'], ['faltantes', 'Faltantes'],
-      ['quiebres', 'Mapa de Quiebres'], ['conciliacion', 'Conciliación'] ] },
+      ['quiebres', 'Mapa de Quiebres'] ] },   // Conciliación oculta temporalmente (pendiente de mas pruebas)
   { seccion: 'herramientas', titulo: '🛠️ Herramientas', items: [
       ['parametros', 'Parámetros'] ] },
 ];
