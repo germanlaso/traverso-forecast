@@ -2486,9 +2486,18 @@ def optimizar_plan(
     horizonte_dias_default = max(horizonte_semanas * 7, 14)
     fecha_inicio_default = date.today()
     fecha_fin_default = fecha_inicio_default + timedelta(days=horizonte_dias_default + 42)
-    from calendario import semana_iso_inicio
-    lunes_inicio = semana_iso_inicio(fecha_inicio_default)
-    lunes_fin = semana_iso_inicio(fecha_fin_default)
+    # (18-08-2026) FIX CONVENCION DE SEMANA. El forecaster entrega ds = DOMINGO
+    # (semanas dom->sab; ver mrp.py::_fecha_a_domingo y eventos.py). Usar
+    # semana_iso_inicio() sobre un domingo devuelve el lunes de la semana
+    # ANTERIOR (weekday(dom)=6 -> resta 6 dias): la demanda quedaba corrida una
+    # semana y, peor, se repartia entre los habiles de OTRA semana. Medido:
+    # ds 2026-09-20 (5 habiles) -> re-keyeado a 2026-09-14 (4 habiles, feriados
+    # 18-19 sep) => demanda diaria +25% y SS inflado en la misma proporcion.
+    # El docstring de calendario.semana_iso_inicio afirmaba que Prophet entrega
+    # lunes: PREMISA FALSA (corregida ahi tambien).
+    from calendario import semana_viz_inicio
+    sem_inicio = semana_viz_inicio(fecha_inicio_default)
+    sem_fin = semana_viz_inicio(fecha_fin_default)
 
     forecast_rich = {}
     for sku, lst in forecasts.items():
@@ -2500,15 +2509,19 @@ def optimizar_plan(
                 fecha_obj = date.fromisoformat(fecha_str)
             except ValueError:
                 continue
-            lunes = semana_iso_inicio(fecha_obj)
+            # El ds YA es el domingo de su semana: es la clave correcta para
+            # distribuir_forecast_a_diario(), que toma los 7 dias desde la clave.
+            # semana_viz_inicio() es idempotente sobre domingos (guarda por si
+            # alguna vez llegara un ds no-domingo).
+            sem = semana_viz_inicio(fecha_obj)
             # FIX v1.2.1: filtrar solo fechas dentro del horizonte futuro.
             # Antes se sumaba todo el histórico de Prophet (varios años de yhat),
             # produciendo demandas absurdamente altas y modelos INFEASIBLE.
-            if lunes < lunes_inicio or lunes > lunes_fin:
+            if sem < sem_inicio or sem > sem_fin:
                 continue
             yhat_cajas = max(0.0, float(f.get("yhat", 0) or 0))
             yhat_u = yhat_cajas * upc
-            d[lunes] = d.get(lunes, 0.0) + yhat_u
+            d[sem] = d.get(sem, 0.0) + yhat_u
         forecast_rich[sku] = d
 
     # ─── 5. Stock inicial: cajas → unidades ──────────────────────────────────
@@ -2664,8 +2677,13 @@ def optimizar_plan(
         # Stock contextual del SKU en la fecha de entrada
         stock_ent = resultado["stock_diario"].get(sku, {}).get(f_ent.isoformat(), 0)
         # Forecast aproximado de la semana de necesidad (u → cajas)
-        lunes_nec = _a_lunes_iso_date(semana_viz_inicio(f_ent))
-        fc_u = forecast_rich.get(sku, {}).get(lunes_nec, 0.0)
+        # (18-08-2026) forecast_rich ahora se indexa por DOMINGO (misma
+        # convencion que el ds del forecaster). Antes se convertia el domingo a
+        # lunes ISO: acertaba solo porque el re-keyeo de arriba tenia el MISMO
+        # error (dos bugs que se cancelaban). Corregido alla, aca debe quedar el
+        # domingo puro o el lookup devolveria 0.0 EN SILENCIO.
+        sem_nec_key = semana_viz_inicio(f_ent)
+        fc_u = forecast_rich.get(sku, {}).get(sem_nec_key, 0.0)
         fc_cj = round(fc_u / upc, 1) if upc else 0.0
 
         ss_dias = sp_rich.get("ss_dias", 0)

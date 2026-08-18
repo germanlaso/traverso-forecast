@@ -101,8 +101,18 @@ def contar_dias_habiles(fecha_inicio: date, fecha_fin: date) -> int:
 # =============================================================================
 
 def semana_iso_inicio(fecha: date) -> date:
-    """Lunes de la semana ISO que contiene `fecha`. Usado para alinear
-    con forecast de Prophet (que entrega ds = lunes de cada semana)."""
+    """Lunes de la semana ISO (lun-dom) que contiene `fecha`.
+
+    (18-08-2026) NO USAR PARA INDEXAR EL FORECAST. El comentario anterior decia
+    que Prophet entrega ds = lunes: es FALSO, entrega DOMINGOS (semanas dom->sab;
+    ver mrp.py::_fecha_a_domingo y el docstring de eventos.py). Sobre un domingo
+    esta funcion devuelve el lunes de la semana ANTERIOR (weekday(dom)=6), asi que
+    usarla sobre un ds corre la demanda una semana y la reparte entre los habiles
+    de otra semana (bug del re-keyeo en optimizer.py, corregido el 18-08).
+    Para alinear con el forecast usar `semana_viz_inicio` (domingo).
+    Esta funcion sigue siendo correcta para agrupar DIAS del horizonte en semanas
+    ISO (campanas de granel/formato, pins del planificador).
+    """
     return fecha - timedelta(days=fecha.weekday())
 
 
