@@ -44,7 +44,7 @@ const NAV = [
   { key:'home', label:'🏠 Inicio', tab:'home' },
   { key:'forecast', label:'📈 Forecast', tabs:[['forecast','Forecast de Demanda'],['eventos','Eventos']] },
   { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
-  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['quiebres','Mapa de Quiebres']] },   // Conciliación oculta temporalmente (pendiente de más pruebas)
+  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación']] },
   { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
 ];
 
