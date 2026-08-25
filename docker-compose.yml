@@ -46,6 +46,7 @@ services:
       - INFORME_VENTAS_DEST=${INFORME_VENTAS_DEST}
       - INFORME_VENTAS_ALERTA=${INFORME_VENTAS_ALERTA}
       - OV_NETTING_ENABLED=${OV_NETTING_ENABLED:-1}
+      - FALTANTES_V2_ENABLED=${FALTANTES_V2_ENABLED:-0}
     depends_on:
       mrp_db:
         condition: service_healthy
