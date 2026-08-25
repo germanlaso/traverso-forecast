@@ -1914,6 +1914,112 @@ def post_explicacion_endpoint(payload: ExplicacionFaltante):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Faltantes V2 — Solución propuesta + Fecha de reposición (desactivable)
+# Flag: FALTANTES_V2_ENABLED (default 0). Con el flag OFF, los GET devuelven
+# {"enabled": False} y los POST responden 403; el endpoint /faltantes histórico
+# NO se toca (Opción 1: endpoints separados, el frontend cruza por SKU).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _faltantes_v2_on() -> bool:
+    """True si el feature Faltantes V2 está activado por entorno."""
+    import os
+    return os.environ.get("FALTANTES_V2_ENABLED", "0") in ("1", "true", "True", "yes")
+
+
+@app.get("/faltantes/v2/estado", tags=["Faltantes"])
+def get_faltantes_v2_estado():
+    """Indica si el feature Faltantes V2 está activo (para que el frontend decida
+    si mostrar las columnas nuevas)."""
+    return {"enabled": _faltantes_v2_on()}
+
+
+@app.get("/faltantes/soluciones", tags=["Faltantes"])
+def get_soluciones_endpoint(fecha: str):
+    """Soluciones propuestas cargadas para los faltantes de un día (YYYY-MM-DD).
+    Devuelve {sku: {solucion, solucion_autor, congelada}}. Gemelo del GET de
+    explicaciones. Si el feature está OFF, devuelve enabled=False y dict vacío."""
+    if not _faltantes_v2_on():
+        return {"enabled": False, "fecha": fecha, "soluciones": {}}
+    try:
+        from db_mrp import get_soluciones_faltantes
+        return {"enabled": True, "fecha": fecha,
+                "soluciones": get_soluciones_faltantes(fecha)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SolucionFaltante(BaseModel):
+    sku: str
+    fecha: str
+    solucion: str
+    autor: str | None = ""
+
+
+@app.post("/faltantes/solucion", tags=["Faltantes"])
+def post_solucion_endpoint(payload: SolucionFaltante):
+    """Guarda/actualiza la SOLUCIÓN propuesta de un (sku, fecha). Rechaza (409) si
+    la fila ya fue congelada por el envío del correo final (mismo flag que la
+    explicación). Requiere FALTANTES_V2_ENABLED."""
+    if not _faltantes_v2_on():
+        raise HTTPException(status_code=403, detail="Feature Faltantes V2 desactivado.")
+    try:
+        from db_mrp import upsert_solucion_faltante
+        res = upsert_solucion_faltante(
+            payload.sku, payload.fecha, payload.solucion, payload.autor or "")
+        if not res.get("ok"):
+            raise HTTPException(
+                status_code=409,
+                detail="La solución ya fue enviada y no puede editarse.")
+        return {"ok": True, "sku": payload.sku, "fecha": payload.fecha}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/faltantes/reposicion", tags=["Faltantes"])
+def get_reposicion_endpoint(fecha: str):
+    """Mapa de fecha de reposición EN VIVO para el día del informe (YYYY-MM-DD).
+    `fecha` es el umbral de 'futuro' (inclusive): una OF que entra ese mismo día
+    repone. Devuelve {sku: {tipo, valor}} con tipo ∈ auto|inactivo|sin_of|manual.
+
+    El frontend cruza por SKU. Para un SKU no productivo sin fecha manual cargada,
+    el SKU NO viene en el map -> el frontend asume {tipo:'manual', valor:None}
+    (Opción 1, validada con dato el 25-08). Si el feature está OFF, map vacío."""
+    if not _faltantes_v2_on():
+        return {"enabled": False, "fecha": fecha, "reposicion": {}}
+    try:
+        from db_mrp import get_fecha_reposicion_map
+        return {"enabled": True, "fecha": fecha,
+                "reposicion": get_fecha_reposicion_map(fecha)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RepoManualFaltante(BaseModel):
+    sku: str
+    fecha: str
+    fecha_reposicion: str | None = None   # 'YYYY-MM-DD' o None para borrar
+    autor: str | None = ""
+
+
+@app.post("/faltantes/repo_manual", tags=["Faltantes"])
+def post_repo_manual_endpoint(payload: RepoManualFaltante):
+    """Guarda la fecha de reposición MANUAL de un SKU no productivo
+    (importado/maquila). Editable siempre (NO se congela). Requiere
+    FALTANTES_V2_ENABLED."""
+    if not _faltantes_v2_on():
+        raise HTTPException(status_code=403, detail="Feature Faltantes V2 desactivado.")
+    try:
+        from db_mrp import upsert_repo_manual
+        res = upsert_repo_manual(
+            payload.sku, payload.fecha, payload.fecha_reposicion, payload.autor or "")
+        return {"ok": bool(res.get("ok")), "sku": payload.sku, "fecha": payload.fecha}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Conciliación OF/TR (Fase 2) — lectura de mrp_of_sap. NO toca el solver.
 # ─────────────────────────────────────────────────────────────────────────────
 
