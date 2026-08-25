@@ -65,6 +65,12 @@ export default function Faltantes() {
   const [explic, setExplic] = useState({});          // {sku: {explicacion, autor, congelada}}
   const [explicSaving, setExplicSaving] = useState({}); // {sku: 'saving'|'ok'|'err'}
   const [filtroCausa, setFiltroCausa] = useState("todo"); // todo | sin_stock | vu_insuficiente
+  // Faltantes V2 (feature desactivable via flag backend FALTANTES_V2_ENABLED)
+  const [v2On, setV2On] = useState(false);            // ¿mostrar columnas nuevas?
+  const [soluc, setSoluc] = useState({});             // {sku: {solucion, solucion_autor, congelada}}
+  const [solucSaving, setSolucSaving] = useState({}); // {sku: 'saving'|'ok'|'err'}
+  const [repo, setRepo] = useState({});               // {sku: {tipo, valor}} (mapa en vivo)
+  const [repoSaving, setRepoSaving] = useState({});   // {sku: 'saving'|'ok'|'err'}
 
   // 1. Rango disponible al montar; default: últimos 30 días hasta el último día
   useEffect(() => {
@@ -110,6 +116,27 @@ export default function Faltantes() {
       .catch(() => setExplic({}));
   }, [selFecha]);
 
+  // 3c. Faltantes V2: saber si el feature está activo (una vez al montar)
+  useEffect(() => {
+    fetch(`${API}/faltantes/v2/estado`)
+      .then((r) => r.json())
+      .then((d) => setV2On(!!d.enabled))
+      .catch(() => setV2On(false));
+  }, []);
+
+  // 3d. Faltantes V2: soluciones + mapa de reposición del día (solo si el feature está on)
+  useEffect(() => {
+    if (!v2On || !selFecha) { setSoluc({}); setRepo({}); return; }
+    fetch(`${API}/faltantes/soluciones?fecha=${selFecha}`)
+      .then((r) => r.json())
+      .then((d) => setSoluc(d.soluciones || {}))
+      .catch(() => setSoluc({}));
+    fetch(`${API}/faltantes/reposicion?fecha=${selFecha}`)
+      .then((r) => r.json())
+      .then((d) => setRepo(d.reposicion || {}))
+      .catch(() => setRepo({}));
+  }, [v2On, selFecha]);
+
   // Guarda la explicación de un SKU (al perder foco). No permite editar si está congelada.
   const guardarExplicacion = async (sku, texto) => {
     const actual = explic[sku] || {};
@@ -128,6 +155,47 @@ export default function Faltantes() {
       setTimeout(() => setExplicSaving((s) => { const n = { ...s }; delete n[sku]; return n; }), 1500);
     } catch (err) {
       setExplicSaving((s) => ({ ...s, [sku]: "err" }));
+    }
+  };
+
+  // Faltantes V2: guarda la SOLUCIÓN de un SKU (al perder foco). Gemela de la
+  // explicación: mismo bloqueo por congelada (comparten flag en backend).
+  const guardarSolucion = async (sku, texto) => {
+    const actual = soluc[sku] || {};
+    if (actual.congelada) return;                          // read-only
+    if ((actual.solucion || "") === (texto || "")) return; // sin cambios
+    setSolucSaving((s) => ({ ...s, [sku]: "saving" }));
+    try {
+      const resp = await fetch(`${API}/faltantes/solucion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sku, fecha: selFecha, solucion: texto, autor: "" }),
+      });
+      if (!resp.ok) throw new Error(resp.status === 409 ? "congelada" : "error");
+      setSoluc((e) => ({ ...e, [sku]: { ...(e[sku] || {}), solucion: texto } }));
+      setSolucSaving((s) => ({ ...s, [sku]: "ok" }));
+      setTimeout(() => setSolucSaving((s) => { const n = { ...s }; delete n[sku]; return n; }), 1500);
+    } catch (err) {
+      setSolucSaving((s) => ({ ...s, [sku]: "err" }));
+    }
+  };
+
+  // Faltantes V2: guarda la FECHA DE REPOSICIÓN MANUAL (solo SKU no productivos,
+  // tipo 'manual'). Editable siempre (no se congela).
+  const guardarRepoManual = async (sku, fechaRepo) => {
+    setRepoSaving((s) => ({ ...s, [sku]: "saving" }));
+    try {
+      const resp = await fetch(`${API}/faltantes/repo_manual`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sku, fecha: selFecha, fecha_reposicion: fechaRepo || null, autor: "" }),
+      });
+      if (!resp.ok) throw new Error("error");
+      setRepo((e) => ({ ...e, [sku]: { tipo: "manual", valor: fechaRepo || null } }));
+      setRepoSaving((s) => ({ ...s, [sku]: "ok" }));
+      setTimeout(() => setRepoSaving((s) => { const n = { ...s }; delete n[sku]; return n; }), 1500);
+    } catch (err) {
+      setRepoSaving((s) => ({ ...s, [sku]: "err" }));
     }
   };
 
@@ -293,7 +361,8 @@ export default function Faltantes() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {["", "SKU", "Descripción", "Causa", "Clientes", "Stock", "Programado", "Faltante", "Explicación"].map((h, i) => (
+                  {["", "SKU", "Descripción", "Causa", "Clientes", "Stock", "Programado", "Faltante", "Explicación",
+                    ...(v2On ? ["Reposición", "Solución propuesta"] : [])].map((h, i) => (
                     <th key={h || i} style={{ ...s.th, textAlign: (i >= 5 && i <= 7) ? "right" : "left" }}>{h}</th>
                   ))}
                 </tr>
@@ -363,6 +432,90 @@ export default function Faltantes() {
                             );
                           })()}
                         </td>
+                        {/* Faltantes V2: Fecha de reposición (4 estados) */}
+                        {v2On && (
+                          <td style={{ ...s.td, minWidth: 150 }} onClick={(ev) => ev.stopPropagation()}>
+                            {(() => {
+                              const rp = repo[g.sku] || { tipo: "manual", valor: null };
+                              const est = repoSaving[g.sku];
+                              if (rp.tipo === "auto") {
+                                const dmy = rp.valor
+                                  ? rp.valor.split("-").reverse().join("-")   // YYYY-MM-DD -> DD-MM-YYYY
+                                  : rp.valor;
+                                return (
+                                  <span style={{ fontSize: 12, fontWeight: 600, color: C.teal }}>
+                                    {dmy}
+                                  </span>
+                                );
+                              }
+                              if (rp.tipo === "inactivo") {
+                                return (
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: C.gray }}>
+                                    SKU inactivo
+                                  </span>
+                                );
+                              }
+                              if (rp.tipo === "sin_of") {
+                                return (
+                                  <span style={{ fontSize: 11, fontWeight: 700, color: C.red }}>
+                                    Sin OF futura
+                                  </span>
+                                );
+                              }
+                              // tipo === "manual" (no productivo): fecha editable
+                              return (
+                                <div>
+                                  <input
+                                    type="date"
+                                    defaultValue={rp.valor || ""}
+                                    onClick={(ev) => ev.stopPropagation()}
+                                    onBlur={(ev) => guardarRepoManual(g.sku, ev.target.value || null)}
+                                    style={{ fontSize: 12, fontFamily: "inherit",
+                                      border: `1px solid ${C.grayLt}`, borderRadius: 6, padding: "3px 6px",
+                                      boxSizing: "border-box" }}
+                                  />
+                                  {est === "saving" && <div style={{ fontSize: 10, color: C.textMuted }}>guardando…</div>}
+                                  {est === "ok" && <div style={{ fontSize: 10, color: C.teal }}>✓ guardado</div>}
+                                  {est === "err" && <div style={{ fontSize: 10, color: C.red }}>error</div>}
+                                </div>
+                              );
+                            })()}
+                          </td>
+                        )}
+                        {/* Faltantes V2: Solución propuesta (gemela de explicación) */}
+                        {v2On && (
+                          <td style={{ ...s.td, minWidth: 220 }} onClick={(ev) => ev.stopPropagation()}>
+                            {(() => {
+                              const so = soluc[g.sku] || {};
+                              const est = solucSaving[g.sku];
+                              if (so.congelada) {
+                                return (
+                                  <div style={{ fontSize: 12, color: C.textMuted }}>
+                                    {so.solucion || <span style={{ fontStyle: "italic" }}>—</span>}
+                                    <span title="Enviada — no editable" style={{ marginLeft: 6, color: C.gray }}>🔒</span>
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div>
+                                  <textarea
+                                    defaultValue={so.solucion || ""}
+                                    placeholder="Agregar solución…"
+                                    onClick={(ev) => ev.stopPropagation()}
+                                    onBlur={(ev) => guardarSolucion(g.sku, ev.target.value.trim())}
+                                    rows={2}
+                                    style={{ width: "100%", fontSize: 12, fontFamily: "inherit",
+                                      border: `1px solid ${C.grayLt}`, borderRadius: 6, padding: "4px 6px",
+                                      resize: "vertical", boxSizing: "border-box" }}
+                                  />
+                                  {est === "saving" && <span style={{ fontSize: 10, color: C.textMuted }}>guardando…</span>}
+                                  {est === "ok" && <span style={{ fontSize: 10, color: C.teal }}>✓ guardado</span>}
+                                  {est === "err" && <span style={{ fontSize: 10, color: C.red }}>error al guardar</span>}
+                                </div>
+                              );
+                            })()}
+                          </td>
+                        )}
                       </tr>
                       {/* Sub-filas por cliente (al expandir) */}
                       {abierto && g.clientes
@@ -383,6 +536,8 @@ export default function Faltantes() {
                           <td style={s.td}></td>
                           <td style={{ ...s.td, textAlign: "right", color: causaColor(r.causa, C) }}>{fmtN(r.faltante_cj)}</td>
                           <td style={s.td}></td>
+                          {v2On && <td style={s.td}></td>}
+                          {v2On && <td style={s.td}></td>}
                         </tr>
                       ))}
                     </React.Fragment>
