@@ -1152,6 +1152,171 @@ def limpiar_explicaciones_huerfanas() -> int:
         session.commit()
     return n
 
+# ─── Faltantes V2: Solución propuesta + Fecha de reposición ──────────────────
+# Feature desactivable (FALTANTES_V2_ENABLED). Estas funciones NO se invocan
+# mientras el flag esté en 0; quedan inertes. Ver migracion_faltantes_v2.sql.
+#
+#   Col 1 "Solución propuesta": gemela de explicacion, en la MISMA tabla
+#     mrp_faltantes_explicaciones. Comparte la columna `congelada` con la
+#     explicación (mismo ciclo: editable 8-11, se congela con el mail final).
+#
+#   Col 2 "Fecha de reposición": calculada EN VIVO (no se persiste para
+#     productivos). Árbol validado con dato el 25-08:
+#       - SKU no está en mrp_sku_params      -> NO PRODUCTIVO -> fecha manual
+#       - productivo con activo=false        -> "SKU Inactivo"
+#       - productivo activo con OF vigente    -> esa fecha (MIN futura)
+#         (≠CANCELADA, fecha_entrada_real >= fecha_stock)
+#       - productivo activo sin OF futura     -> "Sin OF futura"
+
+
+def upsert_solucion_faltante(sku: str, fecha, solucion: str, autor: str = "") -> dict:
+    """Inserta/actualiza la SOLUCIÓN propuesta de un (sku, fecha) en la misma
+    tabla de explicaciones. Rechaza si la fila ya está congelada (mismo flag que
+    la explicación). Gemela de upsert_explicacion_faltante."""
+    sku = str(sku).strip()
+    with get_session() as session:
+        row = session.execute(text("""
+            SELECT congelada FROM mrp_faltantes_explicaciones
+            WHERE sku = :s AND fecha = :f
+        """), {"s": sku, "f": str(fecha)}).fetchone()
+        if row is not None and bool(row[0]):
+            return {"ok": False, "motivo": "congelada"}
+
+        # ON CONFLICT: si la fila ya existe (creada por la explicación), solo
+        # actualiza los campos de solución sin pisar la explicación.
+        session.execute(text("""
+            INSERT INTO mrp_faltantes_explicaciones
+                (sku, fecha, explicacion, autor, solucion, solucion_autor,
+                 congelada, created_at, updated_at)
+            VALUES (:s, :f, '', :a, :sol, :a, FALSE, NOW(), NOW())
+            ON CONFLICT (sku, fecha) DO UPDATE SET
+                solucion       = EXCLUDED.solucion,
+                solucion_autor = EXCLUDED.solucion_autor,
+                updated_at     = NOW()
+        """), {"s": sku, "f": str(fecha), "sol": solucion or "", "a": autor or ""})
+        session.commit()
+    return {"ok": True}
+
+
+def get_soluciones_faltantes(fecha) -> dict:
+    """Devuelve {sku: {solucion, solucion_autor, congelada}} para una fecha.
+    Gemela de get_explicaciones_faltantes (misma tabla). Se sirve junto con las
+    explicaciones; se deja separada para no alterar la firma existente."""
+    with get_session() as session:
+        rows = session.execute(text("""
+            SELECT sku, solucion, solucion_autor, congelada
+            FROM mrp_faltantes_explicaciones
+            WHERE fecha = :f
+        """), {"f": str(fecha)}).fetchall()
+    return {
+        str(r[0]).strip(): {
+            "solucion": r[1] or "",
+            "solucion_autor": r[2] or "",
+            "congelada": bool(r[3]),
+        }
+        for r in rows
+    }
+
+
+def upsert_repo_manual(sku: str, fecha, fecha_reposicion, autor: str = "") -> dict:
+    """Fecha de reposición MANUAL para un SKU no productivo (importado/maquila).
+    Editable siempre (no se congela). fecha_reposicion: date/str 'YYYY-MM-DD' o
+    None/'' para borrar la estimación."""
+    sku = str(sku).strip()
+    fr = str(fecha_reposicion)[:10] if fecha_reposicion else None
+    with get_session() as session:
+        session.execute(text("""
+            INSERT INTO mrp_faltantes_repo_manual
+                (sku, fecha, fecha_reposicion, autor, created_at, updated_at)
+            VALUES (:s, :f, :fr, :a, NOW(), NOW())
+            ON CONFLICT (sku, fecha) DO UPDATE SET
+                fecha_reposicion = EXCLUDED.fecha_reposicion,
+                autor            = EXCLUDED.autor,
+                updated_at       = NOW()
+        """), {"s": sku, "f": str(fecha), "fr": fr, "a": autor or ""})
+        session.commit()
+    return {"ok": True}
+
+
+def get_repo_manual_futuras(fecha_stock) -> dict:
+    """Devuelve {sku: 'YYYY-MM-DD'} con las fechas manuales cuya fecha_reposicion
+    es >= fecha_stock (futuras respecto de la foto del informe). Sirve para
+    pre-llenar el campo manual solo cuando la estimación previa sigue vigente.
+    Si un SKU tiene fechas manuales en varios días del informe, gana la del día
+    más reciente (ORDER BY fecha DESC). fecha_stock: umbral INCLUSIVE."""
+    fs = str(fecha_stock)[:10]
+    with get_session() as session:
+        rows = session.execute(text("""
+            SELECT DISTINCT ON (sku) sku, fecha_reposicion
+            FROM mrp_faltantes_repo_manual
+            WHERE fecha_reposicion IS NOT NULL
+              AND fecha_reposicion >= :fs
+            ORDER BY sku, fecha DESC
+        """), {"fs": fs}).fetchall()
+    return {str(r[0]).strip(): r[1].isoformat() for r in rows if r[1]}
+
+
+def get_fecha_reposicion_map(fecha_stock) -> dict:
+    """Resuelve EN VIVO la fecha de reposición para TODOS los SKU, según el árbol
+    de decisión validado. Devuelve {sku: {"tipo": ..., "valor": ...}} donde
+    tipo ∈ {'auto','inactivo','sin_of','manual'} y valor es 'YYYY-MM-DD' o None.
+
+    El consumidor (main.py) toma de este map solo los SKU que están en el informe.
+    Se calcula el universo completo (barato: 250 productivos + aprobaciones) para
+    no depender de pasar la lista y evitar el IN dinámico.
+
+    fecha_stock: día del informe. Umbral de 'futuro' INCLUSIVE — una OF que entra
+      el mismo día del stock sí repone (definido con dato el 25-08).
+
+    Prioridad (validada 25-08): no productivo > inactivo > OF futura > sin OF.
+    """
+    fs = str(fecha_stock)[:10]
+
+    with get_session() as session:
+        # 1) universo productivo + estado activo
+        prod = {
+            str(r[0]).strip(): bool(r[1])
+            for r in session.execute(text(
+                "SELECT sku, activo FROM mrp_sku_params"
+            )).fetchall()
+        }
+        # 2) próxima OF vigente futura por SKU (versión máxima por OF, ≠CANCELADA,
+        #    fecha_entrada_real >= fecha_stock)
+        of_rows = session.execute(text("""
+            WITH vigente AS (
+                SELECT DISTINCT ON (numero_of)
+                       numero_of, sku, fecha_entrada_real, estado
+                FROM mrp_aprobaciones
+                ORDER BY numero_of, version DESC
+            )
+            SELECT sku, MIN(fecha_entrada_real) AS proxima
+            FROM vigente
+            WHERE estado <> 'CANCELADA'
+              AND fecha_entrada_real >= :fs
+            GROUP BY sku
+        """), {"fs": fs}).fetchall()
+        of_map = {str(r[0]).strip(): r[1] for r in of_rows if r[1]}
+
+    manual_map = get_repo_manual_futuras(fs)
+
+    universo = set(prod) | set(of_map) | set(manual_map)
+    out = {}
+    for s in universo:
+        if s not in prod:
+            # NO PRODUCTIVO -> manual (pre-llenado si hay futura previa)
+            out[s] = {"tipo": "manual", "valor": manual_map.get(s)}
+        elif prod[s] is False:
+            # PRODUCTIVO INACTIVO (gana sobre OF futura por decisión 25-08)
+            out[s] = {"tipo": "inactivo", "valor": None}
+        elif s in of_map:
+            # PRODUCTIVO ACTIVO con OF futura vigente
+            out[s] = {"tipo": "auto", "valor": of_map[s].isoformat()}
+        else:
+            # PRODUCTIVO ACTIVO sin OF futura
+            out[s] = {"tipo": "sin_of", "valor": None}
+    return out
+
+
 # ─── Conciliación OF/TR (Fase 1) ─────────────────────────────────────────────
 # Mide OF ingresadas a SAP y su recepción (Terminal Report), SIN tocar el solver.
 # Grano: UNA FILA POR RECIBO. PK verificada con dato el 12-08:
