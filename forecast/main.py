@@ -1859,13 +1859,21 @@ def get_faltantes_evolutivo_endpoint(desde: str | None = None, hasta: str | None
 @app.get("/faltantes/excel", tags=["Faltantes"])
 def get_faltantes_excel(fecha: str):
     """Genera y descarga el Informe de Quiebres de Stock (xlsx) de un día
-    (YYYY-MM-DD): pestaña resumen por SKU + pestaña detalle por cliente."""
+    (YYYY-MM-DD): pestaña resumen por SKU + pestaña detalle por cliente.
+    Con FALTANTES_V2_ENABLED agrega las columnas Reposición y Solución."""
     try:
         from db_mrp import get_faltantes_por_fecha, get_explicaciones_faltantes
         import faltantes_excel
         filas = get_faltantes_por_fecha(fecha)
         explic = get_explicaciones_faltantes(fecha)
-        contenido = faltantes_excel.generar_bytes(fecha, filas, explic, con_explicaciones=True)
+        v2 = _faltantes_v2_on()
+        soluc = repo = None
+        if v2:
+            from db_mrp import get_soluciones_faltantes, get_fecha_reposicion_map
+            soluc = get_soluciones_faltantes(fecha)
+            repo = get_fecha_reposicion_map(fecha)
+        contenido = faltantes_excel.generar_bytes(
+            fecha, filas, explic, soluciones=soluc, reposicion=repo, con_v2=v2)
         nombre = f"Informe_Quiebres_{fecha}.xlsx"
         return Response(
             content=contenido,

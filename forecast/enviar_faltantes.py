@@ -42,6 +42,45 @@ CAUSA_LABEL = {"sin_stock": "Sin stock (producción)",
                "vu_insuficiente": "VU insuficiente (rotación)"}
 
 
+def _faltantes_v2_on() -> bool:
+    """True si el feature Faltantes V2 está activo (mismo flag que el backend)."""
+    return os.environ.get("FALTANTES_V2_ENABLED", "0") in ("1", "true", "True", "yes")
+
+
+def _repo_map_de(fechas):
+    """Mapa de reposición {sku: {tipo, valor}} para un rango de fechas (Faltantes V2).
+    La fecha de reposición es en vivo: para cada día del informe se calcula contra
+    esa fecha (umbral 'futuro' inclusive). Cuando el informe cubre varios días
+    (lunes: vie+sáb+dom), gana el mapa del día MÁS RECIENTE (última fecha), que es
+    el más representativo del estado actual. Devuelve {} si V2 está off."""
+    if not _faltantes_v2_on() or not fechas:
+        return {}
+    try:
+        from db_mrp import get_fecha_reposicion_map
+        # usar la última fecha del rango como referencia (la más reciente)
+        ref = sorted(fechas)[-1]
+        return get_fecha_reposicion_map(ref)
+    except Exception as e:
+        logger.warning("No se pudo calcular reposición V2 (%s). Se omite.", e)
+        return {}
+
+
+def _repo_txt_html(rp):
+    """Texto de reposición para el cuerpo HTML del correo (Faltantes V2)."""
+    if not rp:
+        return ""
+    tipo = rp.get("tipo"); valor = rp.get("valor")
+    if tipo == "auto":
+        return _fecha_txt(valor) if valor else ""
+    if tipo == "inactivo":
+        return "SKU inactivo"
+    if tipo == "sin_of":
+        return "Sin OF futura"
+    if tipo == "manual":
+        return _fecha_txt(valor) if valor else "—"
+    return ""
+
+
 def _fecha_txt(f):
     p = str(f).split("-")
     return f"{p[2]}-{p[1]}-{p[0]}" if len(p) == 3 else str(f)
@@ -93,8 +132,12 @@ def _tabla_por_dia(filas):
       </table>"""
 
 
-def _cuerpo_html(fecha, filas):
-    """Arma el cuerpo HTML: total, split por causa, top SKU."""
+def _cuerpo_html(fecha, filas, reposicion=None):
+    """Arma el cuerpo HTML: total, split por causa, top SKU.
+    reposicion: dict opcional {sku: {tipo, valor}} — si se pasa (Faltantes V2),
+    agrega la columna 'Reposición' a la tabla de productos."""
+    reposicion = reposicion or {}
+    con_repo = bool(reposicion)
     total = sum(float(r.get("faltante_cj", 0) or 0) for r in filas)
     por_causa = {}
     por_sku = {}
@@ -115,10 +158,16 @@ def _cuerpo_html(fecha, filas):
         f"<tr><td style='padding:4px 12px'>{CAUSA_LABEL.get(c, c)}</td>"
         f"<td style='padding:4px 12px;text-align:right'><b>{v:,.0f}</b> cj</td></tr>"
         for c, v in sorted(por_causa.items(), key=lambda x: -x[1]))
+    # columna extra de reposición (Faltantes V2)
+    col_repo_hdr = ("<th style='padding:4px 12px;text-align:left'>Reposición</th>"
+                    if con_repo else "")
     filas_top = "".join(
         f"<tr><td style='padding:3px 12px'>{d}</td>"
         f"<td style='padding:3px 12px;color:#666'>{s}</td>"
-        f"<td style='padding:3px 12px;text-align:right'>{v:,.0f} cj</td></tr>"
+        f"<td style='padding:3px 12px;text-align:right'>{v:,.0f} cj</td>"
+        + (f"<td style='padding:3px 12px;color:#444'>{_repo_txt_html(reposicion.get(s))}</td>"
+           if con_repo else "")
+        + "</tr>"
         for (s, d), v in top)
 
     return f"""
@@ -138,7 +187,7 @@ def _cuerpo_html(fecha, filas):
         <tr style="background:#C0DCF0">
           <th style="padding:4px 12px;text-align:left">Cod. SAP</th>
           <th style="padding:4px 12px;text-align:left">Producto</th>
-          <th style="padding:4px 12px;text-align:right">Faltante</th></tr>
+          <th style="padding:4px 12px;text-align:right">Faltante</th>{col_repo_hdr}</tr>
         {filas_top}
       </table>
       {_tabla_por_dia(filas)}
@@ -184,14 +233,20 @@ def enviar(fecha=None, destinatarios=None, desde=None, hasta=None):
     filas = _filas_de(fechas)
     logger.info("Faltantes de %s (%d día/s): %d filas.", etiqueta, len(fechas), len(filas))
 
+    # Faltantes V2: el correo 8 AM lleva la fecha de reposición (automática, y la
+    # manual autollenada si existe), pero NO explicación ni solución (aún nadie las
+    # cargó — la ventana de carga es 8-11).
+    repo_map = _repo_map_de(fechas)
+    con_v2 = _faltantes_v2_on()
+
     msg = MIMEMultipart("mixed")
     msg["Subject"] = f"Informe de Quiebres de Stock — {_fecha_txt(etiqueta)} — Traverso"
     msg["From"] = formataddr((str(Header(SMTP_FROM_NAME, "utf-8")), SMTP_USER))
     msg["To"] = ", ".join(dest_list)
-    msg.attach(MIMEText(_cuerpo_html(etiqueta, filas), "html", "utf-8"))
+    msg.attach(MIMEText(_cuerpo_html(etiqueta, filas, reposicion=repo_map), "html", "utf-8"))
 
     # adjuntar Excel (siempre, aunque no haya faltantes, para dejar registro)
-    xls = faltantes_excel.generar_bytes(etiqueta, filas)
+    xls = faltantes_excel.generar_bytes(etiqueta, filas, reposicion=repo_map, con_v2=con_v2)
     adj = MIMEApplication(xls, _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     adj.add_header("Content-Disposition", "attachment",
                    filename=f"Informe_Quiebres_{sufijo_archivo}.xlsx")
@@ -207,10 +262,16 @@ def enviar(fecha=None, destinatarios=None, desde=None, hasta=None):
     return True
 
 
-def _cuerpo_html_final(fecha, filas, explicaciones):
-    """Cuerpo HTML del correo final (11 AM): base + tabla de explicaciones por SKU."""
-    base = _cuerpo_html(fecha, filas)
-    # tabla de explicaciones por SKU (solo las que tienen texto)
+def _cuerpo_html_final(fecha, filas, explicaciones, soluciones=None, reposicion=None):
+    """Cuerpo HTML del correo final (11 AM): base + tabla de explicaciones por SKU.
+    soluciones/reposicion: Faltantes V2. Si se pasan, el cuerpo base lleva la
+    columna Reposición y la tabla de gestión incluye la Solución junto a la
+    Explicación."""
+    soluciones = soluciones or {}
+    reposicion = reposicion or {}
+    con_v2 = bool(soluciones) or bool(reposicion)
+    base = _cuerpo_html(fecha, filas, reposicion=reposicion)
+    # tabla de explicaciones (+ solución en V2) por SKU
     skus_con_falta = {}
     for r in filas:
         k = (r["sku"], r.get("descripcion", ""))
@@ -221,21 +282,47 @@ def _cuerpo_html_final(fecha, filas, explicaciones):
         ex = explicaciones.get(sku, {})
         txt = (ex.get("explicacion") or "").strip()
         autor = (ex.get("autor") or "").strip()
-        if not txt:
-            continue  # solo mostramos SKU que tienen explicación cargada
+        so = soluciones.get(sku, {})
+        txt_sol = (so.get("solucion") or "").strip()
+        aut_sol = (so.get("solucion_autor") or "").strip()
+        # En V2 mostramos la fila si hay explicación O solución; sin V2, solo si hay explicación
+        if con_v2:
+            if not txt and not txt_sol:
+                continue
+        else:
+            if not txt:
+                continue
         meta = f"<span style='color:#888;font-size:11px'> — {autor}</span>" if autor else ""
-        filas_exp.append(
-            f"<tr><td style='padding:4px 12px;vertical-align:top'><b>{sku}</b><br>"
-            f"<span style='color:#666;font-size:11px'>{desc}</span></td>"
-            f"<td style='padding:4px 12px'>{txt}{meta}</td></tr>")
+        celda_expl = f"{txt}{meta}" if txt else "<span style='color:#bbb'>—</span>"
+        if con_v2:
+            meta_sol = f"<span style='color:#888;font-size:11px'> — {aut_sol}</span>" if aut_sol else ""
+            celda_sol = f"{txt_sol}{meta_sol}" if txt_sol else "<span style='color:#bbb'>—</span>"
+            filas_exp.append(
+                f"<tr><td style='padding:4px 12px;vertical-align:top'><b>{sku}</b><br>"
+                f"<span style='color:#666;font-size:11px'>{desc}</span></td>"
+                f"<td style='padding:4px 12px;vertical-align:top'>{celda_expl}</td>"
+                f"<td style='padding:4px 12px;vertical-align:top'>{celda_sol}</td></tr>")
+        else:
+            filas_exp.append(
+                f"<tr><td style='padding:4px 12px;vertical-align:top'><b>{sku}</b><br>"
+                f"<span style='color:#666;font-size:11px'>{desc}</span></td>"
+                f"<td style='padding:4px 12px'>{celda_expl}</td></tr>")
 
     if filas_exp:
+        if con_v2:
+            cab = ("<th style='padding:6px 12px;text-align:left'>Producto</th>"
+                   "<th style='padding:6px 12px;text-align:left'>Explicación</th>"
+                   "<th style='padding:6px 12px;text-align:left'>Solución propuesta</th>")
+            titulo = "Explicaciones y soluciones incorporadas por las áreas:"
+        else:
+            cab = ("<th style='padding:6px 12px;text-align:left'>Producto</th>"
+                   "<th style='padding:6px 12px;text-align:left'>Explicación</th>")
+            titulo = "Explicaciones incorporadas por las áreas:"
         tabla_exp = f"""
-      <p style="margin-top:16px"><b>Explicaciones incorporadas por las áreas:</b></p>
+      <p style="margin-top:16px"><b>{titulo}</b></p>
       <table style="border-collapse:collapse;width:100%">
         <tr style="background:#1A2D4D;color:#fff">
-          <th style="padding:6px 12px;text-align:left">Producto</th>
-          <th style="padding:6px 12px;text-align:left">Explicación</th></tr>
+          {cab}</tr>
         {''.join(filas_exp)}
       </table>"""
     else:
@@ -284,6 +371,19 @@ def enviar_final(fecha=None, destinatarios=None, desde=None, hasta=None):
     explic = {}
     for f in fechas:
         explic.update(get_explicaciones_faltantes(f) or {})
+
+    # Faltantes V2: soluciones + reposición (solo si el feature está on)
+    con_v2 = _faltantes_v2_on()
+    soluc = {}
+    if con_v2:
+        try:
+            from db_mrp import get_soluciones_faltantes
+            for f in fechas:
+                soluc.update(get_soluciones_faltantes(f) or {})
+        except Exception as e:
+            logger.warning("No se pudieron leer soluciones V2 (%s). Se omiten.", e)
+    repo_map = _repo_map_de(fechas)
+
     logger.info("Informe final de %s (%d día/s): %d filas, %d explicaciones.",
                 etiqueta, len(fechas), len(filas),
                 len([e for e in explic.values() if (e.get('explicacion') or '').strip()]))
@@ -292,9 +392,12 @@ def enviar_final(fecha=None, destinatarios=None, desde=None, hasta=None):
     msg["Subject"] = f"Informe de Quiebres de Stock (final) — {_fecha_txt(etiqueta)} — Traverso"
     msg["From"] = formataddr((str(Header(SMTP_FROM_NAME, "utf-8")), SMTP_USER))
     msg["To"] = ", ".join(dest_list)
-    msg.attach(MIMEText(_cuerpo_html_final(etiqueta, filas, explic), "html", "utf-8"))
+    msg.attach(MIMEText(_cuerpo_html_final(etiqueta, filas, explic,
+                                           soluciones=soluc, reposicion=repo_map),
+                        "html", "utf-8"))
 
-    xls = faltantes_excel.generar_bytes(etiqueta, filas, explic)
+    xls = faltantes_excel.generar_bytes(etiqueta, filas, explic,
+                                        soluciones=soluc, reposicion=repo_map, con_v2=con_v2)
     adj = MIMEApplication(xls, _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     adj.add_header("Content-Disposition", "attachment",
                    filename=f"Informe_Quiebres_{sufijo_archivo}.xlsx")

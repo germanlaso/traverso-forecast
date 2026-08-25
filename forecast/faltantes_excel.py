@@ -48,12 +48,36 @@ def _fecha_txt(f):
     return f"{p[2]}-{p[1]}-{p[0]}" if len(p) == 3 else str(f)
 
 
-def construir(fecha, filas, explicaciones=None):
+def _repo_txt(rp):
+    """Texto de la fecha de reposición según el tipo (Faltantes V2).
+    rp: {tipo, valor}. tipo ∈ auto|inactivo|sin_of|manual."""
+    if not rp:
+        return ""
+    tipo = rp.get("tipo")
+    valor = rp.get("valor")
+    if tipo == "auto":
+        return _fecha_txt(valor) if valor else ""
+    if tipo == "inactivo":
+        return "SKU inactivo"
+    if tipo == "sin_of":
+        return "Sin OF futura"
+    if tipo == "manual":
+        return _fecha_txt(valor) if valor else "—"
+    return ""
+
+
+def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None, con_v2=False):
     """fecha: str YYYY-MM-DD | date. filas: list de dicts de get_faltantes_por_fecha.
     explicaciones: dict opcional {sku: {explicacion, autor}} — si se pasa, agrega la
-    columna 'Explicación' a la tabla resumen por SKU. Devuelve un openpyxl Workbook."""
+    columna 'Explicación' a la tabla resumen por SKU.
+    soluciones: dict opcional {sku: {solucion, solucion_autor}} — Faltantes V2.
+    reposicion: dict opcional {sku: {tipo, valor}} — Faltantes V2 (fecha de reposición).
+    con_v2: si True, agrega las columnas 'Reposición' y 'Solución' (Faltantes V2).
+    Devuelve un openpyxl Workbook."""
     fecha_str = fecha if isinstance(fecha, str) else fecha.isoformat()
     explicaciones = explicaciones or {}
+    soluciones = soluciones or {}
+    reposicion = reposicion or {}
 
     # --- agregación por SKU ---
     porsku = {}
@@ -135,8 +159,18 @@ def construir(fecha, filas, explicaciones=None):
     hdr_row = 12
     con_expl = bool(explicaciones)
     headers = ["Producto", "Cod. SAP", "Causa", "Stock (cj)", "Programado (cj)", "Faltante (cj)", "%"]
-    if con_expl:
-        headers.append("Explicación")
+    # Índices de columnas variables (para alineación por columna, no por posición fija)
+    idx_repo = idx_expl = idx_sol = None
+    if con_v2:
+        # V2: Reposición | Explicación | Solución (las 3 de gestión juntas al final)
+        idx_repo = len(headers); headers.append("Reposición")
+        idx_expl = len(headers); headers.append("Explicación")
+        idx_sol  = len(headers); headers.append("Solución")
+        ws.column_dimensions["J"].width = 16   # Reposición
+        ws.column_dimensions["K"].width = 40   # Explicación
+        ws.column_dimensions["L"].width = 40   # Solución
+    elif con_expl:
+        idx_expl = len(headers); headers.append("Explicación")
         ws.column_dimensions["J"].width = 45   # columna de explicación
     for i, h in enumerate(headers):
         cell = ws.cell(hdr_row, 3 + i, h)
@@ -152,7 +186,20 @@ def construir(fecha, filas, explicaciones=None):
         vals = [g["descripcion"], g["sku"], causa_txt,
                 round(g["stock_ini_cj"], 0), round(g["programado_cj"], 0),
                 round(g["faltante_cj"], 0), pct]
-        if con_expl:
+        if con_v2:
+            # Reposición (texto según tipo)
+            vals.append(_repo_txt(reposicion.get(g["sku"])))
+            # Explicación
+            ex = explicaciones.get(g["sku"], {})
+            txt_e = (ex.get("explicacion") or "").strip()
+            aut_e = (ex.get("autor") or "").strip()
+            vals.append(f"{txt_e}  ({aut_e})" if (txt_e and aut_e) else txt_e)
+            # Solución
+            so = soluciones.get(g["sku"], {})
+            txt_s = (so.get("solucion") or "").strip()
+            aut_s = (so.get("solucion_autor") or "").strip()
+            vals.append(f"{txt_s}  ({aut_s})" if (txt_s and aut_s) else txt_s)
+        elif con_expl:
             ex = explicaciones.get(g["sku"], {})
             txt = (ex.get("explicacion") or "").strip()
             autor = (ex.get("autor") or "").strip()
@@ -170,7 +217,9 @@ def construir(fecha, filas, explicaciones=None):
             elif i == 6:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.number_format = "0.0%"
-            elif con_expl and i == 7:
+            elif i == idx_repo:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif i in (idx_expl, idx_sol):
                 cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
@@ -242,9 +291,9 @@ def construir(fecha, filas, explicaciones=None):
     return wb
 
 
-def generar_bytes(fecha, filas, explicaciones=None):
+def generar_bytes(fecha, filas, explicaciones=None, soluciones=None, reposicion=None, con_v2=False):
     """Devuelve los bytes del .xlsx (para servir por HTTP)."""
-    wb = construir(fecha, filas, explicaciones)
+    wb = construir(fecha, filas, explicaciones, soluciones, reposicion, con_v2)
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
