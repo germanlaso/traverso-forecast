@@ -243,7 +243,16 @@ export default function Faltantes() {
   };
 
   return (
-    <div>
+    <div style={v2On ? {
+      // Faltantes V2: la tabla tiene 11 columnas y no cabe en el maxWidth:1100
+      // del contenedor general (App.js s.main). Solo esta vista (y solo con el
+      // feature activo) se ensancha, sin tocar el layout de las demás pestañas.
+      // Margen negativo simétrico para desbordar el cap del padre por igual a
+      // ambos lados; el overflowX de la tabla queda como red de seguridad en
+      // pantallas donde aun así no alcance.
+      marginLeft: "calc((1100px - min(90vw, 1480px)) / 2)",
+      marginRight: "calc((1100px - min(90vw, 1480px)) / 2)",
+    } : undefined}>
       <div style={s.top}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>📉 Faltantes por Quiebre</div>
         <div style={{ fontSize: 12, opacity: .9, marginTop: 2 }}>

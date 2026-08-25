@@ -1273,11 +1273,15 @@ def get_fecha_reposicion_map(fecha_stock) -> dict:
     fs = str(fecha_stock)[:10]
 
     with get_session() as session:
-        # 1) universo productivo + estado activo
+        # 1) universo PRODUCTIVO = solo tipo='PRODUCCION'. Los importados/maquila
+        #    (tipo != 'PRODUCCION') quedan FUERA -> caen en la rama 'manual', igual
+        #    que los SKU que no están en mrp_sku_params. Lista blanca: cualquier
+        #    tipo nuevo distinto de PRODUCCION se trata como no productivo (seguro).
+        #    (fix 25-08: 500170180 KIKKOMAN tipo=IMPORTACION aparecía como 'sin_of').
         prod = {
             str(r[0]).strip(): bool(r[1])
             for r in session.execute(text(
-                "SELECT sku, activo FROM mrp_sku_params"
+                "SELECT sku, activo FROM mrp_sku_params WHERE tipo = 'PRODUCCION'"
             )).fetchall()
         }
         # 2) próxima OF vigente futura por SKU (versión máxima por OF, ≠CANCELADA,
