@@ -47,19 +47,43 @@ def _faltantes_v2_on() -> bool:
     return os.environ.get("FALTANTES_V2_ENABLED", "0") in ("1", "true", "True", "yes")
 
 
-def _repo_map_de(fechas):
-    """Mapa de reposición {sku: {tipo, valor}} para un rango de fechas (Faltantes V2).
-    La fecha de reposición es en vivo: para cada día del informe se calcula contra
-    esa fecha (umbral 'futuro' inclusive). Cuando el informe cubre varios días
-    (lunes: vie+sáb+dom), gana el mapa del día MÁS RECIENTE (última fecha), que es
-    el más representativo del estado actual. Devuelve {} si V2 está off."""
-    if not _faltantes_v2_on() or not fechas:
+def _repo_map_de(filas):
+    """Mapa de reposición {sku: {tipo, valor}} para las filas del informe (Faltantes V2).
+
+    Regla (b): para CADA SKU la reposición se calcula contra la fecha MÁS RECIENTE
+    en que ESE SKU tuvo faltante dentro del informe — NO contra una única fecha del
+    rango. Esto hace que el correo coincida con el dashboard (que evalúa la
+    reposición por la fecha de la fila): una OF del 29 es 'futura' para un quiebre
+    del 28 aunque el informe llegue hasta el 30.
+
+    Antes se usaba ref = max(fechas) para todas las filas -> un SKU que solo quebró
+    el 28 se medía contra el 30 y una OF del 29 salía como 'Sin OF futura' (bug).
+
+    Devuelve {} si V2 está off o no hay filas."""
+    if not _faltantes_v2_on() or not filas:
         return {}
     try:
         from db_mrp import get_fecha_reposicion_map
-        # usar la última fecha del rango como referencia (la más reciente)
-        ref = sorted(fechas)[-1]
-        return get_fecha_reposicion_map(ref)
+        # última fecha de quiebre por SKU (regla b)
+        ultima_por_sku = {}
+        for r in filas:
+            sku = r.get("sku")
+            f = str(r.get("fecha", ""))[:10]
+            if not sku or not f:
+                continue
+            if sku not in ultima_por_sku or f > ultima_por_sku[sku]:
+                ultima_por_sku[sku] = f
+        # un mapa por cada fecha involucrada (cacheado: máx. una llamada por fecha),
+        # y se toma la entrada del SKU contra SU última fecha de quiebre.
+        cache, out = {}, {}
+        for sku, f in ultima_por_sku.items():
+            m = cache.get(f)
+            if m is None:
+                m = get_fecha_reposicion_map(f)
+                cache[f] = m
+            if sku in m:
+                out[sku] = m[sku]
+        return out
     except Exception as e:
         logger.warning("No se pudo calcular reposición V2 (%s). Se omite.", e)
         return {}
@@ -236,7 +260,7 @@ def enviar(fecha=None, destinatarios=None, desde=None, hasta=None):
     # Faltantes V2: el correo 8 AM lleva la fecha de reposición (automática, y la
     # manual autollenada si existe), pero NO explicación ni solución (aún nadie las
     # cargó — la ventana de carga es 8-11).
-    repo_map = _repo_map_de(fechas)
+    repo_map = _repo_map_de(filas)
     con_v2 = _faltantes_v2_on()
 
     msg = MIMEMultipart("mixed")
@@ -382,7 +406,7 @@ def enviar_final(fecha=None, destinatarios=None, desde=None, hasta=None):
                 soluc.update(get_soluciones_faltantes(f) or {})
         except Exception as e:
             logger.warning("No se pudieron leer soluciones V2 (%s). Se omiten.", e)
-    repo_map = _repo_map_de(fechas)
+    repo_map = _repo_map_de(filas)
 
     logger.info("Informe final de %s (%d día/s): %d filas, %d explicaciones.",
                 etiqueta, len(fechas), len(filas),
