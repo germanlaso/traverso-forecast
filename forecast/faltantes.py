@@ -80,6 +80,19 @@ SKU_EXCLUIDOS = {
     "500170200", "141041660", "141041650",       # excluidos por logística/negocio
 }
 
+# Clientes excluidos del informe: sus OV NO cuentan como faltante.
+# Motivo: corresponden a "castigo a transportistas por pérdida de producto", no a
+# una entrega física, por lo que contarlas sería un falso positivo. Los códigos
+# deben coincidir con el cod_cliente que persiste el motor (formato SAP: guion, DV
+# y 'C' final). Se comparan normalizados (.strip().upper()) para evitar un no-match
+# silencioso si HANA devuelve el código con otro formato.
+# TODO: a futuro administrar esta lista desde el dashboard (tabla mrp_clientes_excluidos),
+#       reemplazando esta constante.
+CLIENTES_EXCLUIDOS = {
+    "76383478-6C",   # TRANSPORTE SUPERTRANS LIMITADA
+    "76503787-5C",   # TRANSPORTES ANTILLANCA SPA
+}
+
 # Umbral de vida útil para despacho:
 #  - Si el par (cliente, SKU) está en la tabla de logística (mrp_vu_cliente_sku),
 #    se usa su mínimo en DÍAS absolutos.
@@ -299,6 +312,8 @@ def _agregar_ov(grupos, desde, hasta):
             continue
         if sku in SKU_EXCLUIDOS or _es_unitario(g["descripcion"]):
             continue
+        if g["cod_cli"].strip().upper() in CLIENTES_EXCLUIDOS:
+            continue  # castigo a transportistas por pérdida de producto (no es entrega física)
         entregado_total = sum(c for (_fe, c) in g["entregas"])
         no_ent = g["programado"] - entregado_total
         if no_ent < 0:
