@@ -100,6 +100,26 @@ CLIENTES_EXCLUIDOS = {
 PCT_VU_DEFAULT = 0.50
 DIAS_POR_MES = 30
 
+# Override del % de VU por SKU: para estos SKU el default es MENOR al 50% general.
+# Solo afecta al DEFAULT: si el par (cod_cliente, sku) está en mrp_vu_cliente_sku,
+# manda la tabla (días absolutos). El override aplica a los clientes de estos SKU que
+# NO estén en la tabla. Motivo por SKU: límite VU menor por mayor VU total.
+# TODO: migrar a administración por dashboard (hoy constante en código).
+PCT_VU_POR_SKU = {
+    "410010185": 0.25,  # SOPA INST. CARNE TRAVERSO 12x65 POTE — VU total 18 meses
+    "410010585": 0.25,  # FIDEOS INST. SACHET SABOR CARNE 24x85 SACHET — VU total 24 meses
+    "410110185": 0.25,  # SOPA INST. CARNE PICANTE TRAVERSO 12x65 POTE — VU total 24 meses
+    "420010185": 0.25,  # SOPA INST. CAMARON TRAVERSO 12x65 POTE — VU total 18 meses
+    "430010185": 0.25,  # SOPA INST. POLLO TRAVERSO 12x65 POTE — VU total 18 meses
+    "430010585": 0.25,  # FIDEOS INST. SACHET SABOR POLLO 24x85 SACHET — VU total 24 meses
+    "430110185": 0.25,  # SOPA INST. POLLO PICANTE TRAVERSO 12x65 POTE — VU total 24 meses
+    "440010185": 0.25,  # SOPA INST. VEGETALES TRAVERSO 12x65 POTE — VU total 18 meses
+    "440010585": 0.25,  # FIDEOS INST. SACHET SABOR VERDURAS 24x85 SACHET — VU total 24 meses
+    "460010185": 0.25,  # SOPA INST. QUESO TRAVERSO 12x65 POTE — VU total 24 meses
+    "460010585": 0.25,  # FIDEOS INST. SACHET SABOR QUESO 24x85 SACHET — VU total 24 meses
+    "470010185": 0.25,  # SOPA INST. TOMATE TRAVERSO 12x65 POTE — VU total 24 meses
+}
+
 
 def _as_date(v):
     if v is None:
@@ -146,7 +166,8 @@ def _umbral_dias(cod_cliente, sku, meses_vu, vu_tabla):
     if md is not None:
         return md
     vu_total = (meses_vu or 0) * DIAS_POR_MES
-    return PCT_VU_DEFAULT * vu_total if vu_total > 0 else None
+    pct = PCT_VU_POR_SKU.get(sku, PCT_VU_DEFAULT)     # override por SKU; si no está, 50% general
+    return pct * vu_total if vu_total > 0 else None
 
 
 # ── Vida útil por SKU ─────────────────────────────────────────────────────────
