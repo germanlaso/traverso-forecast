@@ -213,21 +213,37 @@ export default function Faltantes() {
     () => serie.map((r) => ({ ...r, name: fmtDs(r.fecha) })), [serie]);
 
   // Agrupar el detalle por SKU: fila resumen (faltante total del SKU) + clientes.
+  // Agrupación del informe (debe coincidir con faltantes.py)
+  const GRUPO_ORDEN = { "Producción": 0, "Importación / Maquila / Otros": 1 };
+  const grupoDe = (r) => {
+    const g = (r.grupo || "").trim();
+    return (g in GRUPO_ORDEN) ? g : "Producción";
+  };
+
   const porSku = useMemo(() => {
     const m = new Map();
     for (const r of detalleF) {
       if (!m.has(r.sku)) {
         m.set(r.sku, { sku: r.sku, descripcion: r.descripcion,
           stock_ini_cj: r.stock_ini_cj, programado_cj: r.programado_cj,
-          stock_estimado: r.stock_estimado, faltante_cj: 0, clientes: [], causas: new Set() });
+          stock_estimado: r.stock_estimado, grupo: grupoDe(r),
+          faltante_cj: 0, clientes: [], causas: new Set() });
       }
       const g = m.get(r.sku);
       g.faltante_cj += (r.faltante_cj || 0);
       g.clientes.push(r);
       if (r.causa) g.causas.add(r.causa);
     }
-    return Array.from(m.values()).sort((a, b) => b.faltante_cj - a.faltante_cj);
+    // orden: grupo (Producción primero), luego faltante desc
+    return Array.from(m.values()).sort((a, b) =>
+      (GRUPO_ORDEN[a.grupo] - GRUPO_ORDEN[b.grupo]) || (b.faltante_cj - a.faltante_cj));
   }, [detalleF]);
+
+  const subtotGrupo = useMemo(() => {
+    const t = {};
+    for (const g of porSku) t[g.grupo] = (t[g.grupo] || 0) + (g.faltante_cj || 0);
+    return t;
+  }, [porSku]);
 
   const s = {
     card:  { background: "#fff", border: `0.5px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 14 },
@@ -379,8 +395,19 @@ export default function Faltantes() {
               <tbody>
                 {porSku.map((g, gi) => {
                   const abierto = !!expandido[g.sku];
+                  const showBand = gi === 0 || porSku[gi - 1].grupo !== g.grupo;
+                  const totalCols = 9 + (v2On ? 2 : 0);
                   return (
                     <React.Fragment key={g.sku}>
+                      {showBand && (
+                        <tr>
+                          <td colSpan={totalCols} style={{
+                            background: "#1A2D4D", color: "#fff", fontWeight: 700,
+                            padding: "6px 10px", fontSize: 12, letterSpacing: 0.3 }}>
+                            {g.grupo.toUpperCase()} — {fmtN(subtotGrupo[g.grupo])} cj
+                          </td>
+                        </tr>
+                      )}
                       {/* Fila resumen del SKU (clickeable) */}
                       <tr onClick={() => setExpandido((e) => ({ ...e, [g.sku]: !e[g.sku] }))}
                           style={{ background: gi % 2 === 0 ? "#fff" : C.grayLt, cursor: "pointer" }}>
