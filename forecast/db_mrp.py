@@ -369,10 +369,14 @@ def crear_tablas_params():
                 faltante_cj      NUMERIC(14,2) DEFAULT 0,
                 stock_estimado   BOOLEAN     DEFAULT FALSE,
                 causa            VARCHAR(20) DEFAULT '',
+                grupo            VARCHAR(40) DEFAULT '',
+                cat_comercial    VARCHAR(40) DEFAULT '',
                 updated_at       TIMESTAMP   DEFAULT NOW(),
                 PRIMARY KEY (fecha, sku, cod_cliente)
             );
             ALTER TABLE mrp_faltantes ADD COLUMN IF NOT EXISTS causa VARCHAR(20) DEFAULT '';
+            ALTER TABLE mrp_faltantes ADD COLUMN IF NOT EXISTS grupo VARCHAR(40) DEFAULT '';
+            ALTER TABLE mrp_faltantes ADD COLUMN IF NOT EXISTS cat_comercial VARCHAR(40) DEFAULT '';
             CREATE INDEX IF NOT EXISTS ix_faltantes_fecha ON mrp_faltantes (fecha);
             CREATE INDEX IF NOT EXISTS ix_faltantes_sku   ON mrp_faltantes (sku);
 
@@ -786,14 +790,19 @@ def upsert_faltantes(filas: list[dict]):
     stock_estimado."""
     if not filas:
         return 0
+    for f in filas:                      # resguardo: llamadores viejos sin las claves nuevas
+        f.setdefault("grupo", "")
+        f.setdefault("cat_comercial", "")
     with get_session() as session:
         session.execute(text("""
             INSERT INTO mrp_faltantes
                 (fecha, sku, descripcion, cod_cliente, nom_cliente, stock_ini_cj,
-                 programado_cj, no_entregado_cj, faltante_cj, stock_estimado, causa, updated_at)
+                 programado_cj, no_entregado_cj, faltante_cj, stock_estimado, causa,
+                 grupo, cat_comercial, updated_at)
             VALUES
                 (:fecha, :sku, :descripcion, :cod_cliente, :nom_cliente, :stock_ini_cj,
-                 :programado_cj, :no_entregado_cj, :faltante_cj, :stock_estimado, :causa, NOW())
+                 :programado_cj, :no_entregado_cj, :faltante_cj, :stock_estimado, :causa,
+                 :grupo, :cat_comercial, NOW())
             ON CONFLICT (fecha, sku, cod_cliente) DO UPDATE SET
                 descripcion     = EXCLUDED.descripcion,
                 nom_cliente     = EXCLUDED.nom_cliente,
@@ -803,6 +812,8 @@ def upsert_faltantes(filas: list[dict]):
                 faltante_cj     = EXCLUDED.faltante_cj,
                 stock_estimado  = EXCLUDED.stock_estimado,
                 causa           = EXCLUDED.causa,
+                grupo           = EXCLUDED.grupo,
+                cat_comercial   = EXCLUDED.cat_comercial,
                 updated_at      = NOW()
         """), filas)
         session.commit()
@@ -823,7 +834,8 @@ def get_faltantes_por_fecha(fecha: str) -> list[dict]:
     with get_session() as session:
         rows = session.execute(text("""
             SELECT fecha, sku, descripcion, cod_cliente, nom_cliente, stock_ini_cj,
-                   programado_cj, no_entregado_cj, faltante_cj, stock_estimado, causa
+                   programado_cj, no_entregado_cj, faltante_cj, stock_estimado, causa,
+                   grupo, cat_comercial
             FROM mrp_faltantes WHERE fecha = :f
             ORDER BY faltante_cj DESC, sku
         """), {"f": fecha}).mappings().all()

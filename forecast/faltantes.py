@@ -100,6 +100,21 @@ CLIENTES_EXCLUIDOS = {
 PCT_VU_DEFAULT = 0.50
 DIAS_POR_MES = 30
 
+# ── Agrupación del informe: Producción vs Importación ────────────────────────
+# La categoría comercial (MaestraArticuloV2.CatComercial) define el grupo del SKU
+# en el informe. Estas categorías van a "Importación"; todo el resto (y los SKU
+# sin categoría) va a "Producción".
+# TODO: migrar la lista a administración por dashboard.
+CAT_IMPORTACION = {"KIKKOMAN", "MELITTA", "SOPAS"}
+GRUPO_PRODUCCION = "Producción"
+GRUPO_IMPORTACION = "Importación / Maquila / Otros"
+
+
+def grupo_de(cat):
+    """Grupo del informe según CatComercial. Sin categoría → Producción (default)."""
+    c = (cat or "").strip().upper()
+    return GRUPO_IMPORTACION if c in CAT_IMPORTACION else GRUPO_PRODUCCION
+
 # Override del % de VU por SKU: para estos SKU el default es MENOR al 50% general.
 # Solo afecta al DEFAULT: si el par (cod_cliente, sku) está en mrp_vu_cliente_sku,
 # manda la tabla (días absolutos). El override aplica a los clientes de estos SKU que
@@ -187,6 +202,22 @@ def _leer_vida_util(engine):
                 vu[s] = m
     logger.info("Vida útil: %d SKU PT.", len(vu))
     return vu
+
+
+def _leer_categorias(engine):
+    """{sku: CatComercial} de PT='Y', para agrupar el informe (Producción/Importación)."""
+    cats = {}
+    with engine.connect() as c:
+        res = c.execute(text("""
+            SELECT LTRIM(RTRIM([ItemCode])) AS sku, [CatComercial] AS cat
+            FROM dbo.MaestraArticuloV2 WHERE [PT] = 'Y'
+        """))
+        for sku, cat in res.fetchall():
+            s = str(sku).strip()
+            if s and s not in cats:
+                cats[s] = (str(cat).strip() if cat is not None else "")
+    logger.info("Categorías comerciales: %d SKU PT.", len(cats))
+    return cats
 
 
 # ── Stock por lote ────────────────────────────────────────────────────────────
@@ -358,6 +389,7 @@ def calcular_faltantes(desde, hasta, conn, engine):
     por_cli, prog_sd, desc, nom = _agregar_ov(grupos, desde, hasta)
 
     vu = _leer_vida_util(engine)
+    cats = _leer_categorias(engine)
     from db_mrp import get_vu_cliente_sku
     vu_tabla = get_vu_cliente_sku()
     logger.info("VU cliente×SKU (logística): %d pares.", len(vu_tabla))
@@ -393,8 +425,13 @@ def calcular_faltantes(desde, hasta, conn, engine):
             "faltante_cj":     round(no_ent, 2),
             "stock_estimado":  estimado,
             "causa":           causa,
+            "cat_comercial":   cats.get(sku, ""),
+            "grupo":           grupo_de(cats.get(sku, "")),
         })
-    filas.sort(key=lambda x: (x["fecha"], x["sku"], -x["faltante_cj"]))
+    # orden: por fecha, luego Producción antes que Importación, y dentro por faltante desc
+    _ord_grupo = {GRUPO_PRODUCCION: 0, GRUPO_IMPORTACION: 1}
+    filas.sort(key=lambda x: (x["fecha"], _ord_grupo.get(x["grupo"], 9),
+                              -x["faltante_cj"], x["sku"]))
     return filas
 
 

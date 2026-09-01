@@ -47,43 +47,19 @@ def _faltantes_v2_on() -> bool:
     return os.environ.get("FALTANTES_V2_ENABLED", "0") in ("1", "true", "True", "yes")
 
 
-def _repo_map_de(filas):
-    """Mapa de reposición {sku: {tipo, valor}} para las filas del informe (Faltantes V2).
-
-    Regla (b): para CADA SKU la reposición se calcula contra la fecha MÁS RECIENTE
-    en que ESE SKU tuvo faltante dentro del informe — NO contra una única fecha del
-    rango. Esto hace que el correo coincida con el dashboard (que evalúa la
-    reposición por la fecha de la fila): una OF del 29 es 'futura' para un quiebre
-    del 28 aunque el informe llegue hasta el 30.
-
-    Antes se usaba ref = max(fechas) para todas las filas -> un SKU que solo quebró
-    el 28 se medía contra el 30 y una OF del 29 salía como 'Sin OF futura' (bug).
-
-    Devuelve {} si V2 está off o no hay filas."""
-    if not _faltantes_v2_on() or not filas:
+def _repo_map_de(fechas):
+    """Mapa de reposición {sku: {tipo, valor}} para un rango de fechas (Faltantes V2).
+    La fecha de reposición es en vivo: para cada día del informe se calcula contra
+    esa fecha (umbral 'futuro' inclusive). Cuando el informe cubre varios días
+    (lunes: vie+sáb+dom), gana el mapa del día MÁS RECIENTE (última fecha), que es
+    el más representativo del estado actual. Devuelve {} si V2 está off."""
+    if not _faltantes_v2_on() or not fechas:
         return {}
     try:
         from db_mrp import get_fecha_reposicion_map
-        # última fecha de quiebre por SKU (regla b)
-        ultima_por_sku = {}
-        for r in filas:
-            sku = r.get("sku")
-            f = str(r.get("fecha", ""))[:10]
-            if not sku or not f:
-                continue
-            if sku not in ultima_por_sku or f > ultima_por_sku[sku]:
-                ultima_por_sku[sku] = f
-        # un mapa por cada fecha involucrada (cacheado: máx. una llamada por fecha),
-        # y se toma la entrada del SKU contra SU última fecha de quiebre.
-        cache, out = {}, {}
-        for sku, f in ultima_por_sku.items():
-            m = cache.get(f)
-            if m is None:
-                m = get_fecha_reposicion_map(f)
-                cache[f] = m
-            if sku in m:
-                out[sku] = m[sku]
-        return out
+        # usar la última fecha del rango como referencia (la más reciente)
+        ref = sorted(fechas)[-1]
+        return get_fecha_reposicion_map(ref)
     except Exception as e:
         logger.warning("No se pudo calcular reposición V2 (%s). Se omite.", e)
         return {}
@@ -133,6 +109,18 @@ def _filas_de(fechas):
     return filas
 
 
+# Agrupación del informe (debe coincidir con faltantes.py / faltantes_excel.py)
+GRUPO_PRODUCCION = "Producción"
+GRUPO_IMPORTACION = "Importación / Maquila / Otros"
+ORDEN_GRUPO = {GRUPO_PRODUCCION: 0, GRUPO_IMPORTACION: 1}
+
+
+def _grupo_de(row):
+    """Grupo de una fila; default Producción si falta o es desconocido."""
+    g = (row.get("grupo") or "").strip()
+    return g if g in ORDEN_GRUPO else GRUPO_PRODUCCION
+
+
 def _tabla_por_dia(filas):
     """Desglose por día. Solo se usa cuando el informe cubre más de una fecha
     (típicamente el lunes, que reporta viernes + fin de semana)."""
@@ -165,12 +153,20 @@ def _cuerpo_html(fecha, filas, reposicion=None):
     total = sum(float(r.get("faltante_cj", 0) or 0) for r in filas)
     por_causa = {}
     por_sku = {}
+    grupo_sku = {}
     for r in filas:
         cj = float(r.get("faltante_cj", 0) or 0)
         por_causa[r.get("causa", "")] = por_causa.get(r.get("causa", ""), 0) + cj
         k = (r["sku"], r.get("descripcion", ""))
         por_sku[k] = por_sku.get(k, 0) + cj
-    top = sorted(por_sku.items(), key=lambda x: -x[1])
+        grupo_sku[r["sku"]] = _grupo_de(r)
+    # subtotales por grupo + orden (Producción primero, luego faltante desc)
+    subtot_grupo = {}
+    for (s, _d), v in por_sku.items():
+        g = grupo_sku.get(s, GRUPO_PRODUCCION)
+        subtot_grupo[g] = subtot_grupo.get(g, 0) + v
+    top = sorted(por_sku.items(),
+                 key=lambda x: (ORDEN_GRUPO.get(grupo_sku.get(x[0][0], GRUPO_PRODUCCION), 0), -x[1]))
 
     if not filas:
         return (f"<p>Estimados,</p>"
@@ -185,14 +181,25 @@ def _cuerpo_html(fecha, filas, reposicion=None):
     # columna extra de reposición (Faltantes V2)
     col_repo_hdr = ("<th style='padding:4px 12px;text-align:left'>Reposición</th>"
                     if con_repo else "")
-    filas_top = "".join(
-        f"<tr><td style='padding:3px 12px'>{d}</td>"
-        f"<td style='padding:3px 12px;color:#666'>{s}</td>"
-        f"<td style='padding:3px 12px;text-align:right'>{v:,.0f} cj</td>"
-        + (f"<td style='padding:3px 12px;color:#444'>{_repo_txt_html(reposicion.get(s))}</td>"
-           if con_repo else "")
-        + "</tr>"
-        for (s, d), v in top)
+    _ncol = 4 if con_repo else 3
+    _partes = []
+    _grupo_actual = None
+    for (s, d), v in top:
+        g = grupo_sku.get(s, GRUPO_PRODUCCION)
+        if g != _grupo_actual:
+            _grupo_actual = g
+            _partes.append(
+                f"<tr style='background:#1A2D4D;color:#fff'>"
+                f"<td colspan='{_ncol}' style='padding:5px 12px'>"
+                f"<b>{g.upper()} — {subtot_grupo[g]:,.0f} cj</b></td></tr>")
+        _partes.append(
+            f"<tr><td style='padding:3px 12px'>{d}</td>"
+            f"<td style='padding:3px 12px;color:#666'>{s}</td>"
+            f"<td style='padding:3px 12px;text-align:right'>{v:,.0f} cj</td>"
+            + (f"<td style='padding:3px 12px;color:#444'>{_repo_txt_html(reposicion.get(s))}</td>"
+               if con_repo else "")
+            + "</tr>")
+    filas_top = "".join(_partes)
 
     return f"""
     <div style="font-family:Arial,sans-serif;font-size:13px;color:#1A2332">
@@ -260,7 +267,7 @@ def enviar(fecha=None, destinatarios=None, desde=None, hasta=None):
     # Faltantes V2: el correo 8 AM lleva la fecha de reposición (automática, y la
     # manual autollenada si existe), pero NO explicación ni solución (aún nadie las
     # cargó — la ventana de carga es 8-11).
-    repo_map = _repo_map_de(filas)
+    repo_map = _repo_map_de(fechas)
     con_v2 = _faltantes_v2_on()
 
     msg = MIMEMultipart("mixed")
@@ -406,7 +413,7 @@ def enviar_final(fecha=None, destinatarios=None, desde=None, hasta=None):
                 soluc.update(get_soluciones_faltantes(f) or {})
         except Exception as e:
             logger.warning("No se pudieron leer soluciones V2 (%s). Se omiten.", e)
-    repo_map = _repo_map_de(filas)
+    repo_map = _repo_map_de(fechas)
 
     logger.info("Informe final de %s (%d día/s): %d filas, %d explicaciones.",
                 etiqueta, len(fechas), len(filas),

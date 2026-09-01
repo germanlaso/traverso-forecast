@@ -28,6 +28,22 @@ BLANCO = "FFFFFF"
 
 CAUSA_LABEL = {"sin_stock": "SIN STOCK", "vu_insuficiente": "VU INSUFICIENTE"}
 
+# Agrupación del informe (debe coincidir con faltantes.py)
+GRUPO_PRODUCCION = "Producción"
+GRUPO_IMPORTACION = "Importación / Maquila / Otros"
+ORDEN_GRUPO = {GRUPO_PRODUCCION: 0, GRUPO_IMPORTACION: 1}
+
+
+def _grupo_de(row):
+    """Grupo de una fila; default Producción si falta o es desconocido."""
+    g = (row.get("grupo") or "").strip()
+    return g if g in ORDEN_GRUPO else GRUPO_PRODUCCION
+
+
+def _miles(n):
+    """Formato de miles con punto (es-CL): 2519 -> '2.519'."""
+    return f"{int(round(n)):,}".replace(",", ".")
+
 _thin = Side(style="thin", color="D3D1C7")
 BORDE = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 
@@ -88,13 +104,16 @@ def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None
             g = {"sku": sku, "descripcion": r.get("descripcion", ""),
                  "stock_ini_cj": r.get("stock_ini_cj", 0),
                  "programado_cj": r.get("programado_cj", 0),
-                 "faltante_cj": 0.0, "causas": set(), "n_cli": 0}
+                 "faltante_cj": 0.0, "causas": set(), "n_cli": 0,
+                 "grupo": _grupo_de(r)}
             porsku[sku] = g
         g["faltante_cj"] += float(r.get("faltante_cj", 0) or 0)
         g["n_cli"] += 1
         if r.get("causa"):
             g["causas"].add(r["causa"])
-    resumen = sorted(porsku.values(), key=lambda x: -x["faltante_cj"])
+    # orden: grupo (Producción primero), luego faltante desc
+    resumen = sorted(porsku.values(),
+                     key=lambda x: (ORDEN_GRUPO.get(x["grupo"], 0), -x["faltante_cj"]))
 
     total_cj   = sum(g["faltante_cj"] for g in resumen)
     n_prod     = len(resumen)
@@ -178,8 +197,30 @@ def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = BORDE
 
-    r = hdr_row + 1
+    # subtotales por grupo (para las bandas de sección)
+    subtot = defaultdict(float)
     for g in resumen:
+        subtot[g["grupo"]] += g["faltante_cj"]
+
+    def _banda(row, texto):
+        c1, c2 = 3, 3 + len(headers) - 1
+        ws.merge_cells(start_row=row, start_column=c1, end_row=row, end_column=c2)
+        for cc in range(c1, c2 + 1):
+            b = ws.cell(row, cc); b.fill = _fill(AZUL); b.border = BORDE
+        cell = ws.cell(row, c1, texto)
+        cell.font = _f(9, True, BLANCO)
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[row].height = 18
+
+    r = hdr_row + 1
+    grupo_actual = None
+    zebra = 0
+    for g in resumen:
+        if g["grupo"] != grupo_actual:
+            grupo_actual = g["grupo"]
+            _banda(r, f'{grupo_actual.upper()}  —  {_miles(subtot[grupo_actual])} cj')
+            r += 1
+            zebra = 0
         causas = g["causas"]
         causa_txt = "MIXTA" if len(causas) > 1 else (CAUSA_LABEL.get(next(iter(causas)), "") if causas else "")
         pct = (g["faltante_cj"] / total_cj) if total_cj else 0
@@ -207,7 +248,7 @@ def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None
         for i, v in enumerate(vals):
             cell = ws.cell(r, 3 + i, v)
             cell.font = _f(8, False, "1A2332", name="Calibri")
-            cell.fill = _fill(GRIS if (r - hdr_row) % 2 else BLANCO)
+            cell.fill = _fill(GRIS if zebra % 2 else BLANCO)
             cell.border = BORDE
             if i == 0:
                 cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
@@ -224,8 +265,9 @@ def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
         r += 1
+        zebra += 1
 
-    # fila total
+    # fila total general
     ws.cell(r, 3, "TOTAL").font = _f(9, True)
     tc = ws.cell(r, 8, round(total_cj, 0)); tc.font = _f(9, True)
     tc.number_format = "#,##0"; tc.alignment = Alignment(horizontal="right")
@@ -268,16 +310,40 @@ def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = BORDE
 
-    filas_ord = sorted(filas, key=lambda x: (x["sku"], -float(x.get("faltante_cj", 0) or 0)))
+    # orden: grupo (Producción primero), luego faltante desc
+    filas_ord = sorted(filas, key=lambda x: (ORDEN_GRUPO.get(_grupo_de(x), 0),
+                                             -float(x.get("faltante_cj", 0) or 0), x["sku"]))
+    subtot2 = defaultdict(float)
+    for x in filas:
+        subtot2[_grupo_de(x)] += float(x.get("faltante_cj", 0) or 0)
+
+    def _banda2(row, texto):
+        c1, c2 = 3, 3 + len(h2) - 1
+        ws2.merge_cells(start_row=row, start_column=c1, end_row=row, end_column=c2)
+        for cc in range(c1, c2 + 1):
+            b = ws2.cell(row, cc); b.fill = _fill(AZUL); b.border = BORDE
+        cell = ws2.cell(row, c1, texto)
+        cell.font = _f(9, True, BLANCO)
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+        ws2.row_dimensions[row].height = 18
+
     rr = 8
+    grupo_actual = None
+    zebra = 0
     for r0 in filas_ord:
+        gr = _grupo_de(r0)
+        if gr != grupo_actual:
+            grupo_actual = gr
+            _banda2(rr, f'{gr.upper()}  —  {_miles(subtot2[gr])} cj')
+            rr += 1
+            zebra = 0
         causa_txt = CAUSA_LABEL.get(r0.get("causa"), r0.get("causa", ""))
         vals = [r0.get("descripcion", ""), r0["sku"], r0.get("nom_cliente", ""),
                 causa_txt, round(float(r0.get("faltante_cj", 0) or 0), 0)]
         for i, v in enumerate(vals):
             cell = ws2.cell(rr, 3 + i, v)
             cell.font = _f(8, False, "1A2332", name="Calibri")
-            cell.fill = _fill(GRIS if (rr % 2) else BLANCO)
+            cell.fill = _fill(GRIS if zebra % 2 else BLANCO)
             cell.border = BORDE
             if i == 4:
                 cell.alignment = Alignment(horizontal="right", vertical="center")
@@ -287,6 +353,7 @@ def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
         rr += 1
+        zebra += 1
 
     return wb
 
