@@ -104,16 +104,25 @@ DIAS_POR_MES = 30
 # La categoría comercial (MaestraArticuloV2.CatComercial) define el grupo del SKU
 # en el informe. Estas categorías van a "Importación"; todo el resto (y los SKU
 # sin categoría) va a "Producción".
+# Excepciones: SKU que van a "Importación" aunque su categoría diga Producción
+# (p. ej. importados con categoría de producción, como el pesto). Se mantiene
+# como lista puntual; la regla de categorías cubre casi todo.
 # TODO: migrar la lista a administración por dashboard.
 CAT_IMPORTACION = {"KIKKOMAN", "MELITTA", "SOPAS"}
+SKU_FORZAR_IMPORTACION = {
+    "290010130",   # PESTO RECETA ITALIANA TRAVERSO 12x190 VIDRIO (Importado, cat SALSAS)
+}
 GRUPO_PRODUCCION = "Producción"
 GRUPO_IMPORTACION = "Importación / Maquila / Otros"
 
 
-def grupo_de(cat):
-    """Grupo del informe según CatComercial. Sin categoría → Producción (default)."""
+def grupo_de(sku, cat):
+    """Grupo del informe: Importación si la categoría está en CAT_IMPORTACION o el
+    SKU está forzado; en cualquier otro caso (incl. sin categoría) → Producción."""
     c = (cat or "").strip().upper()
-    return GRUPO_IMPORTACION if c in CAT_IMPORTACION else GRUPO_PRODUCCION
+    if c in CAT_IMPORTACION or str(sku).strip() in SKU_FORZAR_IMPORTACION:
+        return GRUPO_IMPORTACION
+    return GRUPO_PRODUCCION
 
 # Override del % de VU por SKU: para estos SKU el default es MENOR al 50% general.
 # Solo afecta al DEFAULT: si el par (cod_cliente, sku) está en mrp_vu_cliente_sku,
@@ -426,7 +435,7 @@ def calcular_faltantes(desde, hasta, conn, engine):
             "stock_estimado":  estimado,
             "causa":           causa,
             "cat_comercial":   cats.get(sku, ""),
-            "grupo":           grupo_de(cats.get(sku, "")),
+            "grupo":           grupo_de(sku, cats.get(sku, "")),
         })
     # orden: por fecha, luego Producción antes que Importación, y dentro por faltante desc
     _ord_grupo = {GRUPO_PRODUCCION: 0, GRUPO_IMPORTACION: 1}
