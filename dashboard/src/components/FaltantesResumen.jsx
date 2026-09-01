@@ -24,6 +24,14 @@ const fmtDM = (iso) => {
   const [, m, d] = iso.split("-");
   return `${d}-${m}`;
 };
+const DOW = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+// 'YYYY-MM-DD' -> 'mié 27-08' (día de la semana + fecha)
+const fmtDiaFecha = (iso) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  const dow = DOW[new Date(y, m - 1, d).getDay()];
+  return `${dow} ${String(d).padStart(2, "0")}-${String(m).padStart(2, "0")}`;
+};
 
 // Escala de color por cajas faltantes del día (cortes acordados)
 //   0 -> vacío · 1-20 amarillo · 21-60 naranja · >60 rojo
@@ -35,7 +43,7 @@ const colorCelda = (cj) => {
 };
 const colorTexto = (cj) => (cj > 60 ? "#fff" : "#2C2C2A");
 
-const GRUPO_ORDEN = { "Producción": 0, "Importación / Maquila / Otros": 1 };
+const GRUPO_ORDEN = { "Producción": 0, "Importación": 1 };
 
 export default function FaltantesResumen() {
   const [data, setData]       = useState(null);   // {desde, hasta, fechas[], filas[]}
@@ -53,6 +61,7 @@ export default function FaltantesResumen() {
 
   const fechas = data?.fechas || [];
   const filas  = data?.filas || [];
+  const noHabil = data?.no_habil || [];
 
   // subtotales por grupo (para las bandas)
   const subtotGrupo = useMemo(() => {
@@ -63,11 +72,12 @@ export default function FaltantesResumen() {
 
   const s = {
     wrap:  { padding: "16px 8px", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", color: C.text },
-    th:    { padding: "6px 8px", fontSize: 11, fontWeight: 700, color: C.gray, borderBottom: `2px solid ${C.border}`, background: "#fff", position: "sticky", top: 0, whiteSpace: "nowrap" },
-    td:    { padding: "4px 8px", fontSize: 12, borderBottom: `1px solid ${C.grayLt}`, whiteSpace: "nowrap" },
-    cell:  { width: 20, minWidth: 20, height: 20, textAlign: "center", fontSize: 9, borderRight: `1px solid #fff`, borderBottom: `1px solid #fff` },
-    hcell: { width: 20, minWidth: 20, fontSize: 9, color: C.textMuted, textAlign: "center", padding: "6px 0", borderBottom: `2px solid ${C.border}`, background: "#fff", position: "sticky", top: 0 },
+    th:    { padding: "4px 6px", fontSize: 10.5, fontWeight: 700, color: C.gray, borderBottom: `2px solid ${C.border}`, background: "#fff", position: "sticky", top: 0, whiteSpace: "nowrap" },
+    td:    { padding: "3px 6px", fontSize: 11, borderBottom: `1px solid ${C.grayLt}`, whiteSpace: "nowrap" },
+    cell:  { width: 20, minWidth: 20, height: 19, textAlign: "center", fontSize: 9, borderRight: `1px solid #fff`, borderBottom: `1px solid #fff` },
+    hcell: { width: 20, minWidth: 20, fontSize: 9, color: C.textMuted, textAlign: "center", padding: "5px 0", borderBottom: `2px solid ${C.border}`, position: "sticky", top: 0 },
   };
+  const HDR_NOHABIL = "#EAE6DA";   // fondo de encabezado para sábados, domingos y feriados
 
   if (loading) return <div style={s.wrap}>Cargando resumen de faltantes…</div>;
   if (error)   return <div style={{ ...s.wrap, color: C.red }}>Error al cargar: {error}</div>;
@@ -104,15 +114,15 @@ export default function FaltantesResumen() {
     rows.push(
       <tr key={f.sku} style={{ background: bg }}>
         <td style={{ ...s.td, fontWeight: 700, color: C.teal }}>{f.sku}</td>
-        <td style={{ ...s.td, color: C.text, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }} title={f.descripcion}>{f.descripcion}</td>
+        <td style={{ ...s.td, color: C.text, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }} title={f.descripcion}>{f.descripcion}</td>
         <td style={{ ...s.td, textAlign: "right", color: C.textMuted }}>{f.ventas_30 == null ? "—" : fmtN(f.ventas_30)}</td>
         <td style={{ ...s.td, textAlign: "right", fontWeight: 700, color: C.red }}>{fmtN(f.faltante_30)}</td>
         <td style={{ ...s.td, textAlign: "right", fontWeight: 600 }}>{f.pct == null ? "—" : `${f.pct}%`}</td>
         <td style={{ ...s.td, textAlign: "center" }}>{f.dias_con_falta}</td>
         {f.serie.map((cj, i) => (
           <td key={i}
-              style={{ ...s.cell, background: colorCelda(cj), color: colorTexto(cj), cursor: cj > 0 ? "default" : "auto" }}
-              title={cj > 0 ? `${fmtDM(fechas[i])} · ${fmtN(cj)} cj` : fmtDM(fechas[i])}>
+              style={{ ...s.cell, background: colorCelda(cj), color: colorTexto(cj) }}
+              title={cj > 0 ? `${fmtDiaFecha(fechas[i])} · ${fmtN(cj)} cj` : fmtDiaFecha(fechas[i])}>
             {cj > 0 ? fmtN(cj) : ""}
           </td>
         ))}
@@ -150,7 +160,13 @@ export default function FaltantesResumen() {
               <th style={{ ...s.th, textAlign: "right" }}>% falt/venta</th>
               <th style={{ ...s.th, textAlign: "center" }}>Días</th>
               {fechas.map((iso, i) => (
-                <th key={iso} style={s.hcell} title={fmtDM(iso)}>{i - fechas.length}</th>
+                <th key={iso}
+                    style={{ ...s.hcell, background: noHabil[i] ? HDR_NOHABIL : "#fff",
+                             fontWeight: noHabil[i] ? 700 : 400,
+                             color: noHabil[i] ? C.gray : C.textMuted }}
+                    title={fmtDiaFecha(iso)}>
+                  {i - fechas.length}
+                </th>
               ))}
             </tr>
           </thead>
