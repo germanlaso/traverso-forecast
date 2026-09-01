@@ -1856,6 +1856,18 @@ def get_faltantes_evolutivo_endpoint(desde: str | None = None, hasta: str | None
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/faltantes/resumen30", tags=["Faltantes"])
+def get_faltantes_resumen30(dias: int = 30):
+    """Resumen de faltantes de los últimos `dias` (heatmap del tab Control):
+    por SKU con faltante, ventas netas y faltante del período, % faltante/venta,
+    días con faltante y la serie diaria de faltante (cajas)."""
+    try:
+        from db_mrp import resumen_faltantes_30d
+        return resumen_faltantes_30d(dias=dias)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/faltantes/excel", tags=["Faltantes"])
 def get_faltantes_excel(fecha: str):
     """Genera y descarga el Informe de Quiebres de Stock (xlsx) de un día

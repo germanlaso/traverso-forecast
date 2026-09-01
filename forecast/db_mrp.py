@@ -1963,3 +1963,99 @@ def get_of_cumplimiento_evolutivo(linea: str | None = None,
                     "solicitado": round(sol, 0), "producido": round(pro, 0),
                     "pct": round(100 * pro / sol, 1) if sol > 0 else None})
     return out
+
+
+# ── Resumen de faltantes últimos N días (heatmap del tab Control) ─────────────
+def resumen_faltantes_30d(dias: int = 30) -> dict:
+    """Matriz para el dashboard de resumen de faltantes de los últimos `dias`:
+    una fila por SKU con faltante en la ventana, con ventas netas y faltante del
+    período, % faltante/venta, días con faltante y la serie diaria de faltante (cj).
+
+    - Faltantes: mrp_faltantes (Postgres), sumando clientes por (sku, fecha).
+    - Ventas:    dbo.ventas (SQL Server), netas (Factura + Nota Credito + ND), en
+                 cajas, restringidas a los SKU con faltante (query liviano).
+    - grupo/cat_comercial/descripcion: de mrp_faltantes.
+    Ventana: `dias` corridos hasta AYER. serie[0]=día -dias ... serie[-1]=ayer(-1).
+    """
+    from datetime import timedelta
+    hasta = date.today() - timedelta(days=1)          # ayer
+    desde = hasta - timedelta(days=dias - 1)          # dias corridos hasta ayer
+    fechas_iso = [(desde + timedelta(days=i)).isoformat() for i in range(dias)]
+    idx = {f: i for i, f in enumerate(fechas_iso)}
+
+    # 1) faltantes por (sku, fecha), sumando clientes + metadatos por sku
+    with get_session() as s:
+        rows = s.execute(text("""
+            SELECT sku, fecha::text AS fecha,
+                   SUM(faltante_cj)  AS falta,
+                   MAX(descripcion)  AS descripcion,
+                   MAX(grupo)        AS grupo,
+                   MAX(cat_comercial) AS cat_comercial
+            FROM mrp_faltantes
+            WHERE fecha BETWEEN :d1 AND :d2
+            GROUP BY sku, fecha
+        """), {"d1": desde.isoformat(), "d2": hasta.isoformat()}).mappings().all()
+
+    porsku = {}
+    for r in rows:
+        sku = str(r["sku"]).strip()
+        g = porsku.get(sku)
+        if g is None:
+            g = {"sku": sku, "descripcion": r["descripcion"] or "",
+                 "grupo": r["grupo"] or "Producción", "cat_comercial": r["cat_comercial"] or "",
+                 "serie": [0.0] * dias, "faltante_30": 0.0, "dias_con_falta": 0}
+            porsku[sku] = g
+        cj = float(r["falta"] or 0)
+        i = idx.get(r["fecha"])
+        if i is not None and cj > 0:
+            g["serie"][i] = cj
+            g["faltante_30"] += cj
+            g["dias_con_falta"] += 1
+
+    skus = list(porsku)
+    base = {"desde": desde.isoformat(), "hasta": hasta.isoformat(),
+            "dias": dias, "fechas": fechas_iso}
+    if not skus:
+        return {**base, "filas": []}
+
+    # 2) ventas netas 30d por sku (SQL Server), solo los sku con faltante
+    ventas = {}
+    try:
+        from db import get_engine
+        marks = ",".join(f":s{i}" for i in range(len(skus)))
+        params = {f"s{i}": skus[i] for i in range(len(skus))}
+        params["d1"] = desde.isoformat()
+        params["d2b"] = (hasta + timedelta(days=1)).isoformat()   # < día siguiente (incluye 'hasta' completo)
+        q = text(f"""
+            SELECT LTRIM(RTRIM([Codigo Articulo])) AS sku, SUM([Cantidad]) AS cj
+            FROM dbo.ventas
+            WHERE [Fecha] >= :d1 AND [Fecha] < :d2b
+              AND [Tipo Doc] IN ('Factura','Nota Credito','ND')
+              AND LTRIM(RTRIM([Codigo Articulo])) IN ({marks})
+            GROUP BY LTRIM(RTRIM([Codigo Articulo]))
+        """)
+        with get_engine().connect() as c:
+            for sku, cj in c.execute(q, params).fetchall():
+                ventas[str(sku).strip()] = float(cj or 0)
+    except Exception as e:
+        logger.warning("resumen_faltantes_30d: ventas no disponibles (%s)", e)
+
+    # 3) armar filas (orden: grupo -> categoría -> faltante desc)
+    ORDEN = {"Producción": 0, "Importación / Maquila / Otros": 1}
+    filas = []
+    for sku, g in porsku.items():
+        v = ventas.get(sku)
+        pct = (g["faltante_30"] / v * 100.0) if (v and v > 0) else None
+        filas.append({
+            "sku": sku,
+            "descripcion": g["descripcion"],
+            "grupo": g["grupo"],
+            "cat_comercial": g["cat_comercial"],
+            "ventas_30": round(v, 1) if v is not None else None,
+            "faltante_30": round(g["faltante_30"], 1),
+            "pct": round(pct, 1) if pct is not None else None,
+            "dias_con_falta": g["dias_con_falta"],
+            "serie": [round(x, 1) for x in g["serie"]],
+        })
+    filas.sort(key=lambda x: (ORDEN.get(x["grupo"], 0), x["cat_comercial"] or "", -x["faltante_30"]))
+    return {**base, "filas": filas}
