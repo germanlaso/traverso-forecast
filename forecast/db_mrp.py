@@ -2046,6 +2046,36 @@ def resumen_faltantes_30d(dias: int = 30) -> dict:
     except Exception as e:
         logger.warning("resumen_faltantes_30d: ventas no disponibles (%s)", e)
 
+    # 2b) ventas netas 30d por CATEGORÍA (TODOS los SKU, no solo los con faltante),
+    #     para que el % use el denominador completo. Solo categorías presentes en
+    #     el informe. Cuenta también cuántos SKU vendieron sin tener faltante.
+    cats_presentes = {g["cat_comercial"] for g in porsku.values() if g["cat_comercial"]}
+    vent_cat_total = {}     # cat -> ventas netas 30d de TODOS sus SKU
+    n_sin_falta = {}        # cat -> nº SKU que vendieron (>0) y NO tuvieron faltante
+    try:
+        from db import get_engine as _ge
+        p2 = {"d1": desde.isoformat(), "d2b": (hasta + timedelta(days=1)).isoformat()}
+        q2 = text("""
+            SELECT LTRIM(RTRIM([Categ. Comercial])) AS cat,
+                   LTRIM(RTRIM([Codigo Articulo]))  AS sku,
+                   SUM([Cantidad]) AS cj
+            FROM dbo.ventas
+            WHERE [Fecha] >= :d1 AND [Fecha] < :d2b
+              AND [Tipo Doc] IN ('Factura','Nota Credito','ND')
+            GROUP BY LTRIM(RTRIM([Categ. Comercial])), LTRIM(RTRIM([Codigo Articulo]))
+        """)
+        with _ge().connect() as c:
+            for cat, vsku, cj in c.execute(q2, p2).fetchall():
+                cat = (cat or "").strip()
+                if cat not in cats_presentes:
+                    continue
+                cjv = float(cj or 0)
+                vent_cat_total[cat] = vent_cat_total.get(cat, 0.0) + cjv
+                if str(vsku).strip() not in porsku and cjv != 0:
+                    n_sin_falta[cat] = n_sin_falta.get(cat, 0) + 1
+    except Exception as e:
+        logger.warning("resumen_faltantes_30d: ventas por categoría no disponibles (%s)", e)
+
     # 3) armar filas (orden: grupo -> categoría -> faltante desc)
     ORDEN = {"Producción": 0, "Importación": 1}
     filas = []
@@ -2064,4 +2094,17 @@ def resumen_faltantes_30d(dias: int = 30) -> dict:
             "serie": [round(x, 1) for x in g["serie"]],
         })
     filas.sort(key=lambda x: (ORDEN.get(x["grupo"], 0), x["cat_comercial"] or "", -x["faltante_30"]))
-    return {**base, "filas": filas}
+
+    # resumen por categoría: ventas TOTALES (denominador correcto) + N SKU sin faltante.
+    # grupo de la categoría = el de sus filas (ya clasificado con la excepción pesto).
+    grupo_de_cat = {}
+    for f in filas:
+        grupo_de_cat.setdefault(f["cat_comercial"], f["grupo"])
+    resumen_cat = {}
+    for cat, vt in vent_cat_total.items():
+        resumen_cat[cat] = {
+            "grupo": grupo_de_cat.get(cat, "Producción"),
+            "ventas_total": round(vt, 1),
+            "n_sin_falta": n_sin_falta.get(cat, 0),
+        }
+    return {**base, "filas": filas, "resumen_cat": resumen_cat}
