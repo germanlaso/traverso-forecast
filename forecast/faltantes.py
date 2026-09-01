@@ -113,7 +113,7 @@ SKU_FORZAR_IMPORTACION = {
     "290010130",   # PESTO RECETA ITALIANA TRAVERSO 12x190 VIDRIO (Importado, cat SALSAS)
 }
 GRUPO_PRODUCCION = "Producción"
-GRUPO_IMPORTACION = "Importación / Maquila / Otros"
+GRUPO_IMPORTACION = "Importación"
 
 
 def grupo_de(sku, cat):
@@ -406,9 +406,16 @@ def calcular_faltantes(desde, hasta, conn, engine):
     dias_ord = sorted(dias_disp)
 
     filas = []
+    n_no_pt = 0
     for (sku, fecha, cod_cli), a in por_cli.items():
         no_ent = a["no_entregado"]
         if no_ent <= 0:
+            continue
+        # Excluir ítems que NO son producto terminado (PT='Y' en el maestro).
+        # `cats` solo trae SKU PT='Y'; si el SKU no está, es contable/no-PT
+        # (p.ej. "DESPACHO DE VTA X BOLETAS") y no debe figurar como faltante.
+        if str(sku).strip() not in cats:
+            n_no_pt += 1
             continue
         programado_sd = prog_sd[(sku, fecha)]
         umbral = _umbral_dias(cod_cli, sku, vu.get(sku, 0), vu_tabla)
@@ -438,6 +445,8 @@ def calcular_faltantes(desde, hasta, conn, engine):
             "grupo":           grupo_de(sku, cats.get(sku, "")),
         })
     # orden: por fecha, luego Producción antes que Importación, y dentro por faltante desc
+    if n_no_pt:
+        logger.info("Faltantes: %d líneas de SKU no-PT excluidas del informe.", n_no_pt)
     _ord_grupo = {GRUPO_PRODUCCION: 0, GRUPO_IMPORTACION: 1}
     filas.sort(key=lambda x: (x["fecha"], _ord_grupo.get(x["grupo"], 9),
                               -x["faltante_cj"], x["sku"]))

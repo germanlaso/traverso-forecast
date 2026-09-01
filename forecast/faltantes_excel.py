@@ -30,7 +30,7 @@ CAUSA_LABEL = {"sin_stock": "SIN STOCK", "vu_insuficiente": "VU INSUFICIENTE"}
 
 # Agrupación del informe (debe coincidir con faltantes.py)
 GRUPO_PRODUCCION = "Producción"
-GRUPO_IMPORTACION = "Importación / Maquila / Otros"
+GRUPO_IMPORTACION = "Importación"
 ORDEN_GRUPO = {GRUPO_PRODUCCION: 0, GRUPO_IMPORTACION: 1}
 
 
