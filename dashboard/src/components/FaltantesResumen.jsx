@@ -66,9 +66,34 @@ export default function FaltantesResumen() {
   // subtotales por grupo (para las bandas)
   const subtotGrupo = useMemo(() => {
     const t = {};
-    for (const f of filas) t[f.grupo] = (t[f.grupo] || 0) + (f.faltante_30 || 0);
+    for (const f of filas) {
+      const g = t[f.grupo] || (t[f.grupo] = { ventas: 0, falta: 0 });
+      g.ventas += (f.ventas_30 || 0);
+      g.falta  += (f.faltante_30 || 0);
+    }
     return t;
   }, [filas]);
+
+  // subtotales por categoría (clave: grupo|cat)
+  const subtotCat = useMemo(() => {
+    const t = {};
+    for (const f of filas) {
+      const k = `${f.grupo}|${f.cat_comercial}`;
+      const g = t[k] || (t[k] = { ventas: 0, falta: 0 });
+      g.ventas += (f.ventas_30 || 0);
+      g.falta  += (f.faltante_30 || 0);
+    }
+    return t;
+  }, [filas]);
+
+  // total general
+  const totalGen = useMemo(() => {
+    let ventas = 0, falta = 0;
+    for (const f of filas) { ventas += (f.ventas_30 || 0); falta += (f.faltante_30 || 0); }
+    return { ventas, falta, pct: ventas > 0 ? (falta / ventas * 100) : null };
+  }, [filas]);
+
+  const pctDe = (falta, ventas) => (ventas > 0 ? `${(falta / ventas * 100).toFixed(1)}%` : "—");
 
   const s = {
     wrap:  { padding: "16px 8px", fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif", color: C.text },
@@ -89,24 +114,34 @@ export default function FaltantesResumen() {
   // recorrido con bandas de grupo/categoría
   let grupoActual = null, catActual = null, zebra = 0;
   const rows = [];
+
+  const bandaCols = (st, label, ventas, falta) => ([
+    <td key="l" colSpan={2} style={{ ...st, padding: "5px 8px" }}>{label}</td>,
+    <td key="v" style={{ ...st, padding: "5px 6px", textAlign: "right" }}>{fmtN(ventas)}</td>,
+    <td key="f" style={{ ...st, padding: "5px 6px", textAlign: "right" }}>{fmtN(falta)}</td>,
+    <td key="p" style={{ ...st, padding: "5px 6px", textAlign: "right" }}>{pctDe(falta, ventas)}</td>,
+    <td key="d" style={{ ...st, padding: "5px 6px" }} />,
+    <td key="h" colSpan={fechas.length} style={st} />,
+  ]);
+
   filas.forEach((f) => {
     if (f.grupo !== grupoActual) {
       grupoActual = f.grupo; catActual = null; zebra = 0;
+      const g = subtotGrupo[f.grupo] || { ventas: 0, falta: 0 };
       rows.push(
         <tr key={`g-${f.grupo}`}>
-          <td colSpan={nCols} style={{ background: C.navy, color: "#fff", fontWeight: 700, padding: "6px 10px", fontSize: 12, letterSpacing: 0.3 }}>
-            {f.grupo.toUpperCase()} — {fmtN(subtotGrupo[f.grupo])} cj
-          </td>
+          {bandaCols({ background: C.navy, color: "#fff", fontWeight: 700, fontSize: 12, letterSpacing: 0.3 },
+                     f.grupo.toUpperCase(), g.ventas, g.falta)}
         </tr>
       );
     }
     if (f.cat_comercial !== catActual) {
       catActual = f.cat_comercial; zebra = 0;
+      const c = subtotCat[`${f.grupo}|${f.cat_comercial}`] || { ventas: 0, falta: 0 };
       rows.push(
         <tr key={`c-${f.grupo}-${f.cat_comercial}`}>
-          <td colSpan={nCols} style={{ background: C.grayLt, color: C.gray, fontWeight: 700, padding: "3px 10px", fontSize: 11 }}>
-            {f.cat_comercial || "(sin categoría)"}
-          </td>
+          {bandaCols({ background: C.grayLt, color: C.gray, fontWeight: 700, fontSize: 11 },
+                     f.cat_comercial || "(sin categoría)", c.ventas, c.falta)}
         </tr>
       );
     }
@@ -137,6 +172,20 @@ export default function FaltantesResumen() {
         <span style={{ color: C.textMuted, fontSize: 12 }}>
           {fmtDM(data.desde)} al {fmtDM(data.hasta)} · {filas.length} SKU con faltante
         </span>
+      </div>
+
+      {/* KPIs de total general */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+        {[
+          { lbl: "Total Ventas 30d", val: `${fmtN(totalGen.ventas)} cj`, col: C.gray },
+          { lbl: "Total Faltante 30d", val: `${fmtN(totalGen.falta)} cj`, col: C.red },
+          { lbl: "% Faltante global", val: totalGen.pct == null ? "—" : `${totalGen.pct.toFixed(1)}%`, col: C.tealMid },
+        ].map((k) => (
+          <div key={k.lbl} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 16px", minWidth: 140, background: "#fff" }}>
+            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 2 }}>{k.lbl}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: k.col }}>{k.val}</div>
+          </div>
+        ))}
       </div>
 
       {/* leyenda de colores */}
