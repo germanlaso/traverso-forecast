@@ -62,36 +62,50 @@ export default function FaltantesResumen() {
   const fechas = data?.fechas || [];
   const filas  = data?.filas || [];
   const noHabil = data?.no_habil || [];
+  const resumenCat = data?.resumen_cat || {};
 
-  // subtotales por grupo (para las bandas)
-  const subtotGrupo = useMemo(() => {
+  // ventas CON faltante por categoría (para derivar las ventas de los "sin faltante")
+  const ventFaltCat = useMemo(() => {
     const t = {};
-    for (const f of filas) {
-      const g = t[f.grupo] || (t[f.grupo] = { ventas: 0, falta: 0 });
-      g.ventas += (f.ventas_30 || 0);
-      g.falta  += (f.faltante_30 || 0);
-    }
+    for (const f of filas) t[f.cat_comercial] = (t[f.cat_comercial] || 0) + (f.ventas_30 || 0);
     return t;
   }, [filas]);
 
-  // subtotales por categoría (clave: grupo|cat)
+  // subtotal por categoría: ventas TOTALES (de resumen_cat) + faltante de sus filas
   const subtotCat = useMemo(() => {
     const t = {};
     for (const f of filas) {
-      const k = `${f.grupo}|${f.cat_comercial}`;
-      const g = t[k] || (t[k] = { ventas: 0, falta: 0 });
-      g.ventas += (f.ventas_30 || 0);
-      g.falta  += (f.faltante_30 || 0);
+      const g = t[f.cat_comercial] || (t[f.cat_comercial] = { ventas: 0, falta: 0, sinF: 0, ventasSinF: 0 });
+      g.falta += (f.faltante_30 || 0);
+    }
+    for (const [cat, rc] of Object.entries(resumenCat)) {
+      const g = t[cat] || (t[cat] = { ventas: 0, falta: 0, sinF: 0, ventasSinF: 0 });
+      g.ventas = rc.ventas_total || 0;                 // denominador correcto
+      g.sinF = rc.n_sin_falta || 0;
+      g.ventasSinF = (rc.ventas_total || 0) - (ventFaltCat[cat] || 0);  // ventas de los que no quebraron
     }
     return t;
-  }, [filas]);
+  }, [filas, resumenCat, ventFaltCat]);
 
-  // total general
+  // subtotal por grupo: suma de ventas totales y faltante de sus categorías
+  const subtotGrupo = useMemo(() => {
+    const t = {};
+    for (const [cat, rc] of Object.entries(resumenCat)) {
+      const grp = rc.grupo || "Producción";
+      const g = t[grp] || (t[grp] = { ventas: 0, falta: 0 });
+      g.ventas += (rc.ventas_total || 0);
+      g.falta  += (subtotCat[cat]?.falta || 0);
+    }
+    return t;
+  }, [resumenCat, subtotCat]);
+
+  // total general: sobre ventas totales de todas las categorías presentes
   const totalGen = useMemo(() => {
     let ventas = 0, falta = 0;
-    for (const f of filas) { ventas += (f.ventas_30 || 0); falta += (f.faltante_30 || 0); }
+    for (const [, rc] of Object.entries(resumenCat)) ventas += (rc.ventas_total || 0);
+    for (const f of filas) falta += (f.faltante_30 || 0);
     return { ventas, falta, pct: ventas > 0 ? (falta / ventas * 100) : null };
-  }, [filas]);
+  }, [filas, resumenCat]);
 
   const pctDe = (falta, ventas) => (ventas > 0 ? `${(falta / ventas * 100).toFixed(1)}%` : "—");
 
@@ -124,7 +138,28 @@ export default function FaltantesResumen() {
     <td key="h" colSpan={fechas.length} style={st} />,
   ]);
 
+  // fila "(N SKU sin faltante)" que cierra cada categoría, con sus ventas (para completar el denominador)
+  const flushSinFalta = (grupo, cat) => {
+    const c = subtotCat[cat];
+    if (c && c.sinF > 0 && c.ventasSinF > 0.5) {
+      rows.push(
+        <tr key={`sf-${grupo}-${cat}`} style={{ background: "#FBFAF5" }}>
+          <td style={{ ...s.td, color: C.textMuted, fontStyle: "italic" }} colSpan={2}>({c.sinF} SKU sin faltante)</td>
+          <td style={{ ...s.td, textAlign: "right", color: C.textMuted }}>{fmtN(c.ventasSinF)}</td>
+          <td style={{ ...s.td, textAlign: "right", color: C.textMuted }}>0</td>
+          <td style={{ ...s.td, textAlign: "right", color: C.textMuted }}>0,0%</td>
+          <td style={s.td} />
+          <td colSpan={fechas.length} style={s.td} />
+        </tr>
+      );
+    }
+  };
+
   filas.forEach((f) => {
+    // al cambiar de categoría, cerrar la anterior con su fila "sin faltante"
+    if (f.cat_comercial !== catActual && catActual !== null) {
+      flushSinFalta(grupoActual, catActual);
+    }
     if (f.grupo !== grupoActual) {
       grupoActual = f.grupo; catActual = null; zebra = 0;
       const g = subtotGrupo[f.grupo] || { ventas: 0, falta: 0 };
@@ -137,7 +172,7 @@ export default function FaltantesResumen() {
     }
     if (f.cat_comercial !== catActual) {
       catActual = f.cat_comercial; zebra = 0;
-      const c = subtotCat[`${f.grupo}|${f.cat_comercial}`] || { ventas: 0, falta: 0 };
+      const c = subtotCat[f.cat_comercial] || { ventas: 0, falta: 0 };
       rows.push(
         <tr key={`c-${f.grupo}-${f.cat_comercial}`}>
           {bandaCols({ background: C.grayLt, color: C.gray, fontWeight: 700, fontSize: 11 },
@@ -164,6 +199,8 @@ export default function FaltantesResumen() {
       </tr>
     );
   });
+  // cerrar la última categoría con su fila "sin faltante"
+  if (catActual !== null) flushSinFalta(grupoActual, catActual);
 
   return (
     <div style={s.wrap}>
