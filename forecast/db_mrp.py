@@ -1982,6 +1982,12 @@ def resumen_faltantes_30d(dias: int = 30) -> dict:
     desde = hasta - timedelta(days=dias - 1)          # dias corridos hasta ayer
     fechas_iso = [(desde + timedelta(days=i)).isoformat() for i in range(dias)]
     idx = {f: i for i, f in enumerate(fechas_iso)}
+    # marca de día NO hábil (sábado, domingo o feriado) para colorear encabezados
+    try:
+        import calendario as _cal
+        no_habil = [(not _cal.es_habil(desde + timedelta(days=i))) for i in range(dias)]
+    except Exception:
+        no_habil = [False] * dias
 
     # 1) faltantes por (sku, fecha), sumando clientes + metadatos por sku
     with get_session() as s:
@@ -2014,7 +2020,7 @@ def resumen_faltantes_30d(dias: int = 30) -> dict:
 
     skus = list(porsku)
     base = {"desde": desde.isoformat(), "hasta": hasta.isoformat(),
-            "dias": dias, "fechas": fechas_iso}
+            "dias": dias, "fechas": fechas_iso, "no_habil": no_habil}
     if not skus:
         return {**base, "filas": []}
 
@@ -2041,7 +2047,7 @@ def resumen_faltantes_30d(dias: int = 30) -> dict:
         logger.warning("resumen_faltantes_30d: ventas no disponibles (%s)", e)
 
     # 3) armar filas (orden: grupo -> categoría -> faltante desc)
-    ORDEN = {"Producción": 0, "Importación / Maquila / Otros": 1}
+    ORDEN = {"Producción": 0, "Importación": 1}
     filas = []
     for sku, g in porsku.items():
         v = ventas.get(sku)
