@@ -28,7 +28,7 @@ const ACCESOS = [
       ['programacion', 'Programación Diaria'] ] },
   { seccion: 'control', titulo: '📊 Control', items: [
       ['stockdiario', 'Stock Diario'], ['faltantes', 'Faltantes'],
-      ['quiebres', 'Mapa de Quiebres'] ] },   // Conciliación oculta temporalmente (pendiente de mas pruebas)
+      ['resumen30', 'Resumen 30d'], ['quiebres', 'Mapa de Quiebres'] ] },   // Conciliación oculta temporalmente (pendiente de mas pruebas)
   { seccion: 'herramientas', titulo: '🛠️ Herramientas', items: [
       ['parametros', 'Parámetros'] ] },
 ];
@@ -45,6 +45,7 @@ export default function Landing({ onNavegar }) {
   const [grid, setGrid] = useState(null);
   const [gridErr, setGridErr] = useState(false);
   const [stock, setStock] = useState(null);
+  const [falt30, setFalt30] = useState(null);
 
   useEffect(() => {
     let vivo = true;
@@ -54,8 +55,21 @@ export default function Landing({ onNavegar }) {
     axios.get(`${API}/stock/summary`)
       .then(r => { if (vivo) setStock(r.data); })
       .catch(() => { /* la tarjeta de stock se oculta si falla */ });
+    axios.get(`${API}/faltantes/resumen30`)
+      .then(r => { if (vivo) setFalt30(r.data); })
+      .catch(() => { /* la tarjeta de faltantes se oculta si falla */ });
     return () => { vivo = false; };
   }, []);
+
+  // KPIs de faltantes 30d (mismo cálculo que FaltantesResumen: % global = Σfalt/Σventa)
+  const f30 = useMemo(() => {
+    if (!falt30 || !Array.isArray(falt30.filas) || falt30.filas.length === 0) return null;
+    let ventas = 0, falta = 0;
+    const rc = falt30.resumen_cat || {};
+    for (const k of Object.keys(rc)) ventas += (rc[k].ventas_total || 0);
+    for (const f of falt30.filas) falta += (f.faltante_30 || 0);
+    return { ventas, falta, pct: ventas > 0 ? (falta / ventas * 100) : null, nSku: falt30.filas.length };
+  }, [falt30]);
 
   // Totales del mapa de quiebres (misma reduccion que MapaQuiebres.jsx).
   const tot = useMemo(() => {
@@ -145,6 +159,36 @@ export default function Landing({ onNavegar }) {
               <div><span style={{ color: stock.n_lotes_proximos_vencer > 0 ? '#8a5a00' : C.textMuted }}>Próximos a vencer: </span>{stock.n_lotes_proximos_vencer}</div>}
             {stock.n_lotes_vencidos != null &&
               <div><span style={{ color: stock.n_lotes_vencidos > 0 ? C.danger : C.textMuted }}>Vencidos excluidos: </span>{stock.n_lotes_vencidos}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* ── Faltantes últimos 30 días (KPIs + acceso) ── */}
+      {f30 && (
+        <div style={{ ...card, marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Faltantes — últimos 30 días</div>
+            <div style={{ fontSize: 12, color: C.textMuted }}>{f30.nSku} SKU con faltante</div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <div style={kpi(C.grayLt)}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: C.text }}>{Math.round(f30.ventas).toLocaleString('es-CL')}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>Ventas 30d (cj)</div>
+            </div>
+            <div style={kpi(f30.falta > 0 ? C.dangerLt : C.grayLt)}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: f30.falta > 0 ? C.danger : C.text }}>{Math.round(f30.falta).toLocaleString('es-CL')}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>Faltante 30d (cj)</div>
+            </div>
+            <div style={kpi(C.grayLt)}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: C.teal }}>{f30.pct == null ? '—' : `${f30.pct.toFixed(1)}%`}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>% faltante global</div>
+            </div>
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <button onClick={() => onNavegar && onNavegar('resumen30', 'control')}
+              style={{ fontSize: 12, padding: '7px 14px', borderRadius: 7, border: 'none', background: C.teal, color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
+              Ver Resumen 30d →
+            </button>
           </div>
         </div>
       )}
