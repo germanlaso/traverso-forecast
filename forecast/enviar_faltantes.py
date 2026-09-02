@@ -121,6 +121,17 @@ def _grupo_de(row):
     return g if g in ORDEN_GRUPO else GRUPO_PRODUCCION
 
 
+def _data30_seguro():
+    """Resumen de faltantes 30d para la hoja del Excel. Degrada a None si algo
+    falla (p.ej. ventas no disponibles): el correo se manda igual sin esa hoja."""
+    try:
+        from db_mrp import resumen_faltantes_30d
+        return resumen_faltantes_30d(30)
+    except Exception as e:
+        logger.warning("Resumen 30d no disponible para el Excel (%s). Se envía sin esa hoja.", e)
+        return None
+
+
 def _tabla_por_dia(filas):
     """Desglose por día. Solo se usa cuando el informe cubre más de una fecha
     (típicamente el lunes, que reporta viernes + fin de semana)."""
@@ -277,7 +288,8 @@ def enviar(fecha=None, destinatarios=None, desde=None, hasta=None):
     msg.attach(MIMEText(_cuerpo_html(etiqueta, filas, reposicion=repo_map), "html", "utf-8"))
 
     # adjuntar Excel (siempre, aunque no haya faltantes, para dejar registro)
-    xls = faltantes_excel.generar_bytes(etiqueta, filas, reposicion=repo_map, con_v2=con_v2)
+    xls = faltantes_excel.generar_bytes(etiqueta, filas, reposicion=repo_map, con_v2=con_v2,
+                                        data30=_data30_seguro())
     adj = MIMEApplication(xls, _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     adj.add_header("Content-Disposition", "attachment",
                    filename=f"Informe_Quiebres_{sufijo_archivo}.xlsx")
@@ -428,7 +440,8 @@ def enviar_final(fecha=None, destinatarios=None, desde=None, hasta=None):
                         "html", "utf-8"))
 
     xls = faltantes_excel.generar_bytes(etiqueta, filas, explic,
-                                        soluciones=soluc, reposicion=repo_map, con_v2=con_v2)
+                                        soluciones=soluc, reposicion=repo_map, con_v2=con_v2,
+                                        data30=_data30_seguro())
     adj = MIMEApplication(xls, _subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     adj.add_header("Content-Disposition", "attachment",
                    filename=f"Informe_Quiebres_{sufijo_archivo}.xlsx")

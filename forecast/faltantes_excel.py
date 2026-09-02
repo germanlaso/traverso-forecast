@@ -82,7 +82,7 @@ def _repo_txt(rp):
     return ""
 
 
-def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None, con_v2=False):
+def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None, con_v2=False, data30=None):
     """fecha: str YYYY-MM-DD | date. filas: list de dicts de get_faltantes_por_fecha.
     explicaciones: dict opcional {sku: {explicacion, autor}} — si se pasa, agrega la
     columna 'Explicación' a la tabla resumen por SKU.
@@ -355,12 +355,31 @@ def construir(fecha, filas, explicaciones=None, soluciones=None, reposicion=None
         rr += 1
         zebra += 1
 
+    # Hoja "Resumen 30d" (opcional): si viene data30, se agrega como pestaña aparte.
+    # Degrada con gracia: si algo falla, el Excel se genera igual sin esa hoja.
+    if data30 and (data30.get("filas")):
+        try:
+            hoja_resumen30(wb, data30)
+        except Exception:
+            pass
+
     return wb
 
 
-def generar_bytes(fecha, filas, explicaciones=None, soluciones=None, reposicion=None, con_v2=False):
+def generar_bytes(fecha, filas, explicaciones=None, soluciones=None, reposicion=None, con_v2=False, data30=None):
     """Devuelve los bytes del .xlsx (para servir por HTTP)."""
-    wb = construir(fecha, filas, explicaciones, soluciones, reposicion, con_v2)
+    wb = construir(fecha, filas, explicaciones, soluciones, reposicion, con_v2, data30=data30)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def generar_bytes_resumen30(data30):
+    """Devuelve los bytes de un .xlsx con SOLO la hoja Resumen 30d (para descarga)."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    hoja_resumen30(wb, data30)
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -377,3 +396,170 @@ if __name__ == "__main__":
     out = f"/tmp/informe_faltantes_{f}.xlsx"
     wb.save(out)
     print(f"OK: {out} | {len(filas)} filas | {len(set(r['sku'] for r in filas))} SKU")
+
+
+# ══════════════════════ Hoja "Resumen 30d" ══════════════════════
+# Recibe el dict de db_mrp.resumen_faltantes_30d(): {desde, hasta, fechas[],
+# no_habil[], filas[{sku,descripcion,grupo,cat_comercial,ventas_30,faltante_30,
+# pct,dias_con_falta,serie[]}], resumen_cat{cat:{grupo,ventas_total,n_sin_falta}}}.
+
+_HDR_NOHABIL = "EAE6DA"   # fondo de encabezado para sábado/domingo/feriado
+
+def _color_celda_xlsx(cj):
+    """Relleno de celda según cajas faltantes del día (misma escala que el dashboard)."""
+    if not cj or cj <= 0:
+        return None
+    if cj <= 20:  return "F7D65A"   # amarillo
+    if cj <= 60:  return "EF9F27"   # naranja
+    return "E24B4A"                 # rojo
+
+
+def _fecha_ddmm(iso):
+    p = str(iso).split("-")
+    return f"{p[2]}-{p[1]}" if len(p) == 3 else str(iso)
+
+
+def hoja_resumen30(wb, data30, titulo="Resumen 30d"):
+    """Agrega al workbook `wb` una hoja con el resumen de faltantes de 30 días.
+    Devuelve la hoja creada."""
+    fechas   = data30.get("fechas", []) or []
+    no_hab   = data30.get("no_habil", []) or []
+    filas    = data30.get("filas", []) or []
+    rcat     = data30.get("resumen_cat", {}) or {}
+    nd = len(fechas)
+
+    ws = wb.create_sheet(titulo)
+    ws.sheet_view.showGridLines = False
+    # anchos: B margen, C Cod, D Producto, E Ventas, F Faltante, G %, H Días
+    for col, w in zip("BCDEFGH", [2, 12, 34, 12, 12, 10, 7]):
+        ws.column_dimensions[col].width = w
+    # columnas de días (I en adelante): angostas
+    for i in range(nd):
+        ws.column_dimensions[get_column_letter(9 + i)].width = 4.2
+
+    # ── Título + rango ──
+    ult = 8 + nd
+    ws.merge_cells(start_row=2, start_column=3, end_row=2, end_column=ult)
+    t = ws.cell(2, 3, f"Resumen de faltantes — últimos 30 días  ({_fecha_ddmm(data30.get('desde',''))} al {_fecha_ddmm(data30.get('hasta',''))})")
+    t.font = _f(13, True, BLANCO); t.fill = _fill(AZUL)
+    t.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[2].height = 22
+
+    # ── Encabezados de columna (fila 4) ──
+    hdr_row = 4
+    fijos = ["Cod", "Producto", "Ventas 30d", "Faltante 30d", "%", "Días"]
+    for i, h in enumerate(fijos):
+        c = ws.cell(hdr_row, 3 + i, h)
+        c.font = _f(9, True); c.fill = _fill(CELESTE)
+        c.alignment = Alignment(horizontal="center", vertical="center"); c.border = BORDE
+    for j, iso in enumerate(fechas):
+        c = ws.cell(hdr_row, 9 + j, _fecha_ddmm(iso))
+        nh = j < len(no_hab) and no_hab[j]
+        c.font = _f(8, bool(nh), GRIS_TXT if nh else "4A5568")
+        c.fill = _fill(_HDR_NOHABIL if nh else CELESTE)
+        c.alignment = Alignment(horizontal="center", vertical="center", text_rotation=90); c.border = BORDE
+    ws.row_dimensions[hdr_row].height = 44
+
+    # ── helpers de banda/fila ──
+    def _num(cell, val, fmt="#,##0", bold=False, color="1A2332"):
+        cell.value = val; cell.font = _f(8, bold, color, name="Calibri")
+        cell.number_format = fmt; cell.alignment = Alignment(horizontal="right", vertical="center")
+        cell.border = BORDE
+
+    def banda(row, label, ventas, falta, fill_hex, txt_hex, bold=True, sz=9):
+        # etiqueta (C:D) + Ventas + Faltante + % + Días(vacío) + días(vacío)
+        ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=4)
+        c = ws.cell(row, 3, label); c.font = _f(sz, bold, txt_hex); c.fill = _fill(fill_hex)
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        ws.cell(row, 4).fill = _fill(fill_hex)
+        cv = ws.cell(row, 5, round(ventas)); cv.font = _f(sz, bold, txt_hex); cv.fill = _fill(fill_hex)
+        cv.number_format = "#,##0"; cv.alignment = Alignment(horizontal="right", vertical="center")
+        cf = ws.cell(row, 6, round(falta)); cf.font = _f(sz, bold, txt_hex); cf.fill = _fill(fill_hex)
+        cf.number_format = "#,##0"; cf.alignment = Alignment(horizontal="right", vertical="center")
+        pct = (falta / ventas * 100) if ventas else None
+        cp = ws.cell(row, 7, (pct / 100.0) if pct is not None else "—"); cp.font = _f(sz, bold, txt_hex); cp.fill = _fill(fill_hex)
+        if pct is not None: cp.number_format = "0.0%"
+        cp.alignment = Alignment(horizontal="right", vertical="center")
+        for cc in range(8, 9 + nd):
+            ws.cell(row, cc).fill = _fill(fill_hex)
+
+    # ── subtotales por categoría + ventas de "sin faltante" ──
+    falta_cat = {}
+    vent_falt_cat = {}
+    for f in filas:
+        falta_cat[f["cat_comercial"]] = falta_cat.get(f["cat_comercial"], 0) + (f["faltante_30"] or 0)
+        vent_falt_cat[f["cat_comercial"]] = vent_falt_cat.get(f["cat_comercial"], 0) + (f["ventas_30"] or 0)
+
+    def _grp_de_cat(cat):
+        for f in filas:
+            if f["cat_comercial"] == cat: return f["grupo"]
+        return GRUPO_PRODUCCION
+    subtot_grupo = {}
+    for cat, rc in rcat.items():
+        g = rc.get("grupo") or _grp_de_cat(cat)
+        sg = subtot_grupo.setdefault(g, {"ventas": 0, "falta": 0})
+        sg["ventas"] += (rc.get("ventas_total") or 0)
+        sg["falta"]  += falta_cat.get(cat, 0)
+
+    # ── recorrer filas con bandas ──
+    r = hdr_row + 1
+    grupo_actual = catActual = None
+    zebra = 0
+
+    def cerrar_categoria(cat):
+        rc = rcat.get(cat, {})
+        n_sf = rc.get("n_sin_falta", 0)
+        vent_sf = (rc.get("ventas_total", 0) or 0) - vent_falt_cat.get(cat, 0)
+        if n_sf > 0 and vent_sf > 0.5:
+            nonlocal r
+            cc = ws.cell(r, 3, f"({n_sf} SKU sin faltante)")
+            cc.font = _f(8, False, "888780", name="Calibri"); cc.font = Font(name="Calibri", size=8, italic=True, color="888780")
+            ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=4)
+            cc.alignment = Alignment(horizontal="left", vertical="center")
+            _num(ws.cell(r, 5), round(vent_sf), color="888780")
+            _num(ws.cell(r, 6), 0, color="888780")
+            cp = ws.cell(r, 7, 0.0); cp.number_format = "0.0%"; cp.font = _f(8, False, "888780", name="Calibri")
+            cp.alignment = Alignment(horizontal="right", vertical="center")
+            r += 1
+
+    for f in filas:
+        if f["cat_comercial"] != catActual and catActual is not None:
+            cerrar_categoria(catActual)
+        if f["grupo"] != grupo_actual:
+            grupo_actual = f["grupo"]; catActual = None; zebra = 0
+            sg = subtot_grupo.get(f["grupo"], {"ventas": 0, "falta": 0})
+            banda(r, f["grupo"].upper(), sg["ventas"], sg["falta"], AZUL, BLANCO, sz=10); r += 1
+        if f["cat_comercial"] != catActual:
+            catActual = f["cat_comercial"]; zebra = 0
+            rc = rcat.get(f["cat_comercial"], {})
+            vt = rc.get("ventas_total", 0) or 0
+            banda(r, f["cat_comercial"] or "(sin categoría)", vt, falta_cat.get(f["cat_comercial"], 0),
+                  GRIS, GRIS_TXT, sz=9); r += 1
+        # fila SKU
+        bg = GRIS if zebra % 2 else BLANCO; zebra += 1
+        ws.cell(r, 3, f["sku"]).font = _f(8, True, "1D9E75", name="Calibri")
+        cd = ws.cell(r, 4, f["descripcion"]); cd.font = _f(8, False, "1A2332", name="Calibri")
+        cd.alignment = Alignment(horizontal="left", vertical="center")
+        _num(ws.cell(r, 5), round(f["ventas_30"]) if f["ventas_30"] is not None else "—", color="888780")
+        _num(ws.cell(r, 6), round(f["faltante_30"]), bold=True, color="E24B4A")
+        cp = ws.cell(r, 7, (f["pct"] / 100.0) if f["pct"] is not None else "—")
+        if f["pct"] is not None: cp.number_format = "0.0%"
+        cp.font = _f(8, True, "1A2332", name="Calibri"); cp.alignment = Alignment(horizontal="right", vertical="center")
+        cdd = ws.cell(r, 8, f["dias_con_falta"]); cdd.font = _f(8, False, "1A2332", name="Calibri")
+        cdd.alignment = Alignment(horizontal="center", vertical="center")
+        # celdas de día: número + color
+        for j, cj in enumerate(f["serie"]):
+            cell = ws.cell(r, 9 + j)
+            hexcol = _color_celda_xlsx(cj)
+            if hexcol:
+                cell.value = round(cj); cell.fill = _fill(hexcol)
+                cell.font = _f(7, False, "FFFFFF" if cj > 60 else "1A2332", name="Calibri")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for cc in range(3, 9):
+            ws.cell(r, cc).fill = _fill(bg) if ws.cell(r, cc).fill.fgColor.rgb in (None, "00000000") else ws.cell(r, cc).fill
+        r += 1
+    if catActual is not None:
+        cerrar_categoria(catActual)
+
+    ws.freeze_panes = "I5"   # fija columnas fijas + encabezado
+    return ws

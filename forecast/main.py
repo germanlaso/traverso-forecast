@@ -1856,6 +1856,25 @@ def get_faltantes_evolutivo_endpoint(desde: str | None = None, hasta: str | None
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/faltantes/resumen30/excel", tags=["Faltantes"])
+def get_faltantes_resumen30_excel(dias: int = 30):
+    """Descarga un .xlsx con SOLO la hoja Resumen 30d (para el botón del dashboard)."""
+    try:
+        from db_mrp import resumen_faltantes_30d
+        import faltantes_excel
+        from datetime import date
+        data30 = resumen_faltantes_30d(dias=dias)
+        xls = faltantes_excel.generar_bytes_resumen30(data30)
+        hoy = date.today().isoformat()
+        return Response(
+            content=xls,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="Resumen_Faltantes_30d_{hoy}.xlsx"'},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/faltantes/resumen30", tags=["Faltantes"])
 def get_faltantes_resumen30(dias: int = 30):
     """Resumen de faltantes de los últimos `dias` (heatmap del tab Control):

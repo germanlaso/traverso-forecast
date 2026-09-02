@@ -209,6 +209,11 @@ export default function FaltantesResumen() {
         <span style={{ color: C.textMuted, fontSize: 12 }}>
           {fmtDM(data.desde)} al {fmtDM(data.hasta)} · {filas.length} SKU con faltante
         </span>
+        <a href={`${API}/faltantes/resumen30/excel`}
+           style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, textDecoration: "none",
+                    padding: "6px 14px", borderRadius: 7, background: C.teal, color: "#fff" }}>
+          ↓ Descargar Excel
+        </a>
       </div>
 
       {/* KPIs de total general */}
