@@ -214,7 +214,7 @@ export default function Faltantes() {
 
   // Agrupar el detalle por SKU: fila resumen (faltante total del SKU) + clientes.
   // Agrupación del informe (debe coincidir con faltantes.py)
-  const GRUPO_ORDEN = { "Producción": 0, "Importación / Maquila / Otros": 1 };
+  const GRUPO_ORDEN = { "Producción": 0, "Importación": 1 };
   const grupoDe = (r) => {
     const g = (r.grupo || "").trim();
     return (g in GRUPO_ORDEN) ? g : "Producción";
