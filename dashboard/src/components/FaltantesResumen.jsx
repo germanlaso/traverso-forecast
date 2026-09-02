@@ -209,11 +209,27 @@ export default function FaltantesResumen() {
         <span style={{ color: C.textMuted, fontSize: 12 }}>
           {fmtDM(data.desde)} al {fmtDM(data.hasta)} · {filas.length} SKU con faltante
         </span>
-        <a href={`${API}/faltantes/resumen30/excel`}
-           style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, textDecoration: "none",
-                    padding: "6px 14px", borderRadius: 7, background: C.teal, color: "#fff" }}>
+        <button onClick={async () => {
+                  // fetch + blob: pasa por el proxy de CRA (como los otros llamados),
+                  // a diferencia de <a href> que en dev cae en el SPA -> landing.
+                  try {
+                    const resp = await fetch(`${API}/faltantes/resumen30/excel`);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const blob = await resp.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `Resumen_Faltantes_30d.xlsx`;
+                    document.body.appendChild(a); a.click();
+                    a.remove(); URL.revokeObjectURL(url);
+                  } catch (e) {
+                    alert("No se pudo descargar el Excel: " + e.message);
+                  }
+                }}
+                style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                         padding: "6px 14px", borderRadius: 7, border: "none", background: C.teal, color: "#fff" }}>
           ↓ Descargar Excel
-        </a>
+        </button>
       </div>
 
       {/* KPIs de total general */}
