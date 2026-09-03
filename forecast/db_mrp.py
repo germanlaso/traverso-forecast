@@ -2108,3 +2108,83 @@ def resumen_faltantes_30d(dias: int = 30) -> dict:
             "n_sin_falta": n_sin_falta.get(cat, 0),
         }
     return {**base, "filas": filas, "resumen_cat": resumen_cat}
+
+
+# ══════════════════ Monitor de disponibilidad del datalake ══════════════════
+# Sondeos periódicos (watchdog) de conectividad a SQL Server y HANA.
+def _crear_tabla_monitor():
+    with get_session() as s:
+        s.execute(text("""
+            CREATE TABLE IF NOT EXISTS monitor_datalake (
+                ts            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                sql_tcp       BOOLEAN,
+                sql_login     BOOLEAN,
+                sql_login_ms  INTEGER,
+                hana_tcp      BOOLEAN,
+                estado        VARCHAR(10)
+            );
+            CREATE INDEX IF NOT EXISTS ix_monitor_datalake_ts ON monitor_datalake (ts DESC);
+        """))
+        s.commit()
+
+
+def insertar_monitor(sql_tcp, sql_login, sql_login_ms, hana_tcp, estado):
+    """Inserta un sondeo del watchdog. Crea la tabla si no existe (idempotente)."""
+    _crear_tabla_monitor()
+    with get_session() as s:
+        s.execute(text("""
+            INSERT INTO monitor_datalake (ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, estado)
+            VALUES (NOW(), :st, :sl, :ms, :ht, :es)
+        """), {"st": sql_tcp, "sl": sql_login,
+               "ms": (int(sql_login_ms) if sql_login_ms is not None else None),
+               "ht": hana_tcp, "es": estado})
+        s.commit()
+
+
+def get_monitor_datalake(horas: int = 24) -> dict:
+    """Serie de sondeos de las últimas `horas` + eventos (cambios de estado y
+    logins lentos >1000ms) para el dashboard de salud del datalake."""
+    _crear_tabla_monitor()
+    with get_session() as s:
+        rows = s.execute(text("""
+            SELECT ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, estado
+            FROM monitor_datalake
+            WHERE ts >= NOW() - (:h || ' hours')::interval
+            ORDER BY ts
+        """), {"h": str(int(horas))}).mappings().all()
+
+    serie = [{
+        "ts": r["ts"].isoformat(),
+        "sql_tcp": bool(r["sql_tcp"]) if r["sql_tcp"] is not None else None,
+        "sql_login": bool(r["sql_login"]) if r["sql_login"] is not None else None,
+        "sql_login_ms": r["sql_login_ms"],
+        "hana_tcp": bool(r["hana_tcp"]) if r["hana_tcp"] is not None else None,
+        "estado": r["estado"],
+    } for r in rows]
+
+    # eventos: cambios de estado + logins lentos (>1000ms)
+    eventos = []
+    prev = None
+    for p in serie:
+        if p["estado"] != prev:
+            eventos.append({"ts": p["ts"], "tipo": "cambio_estado",
+                            "detalle": f"{prev or '—'} → {p['estado']}",
+                            "estado": p["estado"], "ms": p["sql_login_ms"]})
+            prev = p["estado"]
+        elif p["estado"] == "OK" and p["sql_login_ms"] and p["sql_login_ms"] > 1000:
+            eventos.append({"ts": p["ts"], "tipo": "login_lento",
+                            "detalle": f"login SQL {p['sql_login_ms']}ms",
+                            "estado": "LENTO", "ms": p["sql_login_ms"]})
+
+    # resumen
+    n = len(serie)
+    n_falla = sum(1 for p in serie if p["estado"] == "FALLA")
+    lat = [p["sql_login_ms"] for p in serie if p["sql_login"] and p["sql_login_ms"] is not None]
+    return {
+        "horas": horas, "n_sondeos": n, "n_falla": n_falla,
+        "uptime_pct": round(100 * (n - n_falla) / n, 1) if n else None,
+        "lat_media_ms": round(sum(lat) / len(lat)) if lat else None,
+        "lat_max_ms": max(lat) if lat else None,
+        "serie": serie,
+        "eventos": list(reversed(eventos)),   # más reciente primero
+    }

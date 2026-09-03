@@ -1856,6 +1856,17 @@ def get_faltantes_evolutivo_endpoint(desde: str | None = None, hasta: str | None
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/monitor/datalake", tags=["Monitor"])
+def get_monitor_datalake_endpoint(horas: int = 24):
+    """Salud del datalake: serie de sondeos (SQL/HANA) de las últimas `horas`,
+    eventos (cambios de estado + logins lentos) y resumen (uptime, latencia)."""
+    try:
+        from db_mrp import get_monitor_datalake
+        return get_monitor_datalake(horas=horas)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/faltantes/resumen30/excel", tags=["Faltantes"])
 def get_faltantes_resumen30_excel(dias: int = 30):
     """Descarga un .xlsx con SOLO la hoja Resumen 30d (para el botón del dashboard)."""
