@@ -30,6 +30,18 @@ const fmtHM = (iso) => {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 
+// segundos -> "2d 04:15:30" (o "04:15:30" si <1 día)
+const fmtDur = (seg) => {
+  if (seg == null) return "—";
+  const d = Math.floor(seg / 86400);
+  const h = Math.floor((seg % 86400) / 3600);
+  const m = Math.floor((seg % 3600) / 60);
+  const s = seg % 60;
+  const p = (n) => String(n).padStart(2, "0");
+  const hms = `${p(h)}:${p(m)}:${p(s)}`;
+  return d > 0 ? `${d}d ${hms}` : hms;
+};
+
 export default function MonitorDatalake() {
   const [horas, setHoras] = useState(24);
   const [data, setData] = useState(null);
@@ -90,22 +102,29 @@ export default function MonitorDatalake() {
         <>
           {/* KPIs */}
           <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
-            <div style={s.kpi(data.n_falla > 0 ? C.redLt : C.tealLt)}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: data.n_falla > 0 ? C.red : C.tealMid }}>{data.uptime_pct == null ? "—" : `${data.uptime_pct}%`}</div>
-              <div style={{ fontSize: 11, color: C.textMuted }}>Uptime SQL ({data.horas}h)</div>
+            <div style={s.kpi(data.sql_arriba === false ? C.redLt : C.tealLt)}>
+              <div style={{ fontSize: 20, fontWeight: 700, color: data.sql_arriba === false ? C.red : C.tealMid }}>
+                {data.sql_arriba == null ? "—" : `${data.sql_arriba ? "↑" : "↓"} ${fmtDur(data.sql_uptime_seg)}`}
+              </div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>SQL {data.sql_arriba === false ? "caído hace" : "arriba hace"}</div>
             </div>
-            <div style={s.kpi(data.n_falla > 0 ? C.redLt : C.grayLt)}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: data.n_falla > 0 ? C.red : C.text }}>{data.n_falla}</div>
-              <div style={{ fontSize: 11, color: C.textMuted }}>Sondeos en falla</div>
+            <div style={s.kpi(data.hana_arriba === false ? C.redLt : C.tealLt)}>
+              <div style={{ fontSize: 20, fontWeight: 700, color: data.hana_arriba === false ? C.red : C.tealMid }}>
+                {data.hana_arriba == null ? "—" : `${data.hana_arriba ? "↑" : "↓"} ${fmtDur(data.hana_uptime_seg)}`}
+              </div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>HANA {data.hana_arriba === false ? "caído hace" : "arriba hace"}</div>
             </div>
             <div style={s.kpi(C.grayLt)}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: C.text }}>{data.lat_media_ms == null ? "—" : `${data.lat_media_ms}ms`}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: C.text }}>{data.lat_media_ms == null ? "—" : `${data.lat_media_ms}ms`}</div>
               <div style={{ fontSize: 11, color: C.textMuted }}>Latencia media SQL</div>
             </div>
             <div style={s.kpi((data.lat_max_ms || 0) > 1000 ? C.redLt : C.grayLt)}>
-              <div style={{ fontSize: 22, fontWeight: 700, color: (data.lat_max_ms || 0) > 1000 ? C.red : C.text }}>{data.lat_max_ms == null ? "—" : `${data.lat_max_ms}ms`}</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: (data.lat_max_ms || 0) > 1000 ? C.red : C.text }}>{data.lat_max_ms == null ? "—" : `${data.lat_max_ms}ms`}</div>
               <div style={{ fontSize: 11, color: C.textMuted }}>Latencia máx SQL</div>
             </div>
+          </div>
+          <div style={{ fontSize: 11, color: C.textMuted, marginTop: -6, marginBottom: 12 }}>
+            Uptime SQL {data.uptime_sql_pct ?? "—"}% · HANA {data.uptime_hana_pct ?? "—"}% (últimas {data.horas}h)
           </div>
 
           {/* Gráfico: latencia SQL (línea) + banda HANA (área abajo) + marcas de caída */}
@@ -155,7 +174,7 @@ export default function MonitorDatalake() {
               <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
                 <thead>
                   <tr>
-                    {["Hora", "Evento", "Detalle", "ms"].map((h) => (
+                    {["Hora", "Servicio", "Estado", "Detalle", "ms"].map((h) => (
                       <th key={h} style={{ textAlign: "left", padding: "5px 8px", borderBottom: `2px solid ${C.border}`, color: C.gray, fontSize: 11 }}>{h}</th>
                     ))}
                   </tr>
@@ -166,7 +185,8 @@ export default function MonitorDatalake() {
                     return (
                       <tr key={i} style={{ background: i % 2 ? C.grayLt : "#fff" }}>
                         <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>{fmtTs(e.ts)}</td>
-                        <td style={{ padding: "4px 8px", fontWeight: 600, color: col }}>{e.tipo === "cambio_estado" ? "Cambio de estado" : "Login lento"}</td>
+                        <td style={{ padding: "4px 8px", fontWeight: 700 }}>{e.servicio}</td>
+                        <td style={{ padding: "4px 8px", fontWeight: 600, color: col }}>{e.estado}</td>
                         <td style={{ padding: "4px 8px" }}>{e.detalle}</td>
                         <td style={{ padding: "4px 8px", textAlign: "right", color: C.textMuted }}>{e.ms != null ? `${e.ms}` : ""}</td>
                       </tr>

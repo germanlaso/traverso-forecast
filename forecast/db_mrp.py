@@ -2162,27 +2162,68 @@ def get_monitor_datalake(horas: int = 24) -> dict:
         "estado": r["estado"],
     } for r in rows]
 
-    # eventos: cambios de estado + logins lentos (>1000ms)
+    # eventos: cambios de estado POR SERVICIO (SQL y HANA por separado) + logins lentos
     eventos = []
-    prev = None
+    prev_sql = prev_hana = None
     for p in serie:
-        if p["estado"] != prev:
-            eventos.append({"ts": p["ts"], "tipo": "cambio_estado",
-                            "detalle": f"{prev or '—'} → {p['estado']}",
-                            "estado": p["estado"], "ms": p["sql_login_ms"]})
-            prev = p["estado"]
-        elif p["estado"] == "OK" and p["sql_login_ms"] and p["sql_login_ms"] > 1000:
-            eventos.append({"ts": p["ts"], "tipo": "login_lento",
-                            "detalle": f"login SQL {p['sql_login_ms']}ms",
-                            "estado": "LENTO", "ms": p["sql_login_ms"]})
+        est_sql = "FALLA" if not p["sql_login"] else "OK"
+        est_hana = "FALLA" if not p["hana_tcp"] else "OK"
+        if est_sql != prev_sql:
+            ms = f" ({p['sql_login_ms']}ms)" if (est_sql == "OK" and p["sql_login_ms"]) else ""
+            eventos.append({"ts": p["ts"], "servicio": "SQL", "estado": est_sql,
+                            "detalle": f"SQL login: {prev_sql or '—'} → {est_sql}{ms}",
+                            "ms": p["sql_login_ms"]})
+            prev_sql = est_sql
+        if est_hana != prev_hana:
+            eventos.append({"ts": p["ts"], "servicio": "HANA", "estado": est_hana,
+                            "detalle": f"HANA: {prev_hana or '—'} → {est_hana}",
+                            "ms": None})
+            prev_hana = est_hana
+        # login SQL lento (aunque no cambie de estado)
+        if est_sql == "OK" and p["sql_login_ms"] and p["sql_login_ms"] > 1000:
+            eventos.append({"ts": p["ts"], "servicio": "SQL", "estado": "LENTO",
+                            "detalle": f"SQL login lento: {p['sql_login_ms']}ms",
+                            "ms": p["sql_login_ms"]})
 
-    # resumen
+    # resumen (uptime SQL y HANA por separado)
     n = len(serie)
-    n_falla = sum(1 for p in serie if p["estado"] == "FALLA")
+    n_falla_sql = sum(1 for p in serie if not p["sql_login"])
+    n_falla_hana = sum(1 for p in serie if not p["hana_tcp"])
     lat = [p["sql_login_ms"] for p in serie if p["sql_login"] and p["sql_login_ms"] is not None]
+
+    # uptime EN VIVO (Opción A): tiempo desde el último cambio de estado del servicio.
+    # arriba=True -> segundos que lleva ARRIBA sin caer; arriba=False -> segundos CAÍDO.
+    from datetime import datetime, timezone
+    def _uptime(key):
+        if not serie:
+            return {"arriba": None, "seg": None}
+        arriba = bool(serie[-1][key])           # estado actual (último sondeo)
+        # ir hacia atrás mientras el estado se mantenga; el uptime empieza en el
+        # PRIMER sondeo de la racha actual del mismo estado.
+        ts_ref = serie[-1]["ts"]
+        for p in reversed(serie):
+            if bool(p[key]) == arriba:
+                ts_ref = p["ts"]
+            else:
+                break
+        try:
+            t0 = datetime.fromisoformat(ts_ref)
+            ahora = datetime.now(timezone.utc)
+            seg = int((ahora - t0).total_seconds())
+        except Exception:
+            seg = None
+        return {"arriba": arriba, "seg": max(0, seg) if seg is not None else None}
+
+    up_sql = _uptime("sql_login")
+    up_hana = _uptime("hana_tcp")
+
     return {
-        "horas": horas, "n_sondeos": n, "n_falla": n_falla,
-        "uptime_pct": round(100 * (n - n_falla) / n, 1) if n else None,
+        "horas": horas, "n_sondeos": n,
+        "uptime_sql_pct": round(100 * (n - n_falla_sql) / n, 1) if n else None,
+        "uptime_hana_pct": round(100 * (n - n_falla_hana) / n, 1) if n else None,
+        "n_falla_sql": n_falla_sql, "n_falla_hana": n_falla_hana,
+        "sql_arriba": up_sql["arriba"], "sql_uptime_seg": up_sql["seg"],
+        "hana_arriba": up_hana["arriba"], "hana_uptime_seg": up_hana["seg"],
         "lat_media_ms": round(sum(lat) / len(lat)) if lat else None,
         "lat_max_ms": max(lat) if lat else None,
         "serie": serie,
