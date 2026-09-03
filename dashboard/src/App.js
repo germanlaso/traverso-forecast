@@ -13,6 +13,7 @@ import MiniStock from './components/MiniStock';
 import Eventos from './components/Eventos';
 import ConciliacionOF from './components/ConciliacionOF';
 import FaltantesResumen from './components/FaltantesResumen';
+import MonitorDatalake from './components/MonitorDatalake';
 import Landing from './components/Landing';
 
 const API = process.env.REACT_APP_API_BASE || '';
@@ -37,7 +38,7 @@ const BACKEND_URL = process.env.REACT_APP_API_BASE
 // gráficos conservan el tope de 1100 px: una línea de ~1900 px se lee mal y los
 // gráficos de altura fija (330 px) se achatan al estirarse.
 // Para volver al comportamiento anterior, dejar TABS_ANCHAS vacío.
-const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion','campanas','resumen30']);
+const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion','campanas','resumen30','monitor']);
 const MAIN_MAXW_ANCHO = 1800;
 
 // ── Modelo de navegación en dos niveles (mismos keys de tab de siempre) ──
@@ -45,7 +46,7 @@ const NAV = [
   { key:'home', label:'🏠 Inicio', tab:'home' },
   { key:'forecast', label:'📈 Forecast', tabs:[['forecast','Forecast de Demanda'],['eventos','Eventos']] },
   { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
-  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación']] },
+  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake']] },
   { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
 ];
 
@@ -1328,6 +1329,7 @@ function AppInner() {
         {activeTab === 'faltantes' && <Faltantes />}
         {activeTab === 'conciliacion' && <ConciliacionOF />}
         {activeTab === 'resumen30' && <FaltantesResumen />}
+        {activeTab === 'monitor' && <MonitorDatalake />}
         {activeTab === 'campanas' && <Campanas />}
         {activeTab === 'eventos' && <Eventos skus={skus} />}
         {activeTab === 'parametros' && <ParametrosDiagnostico />}
