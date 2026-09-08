@@ -78,6 +78,7 @@ SQL_DB_MONTANER = os.environ.get("SQL_DB_MONTANER", "DBMontanerV2").strip()
 SKU_EXCLUIDOS = {
     "1000000000", "1061000000", "1061000001",   # contables
     "500170200", "141041660", "141041650",       # excluidos por logística/negocio
+    "115038175",				# discontinuado importado — glaso 08-09-2026
 }
 
 # Clientes excluidos del informe: sus OV NO cuentan como faltante.
