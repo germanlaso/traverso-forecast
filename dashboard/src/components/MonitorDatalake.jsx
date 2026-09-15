@@ -71,21 +71,28 @@ export default function MonitorDatalake() {
                     border: `1px solid ${on ? C.teal : C.border}`, background: on ? C.teal : "#fff", color: on ? "#fff" : C.text }),
   };
 
-  const serie = (data?.serie || []).map((p) => ({
+  const serie0 = (data?.serie || []).map((p) => ({
     ...p,
     t: p.ts,
     ms: (p.sql_login && p.sql_login_ms != null) ? p.sql_login_ms : null,
     // latencia de login HANA (ms); null si HANA no responde en ese sondeo
     msHana: (p.hana_tcp && p.hana_login_ms != null) ? p.hana_login_ms : null,
-    // banda HANA (arriba del gráfico): valor fijo si OK, para pintar área
-    hana: p.hana_tcp ? 1 : 0,
-    // banda VPN: 1 en los tramos donde el transporte fue por VPN (contingencia)
-    vpn: p.transporte === "vpn" ? 1 : 0,
+    _hanaOk: !!p.hana_tcp,
+    _vpn: p.transporte === "vpn",
     // marca de caída SQL
     falla: p.estado === "FALLA",
   }));
-  const fallas = serie.filter((p) => p.falla);
-  const maxMs = Math.max(100, ...serie.map((p) => Math.max(p.ms || 0, p.msHana || 0)));
+  const fallas = serie0.filter((p) => p.falla);
+  const maxMs = Math.max(100, ...serie0.map((p) => Math.max(p.ms || 0, p.msHana || 0)));
+  const yTop = Math.ceil(maxMs * 1.1);
+  // bandas escaladas al eje (si usaran valor 1 sobre un eje de ~3600ms serían 1px invisible):
+  //  - HANA: franja fina en la base (6% inferior) cuando HANA está OK
+  //  - VPN: tinte de TODO el alto (opacidad baja) en los tramos por VPN
+  const serie = serie0.map((p) => ({
+    ...p,
+    hana: p._hanaOk ? yTop * 0.06 : 0,
+    vpn: p._vpn ? yTop : 0,
+  }));
 
   return (
     <div style={s.wrap}>
@@ -153,26 +160,27 @@ export default function MonitorDatalake() {
               <ComposedChart data={serie} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.grayLt} />
                 <XAxis dataKey="t" tickFormatter={fmtHM} tick={{ fontSize: 10, fill: C.textMuted }} interval="preserveStartEnd" minTickGap={40} />
-                <YAxis tick={{ fontSize: 10, fill: C.textMuted }} domain={[0, Math.ceil(maxMs * 1.1)]} label={{ value: "ms", angle: -90, position: "insideLeft", fontSize: 10, fill: C.textMuted }} />
+                <YAxis tick={{ fontSize: 10, fill: C.textMuted }} domain={[0, yTop]} label={{ value: "ms", angle: -90, position: "insideLeft", fontSize: 10, fill: C.textMuted }} />
                 <Tooltip
                   labelFormatter={fmtTs}
                   formatter={(v, name) => {
                     if (name === "ms") return [v == null ? "sin conexión" : `${v} ms`, "Latencia SQL"];
                     if (name === "msHana") return [v == null ? "sin conexión" : `${v} ms`, "Latencia HANA"];
-                    if (name === "vpn") return [v ? "por VPN" : "por MPLS", "Transporte"];
-                    return [v ? "OK" : "FALLA", "HANA"];
+                    if (name === "vpn") return [v > 0 ? "por VPN" : "por MPLS", "Transporte"];
+                    if (name === "hana") return [v > 0 ? "OK" : "FALLA", "HANA"];
+                    return [v, name];
                   }}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.border}` }}
+                  labelStyle={{ color: C.text, fontWeight: 700, marginBottom: 2 }}
+                  itemStyle={{ color: C.text }}
                 />
-                {/* banda HANA: área verde/roja en la base */}
-                <Area type="stepAfter" dataKey="hana" stroke="none"
-                      fill={C.tealLt} fillOpacity={0.5} yAxisId={0}
-                      // escalar la banda al 6% inferior del gráfico
-                      isAnimationActive={false}
-                      baseValue={0} />
-                {/* banda VPN: área ámbar (contingencia); se pinta sobre los tramos en VPN */}
+                {/* banda VPN: tinte ámbar de fondo (contingencia) — va al fondo, alto completo */}
                 <Area type="stepAfter" dataKey="vpn" stroke="none"
-                      fill={C.amber} fillOpacity={0.16} yAxisId={0}
+                      fill={C.amber} fillOpacity={0.14} yAxisId={0}
+                      isAnimationActive={false} baseValue={0} />
+                {/* banda HANA: franja verde en la base (6% inferior) cuando HANA OK */}
+                <Area type="stepAfter" dataKey="hana" stroke="none"
+                      fill={C.tealLt} fillOpacity={0.6} yAxisId={0}
                       isAnimationActive={false} baseValue={0} />
                 <Line type="monotone" dataKey="ms" stroke={C.teal} strokeWidth={1.6} dot={false}
                       connectNulls={false} isAnimationActive={false} />
