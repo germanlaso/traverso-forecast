@@ -79,6 +79,8 @@ export default function MonitorDatalake() {
     msHana: (p.hana_tcp && p.hana_login_ms != null) ? p.hana_login_ms : null,
     // banda HANA (arriba del gráfico): valor fijo si OK, para pintar área
     hana: p.hana_tcp ? 1 : 0,
+    // banda VPN: 1 en los tramos donde el transporte fue por VPN (contingencia)
+    vpn: p.transporte === "vpn" ? 1 : 0,
     // marca de caída SQL
     falla: p.estado === "FALLA",
   }));
@@ -128,6 +130,12 @@ export default function MonitorDatalake() {
               <div style={{ fontSize: 20, fontWeight: 700, color: C.amber }}>{data.lat_media_hana_ms == null ? "—" : `${data.lat_media_hana_ms}ms`}</div>
               <div style={{ fontSize: 11, color: C.textMuted }}>Latencia media HANA</div>
             </div>
+            <div style={s.kpi(data.transporte_actual === "vpn" ? C.grayLt : C.tealLt)}>
+              <div style={{ fontSize: 20, fontWeight: 700, color: data.transporte_actual === "vpn" ? C.amber : C.tealMid }}>
+                {data.transporte_actual == null ? "—" : (data.transporte_actual === "vpn" ? "VPN" : data.transporte_actual === "mpls" ? "MPLS" : "?")}
+              </div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>Conexión actual</div>
+            </div>
           </div>
           <div style={{ fontSize: 11, color: C.textMuted, marginTop: -6, marginBottom: 12 }}>
             Uptime SQL {data.uptime_sql_pct ?? "—"}% · HANA {data.uptime_hana_pct ?? "—"}% (últimas {data.horas}h)
@@ -151,6 +159,7 @@ export default function MonitorDatalake() {
                   formatter={(v, name) => {
                     if (name === "ms") return [v == null ? "sin conexión" : `${v} ms`, "Latencia SQL"];
                     if (name === "msHana") return [v == null ? "sin conexión" : `${v} ms`, "Latencia HANA"];
+                    if (name === "vpn") return [v ? "por VPN" : "por MPLS", "Transporte"];
                     return [v ? "OK" : "FALLA", "HANA"];
                   }}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.border}` }}
@@ -161,6 +170,10 @@ export default function MonitorDatalake() {
                       // escalar la banda al 6% inferior del gráfico
                       isAnimationActive={false}
                       baseValue={0} />
+                {/* banda VPN: área ámbar (contingencia); se pinta sobre los tramos en VPN */}
+                <Area type="stepAfter" dataKey="vpn" stroke="none"
+                      fill={C.amber} fillOpacity={0.16} yAxisId={0}
+                      isAnimationActive={false} baseValue={0} />
                 <Line type="monotone" dataKey="ms" stroke={C.teal} strokeWidth={1.6} dot={false}
                       connectNulls={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="msHana" stroke={C.amber} strokeWidth={1.6} dot={false}
@@ -173,7 +186,7 @@ export default function MonitorDatalake() {
             </ResponsiveContainer>
             <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>
               Líneas = latencia del login (verde SQL, ámbar HANA; los huecos son caídas). Puntos rojos abajo = sondeos en FALLA.
-              Franja verde inferior = HANA disponible.
+              Franja verde inferior = HANA disponible. Franja ámbar = conexión por VPN (contingencia).
             </div>
           </div>
 

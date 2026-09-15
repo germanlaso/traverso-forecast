@@ -2122,6 +2122,7 @@ def _crear_tabla_monitor():
                 sql_login_ms  INTEGER,
                 hana_tcp      BOOLEAN,
                 hana_login_ms INTEGER,
+                transporte    VARCHAR(8),
                 estado        VARCHAR(10)
             );
             CREATE INDEX IF NOT EXISTS ix_monitor_datalake_ts ON monitor_datalake (ts DESC);
@@ -2129,21 +2130,26 @@ def _crear_tabla_monitor():
         s.commit()
 
 
-def insertar_monitor(sql_tcp, sql_login, sql_login_ms, hana_tcp, estado, hana_login_ms=None):
+def insertar_monitor(sql_tcp, sql_login, sql_login_ms, hana_tcp, estado, hana_login_ms=None, transporte=None):
     """Inserta un sondeo del watchdog. Crea la tabla si no existe (idempotente).
 
-    hana_login_ms es opcional (default None) por compatibilidad hacia atrás: un
-    watchdog viejo que llame sin ese argumento sigue funcionando (la columna queda
-    NULL en ese sondeo)."""
+    hana_login_ms y transporte son opcionales (default None) por compatibilidad
+    hacia atrás: un watchdog viejo que llame sin esos argumentos sigue funcionando
+    (esas columnas quedan NULL en ese sondeo).
+
+    'transporte' registra el CAMINO de red hacia La Vara ('mpls'/'vpn'/'?'), una
+    dimensión ORTOGONAL a 'estado' (OK/FALLA): estar en VPN NO es indisponibilidad,
+    por eso no se mezcla con estado ni con el cálculo de uptime."""
     _crear_tabla_monitor()
     with get_session() as s:
         s.execute(text("""
-            INSERT INTO monitor_datalake (ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, hana_login_ms, estado)
-            VALUES (NOW(), :st, :sl, :ms, :ht, :hms, :es)
+            INSERT INTO monitor_datalake (ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, hana_login_ms, transporte, estado)
+            VALUES (NOW(), :st, :sl, :ms, :ht, :hms, :tr, :es)
         """), {"st": sql_tcp, "sl": sql_login,
                "ms": (int(sql_login_ms) if sql_login_ms is not None else None),
                "ht": hana_tcp,
                "hms": (int(hana_login_ms) if hana_login_ms is not None else None),
+               "tr": transporte,
                "es": estado})
         s.commit()
 
@@ -2154,7 +2160,7 @@ def get_monitor_datalake(horas: int = 24) -> dict:
     _crear_tabla_monitor()
     with get_session() as s:
         rows = s.execute(text("""
-            SELECT ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, hana_login_ms, estado
+            SELECT ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, hana_login_ms, transporte, estado
             FROM monitor_datalake
             WHERE ts >= NOW() - (:h || ' hours')::interval
             ORDER BY ts
@@ -2167,12 +2173,13 @@ def get_monitor_datalake(horas: int = 24) -> dict:
         "sql_login_ms": r["sql_login_ms"],
         "hana_tcp": bool(r["hana_tcp"]) if r["hana_tcp"] is not None else None,
         "hana_login_ms": r["hana_login_ms"],
+        "transporte": r["transporte"],
         "estado": r["estado"],
     } for r in rows]
 
     # eventos: cambios de estado POR SERVICIO (SQL y HANA por separado) + logins lentos
     eventos = []
-    prev_sql = prev_hana = None
+    prev_sql = prev_hana = prev_tr = None
     for p in serie:
         est_sql = "FALLA" if not p["sql_login"] else "OK"
         est_hana = "FALLA" if not p["hana_tcp"] else "OK"
@@ -2188,6 +2195,17 @@ def get_monitor_datalake(horas: int = 24) -> dict:
                             "detalle": f"HANA login: {prev_hana or '—'} → {est_hana}{hms}",
                             "ms": p["hana_login_ms"]})
             prev_hana = est_hana
+        # cambio de TRANSPORTE (mpls <-> vpn). Evento con estado="VPN" o "MPLS":
+        # el .jsx lo pinta ámbar (rama else de su color), como advertencia de
+        # contingencia. NO afecta 'estado' del sondeo ni el uptime (dimensión aparte).
+        tr = p["transporte"]
+        if tr is not None and tr != prev_tr:
+            if prev_tr is not None:   # no emitir en el primer dato de la ventana
+                eventos.append({"ts": p["ts"], "servicio": "RED",
+                                "estado": tr.upper(),
+                                "detalle": f"Transporte: {prev_tr.upper()} → {tr.upper()}",
+                                "ms": None})
+            prev_tr = tr
         # login SQL lento (aunque no cambie de estado)
         if est_sql == "OK" and p["sql_login_ms"] and p["sql_login_ms"] > 1000:
             eventos.append({"ts": p["ts"], "servicio": "SQL", "estado": "LENTO",
@@ -2243,6 +2261,7 @@ def get_monitor_datalake(horas: int = 24) -> dict:
         "lat_max_ms": max(lat) if lat else None,
         "lat_media_hana_ms": round(sum(lat_hana) / len(lat_hana)) if lat_hana else None,
         "lat_max_hana_ms": max(lat_hana) if lat_hana else None,
+        "transporte_actual": serie[-1]["transporte"] if serie else None,
         "serie": serie,
         "eventos": list(reversed(eventos)),   # más reciente primero
     }
