@@ -75,13 +75,15 @@ export default function MonitorDatalake() {
     ...p,
     t: p.ts,
     ms: (p.sql_login && p.sql_login_ms != null) ? p.sql_login_ms : null,
+    // latencia de login HANA (ms); null si HANA no responde en ese sondeo
+    msHana: (p.hana_tcp && p.hana_login_ms != null) ? p.hana_login_ms : null,
     // banda HANA (arriba del gráfico): valor fijo si OK, para pintar área
     hana: p.hana_tcp ? 1 : 0,
     // marca de caída SQL
     falla: p.estado === "FALLA",
   }));
   const fallas = serie.filter((p) => p.falla);
-  const maxMs = Math.max(100, ...serie.map((p) => p.ms || 0));
+  const maxMs = Math.max(100, ...serie.map((p) => Math.max(p.ms || 0, p.msHana || 0)));
 
   return (
     <div style={s.wrap}>
@@ -122,6 +124,10 @@ export default function MonitorDatalake() {
               <div style={{ fontSize: 20, fontWeight: 700, color: (data.lat_max_ms || 0) > 1000 ? C.red : C.text }}>{data.lat_max_ms == null ? "—" : `${data.lat_max_ms}ms`}</div>
               <div style={{ fontSize: 11, color: C.textMuted }}>Latencia máx SQL</div>
             </div>
+            <div style={s.kpi(C.grayLt)}>
+              <div style={{ fontSize: 20, fontWeight: 700, color: C.amber }}>{data.lat_media_hana_ms == null ? "—" : `${data.lat_media_hana_ms}ms`}</div>
+              <div style={{ fontSize: 11, color: C.textMuted }}>Latencia media HANA</div>
+            </div>
           </div>
           <div style={{ fontSize: 11, color: C.textMuted, marginTop: -6, marginBottom: 12 }}>
             Uptime SQL {data.uptime_sql_pct ?? "—"}% · HANA {data.uptime_hana_pct ?? "—"}% (últimas {data.horas}h)
@@ -129,7 +135,12 @@ export default function MonitorDatalake() {
 
           {/* Gráfico: latencia SQL (línea) + banda HANA (área abajo) + marcas de caída */}
           <div style={s.card}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Latencia de conexión SQL (ms) · caídas en rojo</div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+              Latencia de conexión (ms) · caídas en rojo
+              <span style={{ fontWeight: 400, fontSize: 11, color: C.textMuted, marginLeft: 8 }}>
+                <span style={{ color: C.teal }}>■</span> SQL&nbsp;&nbsp;<span style={{ color: C.amber }}>■</span> HANA
+              </span>
+            </div>
             <ResponsiveContainer width="100%" height={280}>
               <ComposedChart data={serie} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.grayLt} />
@@ -139,6 +150,7 @@ export default function MonitorDatalake() {
                   labelFormatter={fmtTs}
                   formatter={(v, name) => {
                     if (name === "ms") return [v == null ? "sin conexión" : `${v} ms`, "Latencia SQL"];
+                    if (name === "msHana") return [v == null ? "sin conexión" : `${v} ms`, "Latencia HANA"];
                     return [v ? "OK" : "FALLA", "HANA"];
                   }}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.border}` }}
@@ -151,6 +163,8 @@ export default function MonitorDatalake() {
                       baseValue={0} />
                 <Line type="monotone" dataKey="ms" stroke={C.teal} strokeWidth={1.6} dot={false}
                       connectNulls={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="msHana" stroke={C.amber} strokeWidth={1.6} dot={false}
+                      connectNulls={false} isAnimationActive={false} />
                 {/* marcas de caída SQL (rojo) en la base */}
                 {fallas.map((p, i) => (
                   <ReferenceDot key={i} x={p.t} y={0} r={3} fill={C.red} stroke="none" />
@@ -158,7 +172,7 @@ export default function MonitorDatalake() {
               </ComposedChart>
             </ResponsiveContainer>
             <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>
-              Línea = latencia del login SQL (los huecos son caídas). Puntos rojos abajo = sondeos en FALLA.
+              Líneas = latencia del login (verde SQL, ámbar HANA; los huecos son caídas). Puntos rojos abajo = sondeos en FALLA.
               Franja verde inferior = HANA disponible.
             </div>
           </div>

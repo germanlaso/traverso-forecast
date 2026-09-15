@@ -2121,6 +2121,7 @@ def _crear_tabla_monitor():
                 sql_login     BOOLEAN,
                 sql_login_ms  INTEGER,
                 hana_tcp      BOOLEAN,
+                hana_login_ms INTEGER,
                 estado        VARCHAR(10)
             );
             CREATE INDEX IF NOT EXISTS ix_monitor_datalake_ts ON monitor_datalake (ts DESC);
@@ -2128,16 +2129,22 @@ def _crear_tabla_monitor():
         s.commit()
 
 
-def insertar_monitor(sql_tcp, sql_login, sql_login_ms, hana_tcp, estado):
-    """Inserta un sondeo del watchdog. Crea la tabla si no existe (idempotente)."""
+def insertar_monitor(sql_tcp, sql_login, sql_login_ms, hana_tcp, estado, hana_login_ms=None):
+    """Inserta un sondeo del watchdog. Crea la tabla si no existe (idempotente).
+
+    hana_login_ms es opcional (default None) por compatibilidad hacia atrás: un
+    watchdog viejo que llame sin ese argumento sigue funcionando (la columna queda
+    NULL en ese sondeo)."""
     _crear_tabla_monitor()
     with get_session() as s:
         s.execute(text("""
-            INSERT INTO monitor_datalake (ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, estado)
-            VALUES (NOW(), :st, :sl, :ms, :ht, :es)
+            INSERT INTO monitor_datalake (ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, hana_login_ms, estado)
+            VALUES (NOW(), :st, :sl, :ms, :ht, :hms, :es)
         """), {"st": sql_tcp, "sl": sql_login,
                "ms": (int(sql_login_ms) if sql_login_ms is not None else None),
-               "ht": hana_tcp, "es": estado})
+               "ht": hana_tcp,
+               "hms": (int(hana_login_ms) if hana_login_ms is not None else None),
+               "es": estado})
         s.commit()
 
 
@@ -2147,7 +2154,7 @@ def get_monitor_datalake(horas: int = 24) -> dict:
     _crear_tabla_monitor()
     with get_session() as s:
         rows = s.execute(text("""
-            SELECT ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, estado
+            SELECT ts, sql_tcp, sql_login, sql_login_ms, hana_tcp, hana_login_ms, estado
             FROM monitor_datalake
             WHERE ts >= NOW() - (:h || ' hours')::interval
             ORDER BY ts
@@ -2159,6 +2166,7 @@ def get_monitor_datalake(horas: int = 24) -> dict:
         "sql_login": bool(r["sql_login"]) if r["sql_login"] is not None else None,
         "sql_login_ms": r["sql_login_ms"],
         "hana_tcp": bool(r["hana_tcp"]) if r["hana_tcp"] is not None else None,
+        "hana_login_ms": r["hana_login_ms"],
         "estado": r["estado"],
     } for r in rows]
 
@@ -2175,21 +2183,28 @@ def get_monitor_datalake(horas: int = 24) -> dict:
                             "ms": p["sql_login_ms"]})
             prev_sql = est_sql
         if est_hana != prev_hana:
+            hms = f" ({p['hana_login_ms']}ms)" if (est_hana == "OK" and p["hana_login_ms"]) else ""
             eventos.append({"ts": p["ts"], "servicio": "HANA", "estado": est_hana,
-                            "detalle": f"HANA: {prev_hana or '—'} → {est_hana}",
-                            "ms": None})
+                            "detalle": f"HANA login: {prev_hana or '—'} → {est_hana}{hms}",
+                            "ms": p["hana_login_ms"]})
             prev_hana = est_hana
         # login SQL lento (aunque no cambie de estado)
         if est_sql == "OK" and p["sql_login_ms"] and p["sql_login_ms"] > 1000:
             eventos.append({"ts": p["ts"], "servicio": "SQL", "estado": "LENTO",
                             "detalle": f"SQL login lento: {p['sql_login_ms']}ms",
                             "ms": p["sql_login_ms"]})
+        # login HANA lento (aunque no cambie de estado)
+        if est_hana == "OK" and p["hana_login_ms"] and p["hana_login_ms"] > 1000:
+            eventos.append({"ts": p["ts"], "servicio": "HANA", "estado": "LENTO",
+                            "detalle": f"HANA login lento: {p['hana_login_ms']}ms",
+                            "ms": p["hana_login_ms"]})
 
     # resumen (uptime SQL y HANA por separado)
     n = len(serie)
     n_falla_sql = sum(1 for p in serie if not p["sql_login"])
     n_falla_hana = sum(1 for p in serie if not p["hana_tcp"])
     lat = [p["sql_login_ms"] for p in serie if p["sql_login"] and p["sql_login_ms"] is not None]
+    lat_hana = [p["hana_login_ms"] for p in serie if p["hana_tcp"] and p["hana_login_ms"] is not None]
 
     # uptime EN VIVO (Opción A): tiempo desde el último cambio de estado del servicio.
     # arriba=True -> segundos que lleva ARRIBA sin caer; arriba=False -> segundos CAÍDO.
@@ -2226,6 +2241,8 @@ def get_monitor_datalake(horas: int = 24) -> dict:
         "hana_arriba": up_hana["arriba"], "hana_uptime_seg": up_hana["seg"],
         "lat_media_ms": round(sum(lat) / len(lat)) if lat else None,
         "lat_max_ms": max(lat) if lat else None,
+        "lat_media_hana_ms": round(sum(lat_hana) / len(lat_hana)) if lat_hana else None,
+        "lat_max_hana_ms": max(lat_hana) if lat_hana else None,
         "serie": serie,
         "eventos": list(reversed(eventos)),   # más reciente primero
     }
