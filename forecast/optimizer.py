@@ -154,6 +154,10 @@ W_EXC_BODEGA_SS0 = 3
 #   coef_unidad_tramo = round(W_tramo * 100 * ESCALA_OBJ / SS)
 #   evento_escalado   = W_QBR_EVENTO * ESCALA_OBJ
 ESCALA_OBJ = 1_000
+# (16-09 Nivel 3) Escala SEPARADA para la Pasada A (ESCALA_OBJ_A) — se lee abajo,
+# después de `import os as _os`. En A los términos con /ss_d están en 0, así que
+# bajar la escala reduce la magnitud del objetivo sin truncar coeficientes (a
+# diferencia de C). Baja el objetivo (5M -> 5000) para que el bound cierre más rápido.
 # Breakpoints de la curva, como fracción del SS (déficit hacia abajo):
 #   0 -> 0.5·SS  (tramo leve) ; 0.5·SS -> 1.0·SS (grave) ; >1.0·SS (quiebre mag.)
 # y exceso: 0 -> 1.0·SS (leve) ; >1.0·SS (alto).
@@ -179,6 +183,8 @@ SS_COBERTURA = _os.environ.get("SS_COBERTURA", "0") == "1"
 N2_QBR_MAG_MODO = _os.environ.get("N2_QBR_MAG_MODO", "ss_d").strip().lower()
 N2_QBR_DIARIO = _os.environ.get("N2_QBR_DIARIO", "0") == "1"
 W_QBR_EVENTO_DIA = int(_os.environ.get("N2_W_QBR_EVENTO_DIA", str(W_QBR_EVENTO)))
+# (16-09 Nivel 3) escala separada para Pasada A (default = ESCALA_OBJ, sin cambio)
+ESCALA_OBJ_A = int(_os.environ.get("N2_ESCALA_A", str(ESCALA_OBJ)))
 
 # v1.3 — Restricción de Nivel 1 (lot sizing).
 # Acota cuántos SKUs distintos puede asignar el optimizador a una misma
@@ -655,7 +661,8 @@ def optimizar_plan_v12_rich(
         logger.info(f"[N2] W_ALT en pasada C = {_w_alt:,} "
                     f"(K={W_ALT_C_K} x ESCALA_OBJ) | en A queda {W_ALT}")
     _agregar_objetivo(m, sku_params=sku_params, lineas_params=lineas_params,
-                      cap_dia=cap_dia, sku_a_lineas=sku_a_lineas, w_alt=_w_alt)
+                      cap_dia=cap_dia, sku_a_lineas=sku_a_lineas, w_alt=_w_alt,
+                      es_pasada_c=bool(cotas_qstar))
 
     # ─── 6b. (N2) Barrera dura Q*: stock_u[(d,s)] >= Q*[(s, d_iso)] ───────────
     # Cota inferior por celda tomada del stock SIN clamp de la pasada N1
@@ -1831,12 +1838,19 @@ def _agregar_objetivo(
     cap_dia: dict[tuple[date, str], int],
     sku_a_lineas: dict[str, list[dict]],
     w_alt: int = W_ALT,
+    es_pasada_c: bool = True,
 ) -> None:
     """Añade la función objetivo multi-criterio al modelo.
 
     v1.2: penalizamos cada inicio de corrida (W_SETUP) en vez del slack mal
     formulado de v1.0. Esto incentiva consolidar producción naturalmente.
+
+    (16-09 Nivel 3) En la Pasada A usa ESCALA_OBJ_A (escala reducida, segura porque
+    los términos con /ss_d están en 0). En C mantiene ESCALA_OBJ (evita truncar).
     """
+
+    # Escala efectiva según pasada. En A todos los términos escalados usan _esc.
+    _esc = ESCALA_OBJ if es_pasada_c else ESCALA_OBJ_A
 
     obj_terms = []
 
@@ -1860,17 +1874,17 @@ def _agregar_objetivo(
 
     # Exceso vs cap_bodega cuando SS=0 (único freno sin demanda)
     for (d, s), v in m.exc_bodega.items():
-        obj_terms.append(W_EXC_BODEGA_SS0 * ESCALA_OBJ * v)
+        obj_terms.append(W_EXC_BODEGA_SS0 * _esc * v)
 
     # Evento de quiebre UNIFORME por (SKU, semana): rompe el sesgo de factor.
     # Castigo doble (2/2): evitar QUE un SKU quiebre pesa igual para todos.
     for (s, w), b in m.evento_qbr.items():
-        obj_terms.append(W_QBR_EVENTO * ESCALA_OBJ * b)
+        obj_terms.append(W_QBR_EVENTO * _esc * b)
 
     # (16-09 Nivel 2) Evento de quiebre DIARIO uniforme (aditivo en duración).
     # Reemplaza al semanal cuando N2_QBR_DIARIO=1 (m.evento_qbr queda vacío).
     for (d, s), b in m.evento_qbr_dia.items():
-        obj_terms.append(W_QBR_EVENTO_DIA * ESCALA_OBJ * b)
+        obj_terms.append(W_QBR_EVENTO_DIA * _esc * b)
 
     # Penalizar asignación a línea alternativa (preferir la preferida)
     pref_map: dict[tuple[str, str], bool] = {}
