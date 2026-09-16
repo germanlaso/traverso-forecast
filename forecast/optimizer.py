@@ -185,6 +185,17 @@ N2_QBR_DIARIO = _os.environ.get("N2_QBR_DIARIO", "0") == "1"
 W_QBR_EVENTO_DIA = int(_os.environ.get("N2_W_QBR_EVENTO_DIA", str(W_QBR_EVENTO)))
 # (16-09 Nivel 3) escala separada para Pasada A (default = ESCALA_OBJ, sin cambio)
 ESCALA_OBJ_A = int(_os.environ.get("N2_ESCALA_A", str(ESCALA_OBJ)))
+# (16-09 (a)) Tolerancia de la Pasada A en EVENTOS de quiebre (SKU-semana):
+#   el diagnóstico con microscopio mostró que A encuentra su solución (~20 eventos)
+#   en <90 s y prueba >=14 en ~110 s en 3/3 corridas, pero cerrar los ~6 eventos
+#   restantes depende del azar del search paralelo (1/3). Con absolute_gap_limit
+#   = N eventos, CP-SAT devuelve OPTIMAL en ~2 min de forma estable. 0 = OFF.
+#   Q* sale de la solución encontrada (la misma en 3/3), no de la cota.
+N2_A_GAP_EVENTOS = int(_os.environ.get("N2_A_GAP_EVENTOS", "0") or 0)
+# (16-09 (a)) Seed fijo para A: reproducibilidad de Q* dado el input (reduce, no
+#   elimina, la varianza con 8 workers). None = comportamiento actual.
+_seed_a = _os.environ.get("N2_SEED_A", "").strip()
+N2_SEED_A = int(_seed_a) if _seed_a else None
 
 # v1.3 — Restricción de Nivel 1 (lot sizing).
 # Acota cuántos SKUs distintos puede asignar el optimizador a una misma
@@ -790,6 +801,14 @@ def optimizar_plan_v12_rich(
     solver.parameters.num_search_workers = SOLVER_NUM_WORKERS
     if SOLVER_RANDOM_SEED is not None:
         solver.parameters.random_seed = SOLVER_RANDOM_SEED
+    # (16-09 (a)) Tolerancia absoluta SOLO en Pasada A: |obj - bound| <= N eventos.
+    # Un evento semanal de quiebre vale W_QBR_EVENTO * ESCALA_OBJ_A en el objetivo
+    # de A. Al alcanzarla CP-SAT devuelve OPTIMAL. No aplica en C (otra escala).
+    if not cotas_qstar and N2_A_GAP_EVENTOS > 0:
+        _gap_abs = N2_A_GAP_EVENTOS * W_QBR_EVENTO * ESCALA_OBJ_A
+        solver.parameters.absolute_gap_limit = float(_gap_abs)
+        logger.info(f"[N2 A] absolute_gap_limit={_gap_abs} "
+                    f"({N2_A_GAP_EVENTOS} eventos x {W_QBR_EVENTO} x {ESCALA_OBJ_A})")
     # (16-09) MICROSCOPIO: diagnostico del razonamiento del solver, gated por
     # N2_DIAG_LOG_SOLVER=1. OFF por default -> cron identico. Captura el log de
     # busqueda + estadisticas por subsolver via log_callback (no va a stdout).
@@ -991,6 +1010,11 @@ def _construir_modelo(
     m.fechas = horizonte
     m.lineas = list(lineas_params.keys())
     m.pares_sku_linea = {s: [e["linea"] for e in sku_a_lineas[s]] for s in skus}
+    # (16-09) Escala del objetivo según pasada: los coeficientes que se precalculan
+    # aquí (tramos %SS, qbr_mag, MTO absoluto) usan la misma escala que los términos
+    # de _agregar_objetivo, para que el objetivo de A sea de escala UNIFORME (y el
+    # absolute_gap_limit en eventos sea exacto). En C no cambia nada.
+    _esc_m = ESCALA_OBJ if es_pasada_c else ESCALA_OBJ_A
 
     # Cache: u_por_caja por SKU, setup_unidades por par SKU-Línea, factor_velocidad
     for s in skus:
@@ -1783,17 +1807,18 @@ def _construir_modelo(
                 )
 
                 # Coeficientes por unidad, escalados: W_tramo · 100 · ESCALA / SS
-                m.coef_def_leve[(d, s)] = int(round(W_DEF_LEVE * 100 * ESCALA_OBJ / ss_d))
-                m.coef_def_grave[(d, s)] = int(round(W_DEF_GRAVE * 100 * ESCALA_OBJ / ss_d))
+                # (16-09) _esc_m = escala de la pasada (C: ESCALA_OBJ; A: ESCALA_OBJ_A).
+                m.coef_def_leve[(d, s)] = int(round(W_DEF_LEVE * 100 * _esc_m / ss_d))
+                m.coef_def_grave[(d, s)] = int(round(W_DEF_GRAVE * 100 * _esc_m / ss_d))
                 # (16-09 EJE 1) Coeficiente de magnitud del quiebre, 3 modos:
                 if N2_QBR_MAG_MODO == "off":
                     m.coef_qbr_mag[(d, s)] = 0
                 elif N2_QBR_MAG_MODO == "uniforme":
-                    m.coef_qbr_mag[(d, s)] = int(W_QBR_MAG * ESCALA_OBJ)
+                    m.coef_qbr_mag[(d, s)] = int(W_QBR_MAG * _esc_m)
                 else:  # "ss_d" (actual): coef = W·100·ESCALA/ss_d (explota con ss_d chico)
-                    m.coef_qbr_mag[(d, s)] = int(round(W_QBR_MAG * 100 * ESCALA_OBJ / ss_d))
-                m.coef_exc_leve[(d, s)] = int(round(W_EXC_LEVE * 100 * ESCALA_OBJ / ss_d))
-                m.coef_exc_alto[(d, s)] = int(round(W_EXC_ALTO * 100 * ESCALA_OBJ / ss_d))
+                    m.coef_qbr_mag[(d, s)] = int(round(W_QBR_MAG * 100 * _esc_m / ss_d))
+                m.coef_exc_leve[(d, s)] = int(round(W_EXC_LEVE * 100 * _esc_m / ss_d))
+                m.coef_exc_alto[(d, s)] = int(round(W_EXC_ALTO * 100 * _esc_m / ss_d))
 
                 if not SS_COBERTURA:
                     # LEGACY: evento_qbr solo en rama ss_d>0 (agujero de finde).
@@ -1817,7 +1842,7 @@ def _construir_modelo(
                 if demanda_consumo_d > 0:
                     m.qbr_mag[(d, s)] = m.model.NewIntVar(0, big_ub_s, f"qmg0_{d_idx}_{s}")
                     m.model.Add(m.qbr_mag[(d, s)] >= -_v_falta)
-                    m.coef_qbr_mag[(d, s)] = int(W_QBR_ABS * ESCALA_OBJ)
+                    m.coef_qbr_mag[(d, s)] = int(W_QBR_ABS * _esc_m)   # (16-09) escala de la pasada
 
             # Una línea por SKU por día
             asigs_s_d = [m.asig[(d, s, l)] for l in m.pares_sku_linea[s]]
@@ -2389,8 +2414,10 @@ def _correr_dos_pasadas(**rich_kwargs) -> dict:
         # ── Pasada A: N1-minimo @ 8 workers -> define Q* ──
         W_DEF_LEVE = W_DEF_GRAVE = W_EXC_LEVE = W_EXC_ALTO = 0
         SOLVER_NUM_WORKERS = N2_WORKERS_A
-        SOLVER_RANDOM_SEED = None
-        logger.info(f"[N2] Pasada A (N1-min) @ {N2_WORKERS_A}w TL={N2_TL_A}s")
+        SOLVER_RANDOM_SEED = N2_SEED_A   # (16-09 (a)) None = sin seed (actual)
+        logger.info(f"[N2] Pasada A (N1-min) @ {N2_WORKERS_A}w TL={N2_TL_A}s "
+                    f"seed={N2_SEED_A} escala_A={ESCALA_OBJ_A} "
+                    f"gap_eventos={N2_A_GAP_EVENTOS or 'OFF'} qbr_mag={N2_QBR_MAG_MODO}")
         resA = optimizar_plan_v12_rich(**kwargs_A)
         qstar, n_neg = _build_qstar(resA)
         logger.info(f"[N2] Q*: {len(qstar)} celdas, {n_neg} quiebre inevitables | "
