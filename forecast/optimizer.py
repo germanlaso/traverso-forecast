@@ -756,9 +756,30 @@ def optimizar_plan_v12_rich(
     solver.parameters.num_search_workers = SOLVER_NUM_WORKERS
     if SOLVER_RANDOM_SEED is not None:
         solver.parameters.random_seed = SOLVER_RANDOM_SEED
+    # (16-09) MICROSCOPIO: diagnostico del razonamiento del solver, gated por
+    # N2_DIAG_LOG_SOLVER=1. OFF por default -> cron identico. Captura el log de
+    # busqueda + estadisticas por subsolver via log_callback (no va a stdout).
+    _diag_solver = _os.environ.get("N2_DIAG_LOG_SOLVER") == "1"
+    _diag_log_lines = []
+    if _diag_solver:
+        solver.parameters.log_search_progress = True
+        solver.parameters.log_subsolver_statistics = True
+        solver.log_callback = _diag_log_lines.append
     status = solver.Solve(m.model)
     status_name = solver.StatusName(status)
     solver_time = solver.WallTime()
+
+    if _diag_solver:
+        _pasada = "C" if cotas_qstar else "A"
+        try:
+            _path = f"/tmp/cpsat_{_pasada}.log"
+            with open(_path, "w") as _f:
+                _f.write("\n".join(_diag_log_lines))
+            logger.info(f"[N2 DIAG {_pasada}] CP-SAT log -> {_path} "
+                        f"({len(_diag_log_lines)} lineas)")
+            logger.info(f"[N2 DIAG {_pasada}] ResponseStats:\n{solver.ResponseStats()}")
+        except Exception as _e:
+            logger.warning(f"[N2 DIAG {_pasada}] no se pudo volcar el log: {_e}")
 
     # ── Clasificacion de status (fix 11/06: timeout != infeasible) ──────────
     # CP-SAT (ortools 9.x) devuelve:
