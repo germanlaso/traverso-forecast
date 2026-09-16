@@ -143,10 +143,8 @@ W_QBR_EVENTO = 5_000
 #                de la semana pesa igual -> prefiere afectar menos SKU.
 #     1:          evento DIARIO por (SKU, día). Aditivo en duración: prefiere
 #                quiebres cortos, pero puede dispersar entre más SKU.
-N2_QBR_MAG_MODO = _os.environ.get("N2_QBR_MAG_MODO", "ss_d").strip().lower()
-N2_QBR_DIARIO = _os.environ.get("N2_QBR_DIARIO", "0") == "1"
-# Peso del evento diario (uniforme). Igual escala que el semanal por defecto.
-W_QBR_EVENTO_DIA = int(_os.environ.get("N2_W_QBR_EVENTO_DIA", str(W_QBR_EVENTO)))
+# (los flags N2_QBR_MAG_MODO / N2_QBR_DIARIO / W_QBR_EVENTO_DIA se leen abajo,
+#  después de `import os as _os`)
 # Exceso sobre cap_bodega cuando SS=0 (por unidad; único freno sin demanda).
 W_EXC_BODEGA_SS0 = 3
 
@@ -175,6 +173,12 @@ FRAC_EXC_LEVE  = 1.0   # hasta +100% del SS
 #   (no magnitud) -> sin sesgo por velocidad/factor de línea.
 import os as _os
 SS_COBERTURA = _os.environ.get("SS_COBERTURA", "0") == "1"
+# (16-09) Ejes del castigo de quiebre en A (ver comentario extenso arriba, junto a W_QBR_EVENTO):
+#   N2_QBR_MAG_MODO: "ss_d" (actual, explota LP) | "uniforme" (magnitud fija) | "off" (sin magnitud)
+#   N2_QBR_DIARIO:   0 (evento semanal) | 1 (evento diario, aditivo en duración)
+N2_QBR_MAG_MODO = _os.environ.get("N2_QBR_MAG_MODO", "ss_d").strip().lower()
+N2_QBR_DIARIO = _os.environ.get("N2_QBR_DIARIO", "0") == "1"
+W_QBR_EVENTO_DIA = int(_os.environ.get("N2_W_QBR_EVENTO_DIA", str(W_QBR_EVENTO)))
 
 # v1.3 — Restricción de Nivel 1 (lot sizing).
 # Acota cuántos SKUs distintos puede asignar el optimizador a una misma
