@@ -125,6 +125,28 @@ W_QBR_ABS    = 200
 # Es lo que rompe el sesgo: evitar el quiebre de cualquier SKU pesa igual, sin
 # importar factor ni volumen. Castigo doble (2/2). En "puntos de penalización".
 W_QBR_EVENTO = 5_000
+# (16-09) Rediseño del castigo de quiebre en A — dos ejes INDEPENDIENTES,
+# para poder comparar variantes con el microscopio (log_search_progress):
+#
+#   EJE 1 — magnitud del quiebre (N2_QBR_MAG_MODO):
+#     "ss_d"     (default, ACTUAL): coef = W_QBR_MAG·100·ESCALA/ss_d. EXPLOTA con
+#                ss_d chico (rango de 7 órdenes) -> mata el LP (lp_iterations=0)
+#                -> A no cierra. Es la causa del TIMEOUT (diagnóstico 16-09).
+#     "uniforme": coef = W_QBR_MAG·ESCALA (fijo, sin /ss_d). Mantiene el castigo
+#                por magnitud (equilibrio evento+magnitud) SIN el rango patológico,
+#                pero reintroduce algo de sesgo por volumen.
+#     "off":     coef = 0. Sin castigo de magnitud; el quiebre queda solo con el
+#                evento uniforme (pureza N2, sin sesgo).
+#
+#   EJE 2 — granularidad del evento (N2_QBR_DIARIO):
+#     0 (default): evento SEMANAL por (SKU, semana). Concentra: quebrar 1 o 5 días
+#                de la semana pesa igual -> prefiere afectar menos SKU.
+#     1:          evento DIARIO por (SKU, día). Aditivo en duración: prefiere
+#                quiebres cortos, pero puede dispersar entre más SKU.
+N2_QBR_MAG_MODO = _os.environ.get("N2_QBR_MAG_MODO", "ss_d").strip().lower()
+N2_QBR_DIARIO = _os.environ.get("N2_QBR_DIARIO", "0") == "1"
+# Peso del evento diario (uniforme). Igual escala que el semanal por defecto.
+W_QBR_EVENTO_DIA = int(_os.environ.get("N2_W_QBR_EVENTO_DIA", str(W_QBR_EVENTO)))
 # Exceso sobre cap_bodega cuando SS=0 (por unidad; único freno sin demanda).
 W_EXC_BODEGA_SS0 = 3
 
@@ -405,6 +427,7 @@ class _ModeloCPSAT:
         self.coef_exc_leve: dict[tuple[date, str], int] = {}
         self.coef_exc_alto: dict[tuple[date, str], int] = {}
         self.evento_qbr: dict[tuple[str, str], cp_model.IntVar] = {}    # binaria (sku, semana_iso)
+        self.evento_qbr_dia: dict[tuple[date, str], cp_model.IntVar] = {}  # (16-09) binaria (día, sku) - Nivel 2
         self.granel: dict[tuple[str, str], cp_model.IntVar] = {}       # V6 campaña: (semana_iso, modo)
         self.granel_pins: dict[str, str] = {}                           # V6: {semana_iso: modo} fijados
         self.formato: dict[tuple[str, str, str], cp_model.IntVar] = {}  # V6: (linea, semana, formato)
@@ -1710,10 +1733,19 @@ def _construir_modelo(
             # Con el flag OFF, esto NO corre (el evento se crea solo en rama ss_d>0,
             # como el comportamiento legacy).
             if SS_COBERTURA:
-                w = semana_iso_inicio(d).isoformat()
-                if (s, w) not in m.evento_qbr:
-                    m.evento_qbr[(s, w)] = m.model.NewBoolVar(f"evq_{s}_{w}")
-                m.model.Add(m.evento_qbr[(s, w)] * big_ub_s >= m.quiebre[(d, s)])
+                if N2_QBR_DIARIO:
+                    # (16-09 Nivel 2) Evento DIARIO: un binario por (día, SKU),
+                    # ligado a que ese día haya quiebre. Aditivo en duración: cada
+                    # día de quiebre suma su propio castigo -> el solver prefiere
+                    # quiebres cortos. Uniforme (mismo peso para todo SKU).
+                    if (d, s) not in m.evento_qbr_dia:
+                        m.evento_qbr_dia[(d, s)] = m.model.NewBoolVar(f"evqd_{d_idx}_{s}")
+                    m.model.Add(m.evento_qbr_dia[(d, s)] * big_ub_s >= m.quiebre[(d, s)])
+                else:
+                    w = semana_iso_inicio(d).isoformat()
+                    if (s, w) not in m.evento_qbr:
+                        m.evento_qbr[(s, w)] = m.model.NewBoolVar(f"evq_{s}_{w}")
+                    m.model.Add(m.evento_qbr[(s, w)] * big_ub_s >= m.quiebre[(d, s)])
 
             if ss_d > 0:
                 # ── Curva convexa en % del SS ─────────────────────────────────
@@ -1742,7 +1774,13 @@ def _construir_modelo(
                 # Coeficientes por unidad, escalados: W_tramo · 100 · ESCALA / SS
                 m.coef_def_leve[(d, s)] = int(round(W_DEF_LEVE * 100 * ESCALA_OBJ / ss_d))
                 m.coef_def_grave[(d, s)] = int(round(W_DEF_GRAVE * 100 * ESCALA_OBJ / ss_d))
-                m.coef_qbr_mag[(d, s)] = int(round(W_QBR_MAG * 100 * ESCALA_OBJ / ss_d))
+                # (16-09 EJE 1) Coeficiente de magnitud del quiebre, 3 modos:
+                if N2_QBR_MAG_MODO == "off":
+                    m.coef_qbr_mag[(d, s)] = 0
+                elif N2_QBR_MAG_MODO == "uniforme":
+                    m.coef_qbr_mag[(d, s)] = int(W_QBR_MAG * ESCALA_OBJ)
+                else:  # "ss_d" (actual): coef = W·100·ESCALA/ss_d (explota con ss_d chico)
+                    m.coef_qbr_mag[(d, s)] = int(round(W_QBR_MAG * 100 * ESCALA_OBJ / ss_d))
                 m.coef_exc_leve[(d, s)] = int(round(W_EXC_LEVE * 100 * ESCALA_OBJ / ss_d))
                 m.coef_exc_alto[(d, s)] = int(round(W_EXC_ALTO * 100 * ESCALA_OBJ / ss_d))
 
@@ -1824,6 +1862,11 @@ def _agregar_objetivo(
     # Castigo doble (2/2): evitar QUE un SKU quiebre pesa igual para todos.
     for (s, w), b in m.evento_qbr.items():
         obj_terms.append(W_QBR_EVENTO * ESCALA_OBJ * b)
+
+    # (16-09 Nivel 2) Evento de quiebre DIARIO uniforme (aditivo en duración).
+    # Reemplaza al semanal cuando N2_QBR_DIARIO=1 (m.evento_qbr queda vacío).
+    for (d, s), b in m.evento_qbr_dia.items():
+        obj_terms.append(W_QBR_EVENTO_DIA * ESCALA_OBJ * b)
 
     # Penalizar asignación a línea alternativa (preferir la preferida)
     pref_map: dict[tuple[str, str], bool] = {}
