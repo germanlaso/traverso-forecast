@@ -1810,12 +1810,18 @@ def _construir_modelo(
                 # (16-09) _esc_m = escala de la pasada (C: ESCALA_OBJ; A: ESCALA_OBJ_A).
                 m.coef_def_leve[(d, s)] = int(round(W_DEF_LEVE * 100 * _esc_m / ss_d))
                 m.coef_def_grave[(d, s)] = int(round(W_DEF_GRAVE * 100 * _esc_m / ss_d))
-                # (16-09 EJE 1) Coeficiente de magnitud del quiebre, 3 modos:
-                if N2_QBR_MAG_MODO == "off":
-                    m.coef_qbr_mag[(d, s)] = 0
+                # (16-09 EJE 1) Coeficiente de magnitud del quiebre.
+                # (17-09 FIX) El modo aplica SOLO a la Pasada A. En C, qbr_mag DEBE ser
+                # la holgura MÁS CARA de `def_leve + def_grave + qbr_mag >= déficit`:
+                # si vale 0 el solver mete TODO el déficit ahí y los tramos %SS quedan
+                # gratis -> C ignora el SS (plan 224: 1 día de producción, stock a 0).
+                if es_pasada_c or N2_QBR_MAG_MODO == "ss_d":
+                    m.coef_qbr_mag[(d, s)] = int(round(W_QBR_MAG * 100 * _esc_m / ss_d))
+                elif N2_QBR_MAG_MODO == "off":
+                    m.coef_qbr_mag[(d, s)] = 0          # A: solo evento uniforme (W_DEF=0 ya)
                 elif N2_QBR_MAG_MODO == "uniforme":
                     m.coef_qbr_mag[(d, s)] = int(W_QBR_MAG * _esc_m)
-                else:  # "ss_d" (actual): coef = W·100·ESCALA/ss_d (explota con ss_d chico)
+                else:
                     m.coef_qbr_mag[(d, s)] = int(round(W_QBR_MAG * 100 * _esc_m / ss_d))
                 m.coef_exc_leve[(d, s)] = int(round(W_EXC_LEVE * 100 * _esc_m / ss_d))
                 m.coef_exc_alto[(d, s)] = int(round(W_EXC_ALTO * 100 * _esc_m / ss_d))
