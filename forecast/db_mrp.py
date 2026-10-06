@@ -530,6 +530,9 @@ def crear_tablas_params():
     # Conciliación OF/TR (Fase 1): tabla independiente, se crea aquí también.
     crear_tablas_of_sap()
 
+    # Precisión del forecast: vintages h=1/h=2 (tabla independiente).
+    crear_tabla_forecast_vintage()
+
 
 # ─── V6 Campanas de linea ────────────────────────────────────────────────────
 
@@ -2265,3 +2268,67 @@ def get_monitor_datalake(horas: int = 24) -> dict:
         "serie": serie,
         "eventos": list(reversed(eventos)),   # más reciente primero
     }
+
+
+# ─── Precisión del forecast: vintages ─────────────────────────────────────────
+# Grano: (sku, semana_objetivo, horizonte). Una fila = lo que el forecast vigente
+# en `domingo_corte` predijo para la semana `semana_objetivo` (domingo a sábado).
+#   h=1 -> semana_objetivo = domingo_corte + 7 ; h=2 -> domingo_corte + 14.
+#   Los horizontes NUNCA se mezclan en una métrica.
+# domingo_corte = semana_viz_inicio(mtime del pkl): el cron de reentrenamiento
+# corre el LUNES (0 3 * * 1 UTC); la fecha de corrida no sirve como clave.
+# yhat_u en UNIDADES, redondeado a 1 decimal = exactamente lo que consumió el plan
+# (_format_forecast). Test de fidelidad 06-10-2026: 199 SKU, |diff| <= 0,05.
+# ON CONFLICT DO NOTHING: el PRIMER modelo del corte gana (el vigente al abrir la
+# semana). Para corregir una fila: backup -> DELETE -> re-correr el backfill.
+# Ver precision_forecast.py.
+
+def crear_tabla_forecast_vintage():
+    """Crea mrp_forecast_vintage si no existe. Idempotente. La llama crear_tablas_params()."""
+    with get_session() as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS mrp_forecast_vintage (
+                sku              VARCHAR(30)   NOT NULL,
+                semana_objetivo  DATE          NOT NULL,   -- domingo que abre la semana W
+                horizonte_sem    SMALLINT      NOT NULL,   -- 1 | 2
+                domingo_corte    DATE          NOT NULL,
+                yhat_u           NUMERIC(14,1) NOT NULL,   -- UNIDADES; cajas al consultar
+                con_evento       BOOLEAN       NOT NULL DEFAULT FALSE,
+                modelo_mtime     TIMESTAMP,                -- NULL en SKU con evento (modelo en memoria)
+                origen           VARCHAR(10)   NOT NULL,   -- 'backfill' | 'cron'
+                created_at       TIMESTAMP     DEFAULT NOW(),
+                PRIMARY KEY (sku, semana_objetivo, horizonte_sem),
+                CONSTRAINT mrp_fv_horizonte  CHECK (horizonte_sem IN (1, 2)),
+                CONSTRAINT mrp_fv_domingo    CHECK (EXTRACT(DOW FROM domingo_corte) = 0),
+                CONSTRAINT mrp_fv_coherencia CHECK (semana_objetivo = domingo_corte + 7 * horizonte_sem),
+                CONSTRAINT mrp_fv_yhat       CHECK (yhat_u >= 0),
+                CONSTRAINT mrp_fv_origen     CHECK (origen IN ('backfill', 'cron'))
+            );
+            CREATE INDEX IF NOT EXISTS ix_fv_corte  ON mrp_forecast_vintage (domingo_corte);
+            CREATE INDEX IF NOT EXISTS ix_fv_semana ON mrp_forecast_vintage (semana_objetivo, horizonte_sem);
+        """))
+        session.commit()
+    logger.info("[MRP_DB] mrp_forecast_vintage inicializada.")
+
+
+def insertar_forecast_vintage(filas: list[dict]) -> dict:
+    """INSERT ... ON CONFLICT DO NOTHING (el primer modelo del corte gana).
+    Cada fila: sku, semana_objetivo, horizonte_sem, domingo_corte, yhat_u,
+    con_evento, modelo_mtime, origen. Devuelve {recibidas, insertadas, existentes}."""
+    if not filas:
+        return {"recibidas": 0, "insertadas": 0, "existentes": 0}
+    with get_session() as session:
+        antes = session.execute(text("SELECT COUNT(*) FROM mrp_forecast_vintage")).scalar()
+        session.execute(text("""
+            INSERT INTO mrp_forecast_vintage
+                (sku, semana_objetivo, horizonte_sem, domingo_corte, yhat_u,
+                 con_evento, modelo_mtime, origen)
+            VALUES
+                (:sku, :semana_objetivo, :horizonte_sem, :domingo_corte, :yhat_u,
+                 :con_evento, :modelo_mtime, :origen)
+            ON CONFLICT (sku, semana_objetivo, horizonte_sem) DO NOTHING
+        """), filas)
+        despues = session.execute(text("SELECT COUNT(*) FROM mrp_forecast_vintage")).scalar()
+        session.commit()
+    ins = int(despues - antes)
+    return {"recibidas": len(filas), "insertadas": ins, "existentes": len(filas) - ins}
