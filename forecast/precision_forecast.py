@@ -39,6 +39,12 @@ PASO 5 (cron semanal, lunes 04:00 UTC, 1 h despues de cron_retrain):
   --ultimos 3 = corte vigente + 2 anteriores: AUTORREPARABLE. Si una semana el
   job falla, la siguiente rellena el corte pendiente (DO NOTHING respeta lo ya
   escrito). Con --origen cron, cualquier error o excepcion manda alerta al admin.
+
+PASO 6a (venta real): en el mismo run (salvo --verificar) se calcula la venta
+real semanal con prepare_prophet_df (misma funcion que entrena Prophet) para
+los SKU con vintage, con 0 explicito en semanas sin venta, y se hace UPSERT en
+mrp_venta_semanal. Ventana: --todos desde la primera semana objetivo (corte
+minimo + 7); --ultimos/--corte las ultimas SEMANAS_VENTA_CRON semanas cerradas.
 """
 import argparse
 import glob
@@ -56,6 +62,7 @@ CORTE_MIN = date(2026, 8, 30)
 HORIZONTES = (1, 2)
 COLS_FECHA_VENTAS = ("fecha", "fecha_semana", "ds", "Fecha")
 TOL_EXACTO = 1e-6
+SEMANAS_VENTA_CRON = 8      # el cron reescribe (upsert) las ultimas N semanas cerradas
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s [precision] %(message)s")
@@ -340,6 +347,70 @@ def _verificar(corte, cand, eventos, solo, df_ventas, col_fecha, fz) -> int:
 
 # -- Main ------------------------------------------------------------------------
 
+def _ventas_semanales(skus, df_ventas, desde, hasta, prepare_prophet_df):
+    """Venta real por (sku, semana cerrada) en [desde, hasta], 0 explicito sin venta.
+    prepare_prophet_df corta la historia en la ultima venta (falla B): sin el 0,
+    los intermitentes desaparecerian de la evaluacion y sesgarian las metricas."""
+    semanas, c = [], desde
+    while c <= hasta:
+        semanas.append(c)
+        c += timedelta(days=7)
+    filas, errores = [], []
+    for sku in skus:
+        try:
+            pdf = prepare_prophet_df(df_ventas, sku)
+            serie = {}
+            if pdf is not None and not pdf.empty:
+                f = pd.to_datetime(pdf["ds"]).dt.date
+                no_dom = [d for d in f if d.weekday() != 6]
+                if no_dom:
+                    raise RuntimeError(f"ds no domingo: {no_dom[:3]}")
+                serie = dict(zip(f, pdf["y"].astype(float)))
+            for w in semanas:
+                filas.append(dict(sku=sku, semana=w,
+                                  venta_u=round(max(serie.get(w, 0.0), 0.0), 1)))
+        except Exception as e:
+            errores.append((sku, repr(e)))
+            log.error("venta SKU %s: %r", sku, e)
+    return filas, errores, semanas
+
+
+def _procesar_ventas(a, vigente, cand_por_corte, eventos, solo, df_ventas, fz) -> int:
+    from db_mrp import skus_forecast_vintage, upsert_venta_semanal
+    hasta = vigente - timedelta(days=7)                 # ultima semana cerrada
+    primera = CORTE_MIN + timedelta(days=7)             # primera semana objetivo posible
+    if a.todos:
+        desde = primera
+    else:
+        desde = max(primera, vigente - timedelta(days=7 * SEMANAS_VENTA_CRON))
+    if desde > hasta:
+        log.info("venta real: sin semanas cerradas en la ventana")
+        return 0
+    skus = set(skus_forecast_vintage()) | set(eventos)
+    for cand in cand_por_corte.values():
+        skus |= set(cand)
+    if solo:
+        skus &= solo
+    filas, errores, semanas = _ventas_semanales(sorted(skus), df_ventas, desde, hasta,
+                                                fz["prepare_prophet_df"])
+    df = pd.DataFrame(filas)
+    if len(df):
+        tot = df.groupby("semana")["venta_u"].sum().round(0)
+        log.info("venta real %s..%s | %d SKU x %d sem = %d filas | %d error | total u por semana: %s",
+                 desde, hasta, len(skus), len(semanas), len(df), len(errores),
+                 {str(k): int(v) for k, v in tot.items()})
+    if not a.escribir:
+        log.info("venta real: DRY-RUN (NO se escribio en BD)")
+        return 1 if errores else 0
+    if errores:
+        log.error("venta real: %d error(es) -> NO se escribe (todo o nada)", len(errores))
+        return 1
+    r = upsert_venta_semanal(filas)
+    log.info("venta real ESCRITA: recibidas %d | nuevas %d | cambiadas %d | iguales %d",
+             r["recibidas"], r["nuevas"], r["cambiadas"], r["iguales"])
+    return 0
+
+
 def _alerta(asunto: str, cuerpo: str) -> None:
     """Mismo patron que cron_retrain.py: un fallo del mail no tira el proceso."""
     try:
@@ -400,7 +471,8 @@ def main() -> int:
 def _main(a) -> int:
     solo = {s.strip() for s in a.solo.split(",") if s.strip()}
 
-    from forecaster import make_forecast, _cap_forecast, get_categoria, run_sku_pipeline
+    from forecaster import (make_forecast, _cap_forecast, get_categoria,
+                            run_sku_pipeline, prepare_prophet_df)
     from seasonality import get_regressors
     from calendario import semana_viz_inicio
     from eventos import cargar_eventos_activos
@@ -411,7 +483,7 @@ def _main(a) -> int:
         lg.disabled = True        # setLevel solo no alcanza: algo lo reconfigura al entrenar
     fz = dict(make_forecast=make_forecast, _cap_forecast=_cap_forecast,
               get_categoria=get_categoria, run_sku_pipeline=run_sku_pipeline,
-              get_regressors=get_regressors)
+              get_regressors=get_regressors, prepare_prophet_df=prepare_prophet_df)
 
     vigente = _domingo(date.today(), semana_viz_inicio)
     if a.todos:
@@ -452,8 +524,10 @@ def _main(a) -> int:
     if a.verificar:
         c = cortes[0]
         return _verificar(c, cand_por_corte[c], eventos, solo, df_ventas, col_fecha, fz)
-    return _procesar(cortes, cand_por_corte, eventos, solo, df_ventas, col_fecha, fz,
+    rc_v = _procesar(cortes, cand_por_corte, eventos, solo, df_ventas, col_fecha, fz,
                      a.escribir, a.origen)
+    rc_s = _procesar_ventas(a, vigente, cand_por_corte, eventos, solo, df_ventas, fz)
+    return rc_v or rc_s
 
 
 if __name__ == "__main__":

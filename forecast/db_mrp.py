@@ -530,8 +530,9 @@ def crear_tablas_params():
     # Conciliación OF/TR (Fase 1): tabla independiente, se crea aquí también.
     crear_tablas_of_sap()
 
-    # Precisión del forecast: vintages h=1/h=2 (tabla independiente).
+    # Precisión del forecast: vintages h=1/h=2 + venta real semanal (tablas independientes).
     crear_tabla_forecast_vintage()
+    crear_tabla_venta_semanal()
 
 
 # ─── V6 Campanas de linea ────────────────────────────────────────────────────
@@ -2332,3 +2333,62 @@ def insertar_forecast_vintage(filas: list[dict]) -> dict:
         session.commit()
     ins = int(despues - antes)
     return {"recibidas": len(filas), "insertadas": ins, "existentes": len(filas) - ins}
+
+
+# ─── Precisión del forecast: venta real semanal ───────────────────────────────
+# Venta real con la MISMA funcion con que entrena Prophet (prepare_prophet_df):
+# mismo binning domingo a sabado, mismo clip(lower=0), solo semanas cerradas.
+# Semanas sin venta = 0 explicito (prepare_prophet_df corta la historia en la
+# ultima venta; sin el 0, los intermitentes desaparecerian de la evaluacion).
+# UPSERT: el cron reescribe las ultimas N semanas para absorber correcciones
+# tardias (notas de credito, ajustes del datalake).
+
+def crear_tabla_venta_semanal():
+    """Crea mrp_venta_semanal si no existe. Idempotente. La llama crear_tablas_params()."""
+    with get_session() as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS mrp_venta_semanal (
+                sku             VARCHAR(30)   NOT NULL,
+                semana          DATE          NOT NULL,   -- domingo que abre la semana
+                venta_u         NUMERIC(14,1) NOT NULL,   -- UNIDADES; cajas al consultar
+                actualizado_en  TIMESTAMP     DEFAULT NOW(),
+                PRIMARY KEY (sku, semana),
+                CONSTRAINT mrp_vs_domingo CHECK (EXTRACT(DOW FROM semana) = 0),
+                CONSTRAINT mrp_vs_venta   CHECK (venta_u >= 0)
+            );
+            CREATE INDEX IF NOT EXISTS ix_vs_semana ON mrp_venta_semanal (semana);
+        """))
+        session.commit()
+    logger.info("[MRP_DB] mrp_venta_semanal inicializada.")
+
+
+def upsert_venta_semanal(filas: list[dict]) -> dict:
+    """UPSERT por (sku, semana). Cada fila: sku, semana, venta_u.
+    Devuelve {recibidas, nuevas, cambiadas, iguales}."""
+    if not filas:
+        return {"recibidas": 0, "nuevas": 0, "cambiadas": 0, "iguales": 0}
+    with get_session() as session:
+        antes = session.execute(text("SELECT COUNT(*) FROM mrp_venta_semanal")).scalar()
+        marca = session.execute(text("SELECT NOW()")).scalar()
+        session.execute(text("""
+            INSERT INTO mrp_venta_semanal (sku, semana, venta_u)
+            VALUES (:sku, :semana, :venta_u)
+            ON CONFLICT (sku, semana) DO UPDATE
+               SET venta_u = EXCLUDED.venta_u, actualizado_en = NOW()
+             WHERE mrp_venta_semanal.venta_u IS DISTINCT FROM EXCLUDED.venta_u
+        """), filas)
+        despues = session.execute(text("SELECT COUNT(*) FROM mrp_venta_semanal")).scalar()
+        tocadas = session.execute(text(
+            "SELECT COUNT(*) FROM mrp_venta_semanal WHERE actualizado_en >= :m"), {"m": marca}).scalar()
+        session.commit()
+    nuevas = int(despues - antes)
+    cambiadas = int(tocadas) - nuevas
+    return {"recibidas": len(filas), "nuevas": nuevas, "cambiadas": cambiadas,
+            "iguales": len(filas) - nuevas - cambiadas}
+
+
+def skus_forecast_vintage() -> list[str]:
+    """SKU con al menos un vintage registrado (universo de la venta real a persistir)."""
+    with get_session() as session:
+        rows = session.execute(text("SELECT DISTINCT sku FROM mrp_forecast_vintage ORDER BY sku")).fetchall()
+    return [r[0] for r in rows]
