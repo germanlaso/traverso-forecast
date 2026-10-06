@@ -43,8 +43,10 @@ PASO 5 (cron semanal, lunes 04:00 UTC, 1 h despues de cron_retrain):
 PASO 6a (venta real): en el mismo run (salvo --verificar) se calcula la venta
 real semanal con prepare_prophet_df (misma funcion que entrena Prophet) para
 los SKU con vintage, con 0 explicito en semanas sin venta, y se hace UPSERT en
-mrp_venta_semanal. Ventana: --todos desde la primera semana objetivo (corte
-minimo + 7); --ultimos/--corte las ultimas SEMANAS_VENTA_CRON semanas cerradas.
+mrp_venta_semanal. Ventana: --todos desde 52 semanas ANTES de la primera semana
+objetivo (corte minimo + 7 - 364 d), para tener la venta del ano anterior del
+grafico comparativo; --ultimos/--corte las ultimas SEMANAS_VENTA_CRON semanas
+cerradas (las del ano anterior ya quedaron guardadas por el backfill).
 """
 import argparse
 import glob
@@ -63,6 +65,7 @@ HORIZONTES = (1, 2)
 COLS_FECHA_VENTAS = ("fecha", "fecha_semana", "ds", "Fecha")
 TOL_EXACTO = 1e-6
 SEMANAS_VENTA_CRON = 8      # el cron reescribe (upsert) las ultimas N semanas cerradas
+LY_DIAS = 364               # misma semana del ano anterior: 52 semanas (conserva domingo a sabado)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s [precision] %(message)s")
@@ -380,7 +383,7 @@ def _procesar_ventas(a, vigente, cand_por_corte, eventos, solo, df_ventas, fz) -
     hasta = vigente - timedelta(days=7)                 # ultima semana cerrada
     primera = CORTE_MIN + timedelta(days=7)             # primera semana objetivo posible
     if a.todos:
-        desde = primera
+        desde = primera - timedelta(days=LY_DIAS)      # incluye el ano anterior (grafico comparativo)
     else:
         desde = max(primera, vigente - timedelta(days=7 * SEMANAS_VENTA_CRON))
     if desde > hasta:

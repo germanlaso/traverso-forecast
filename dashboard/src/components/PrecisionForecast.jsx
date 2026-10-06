@@ -9,7 +9,7 @@
 //   - Semanas sin forecast para la anticipación elegida se muestran como hueco, no se interpolan.
 import React, { useState, useEffect, useMemo } from 'react';
 import { ComposedChart, Bar, Line, Cell, LabelList, XAxis, YAxis, CartesianGrid,
-         Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+         Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts';
 import axios from 'axios';
 
 const API = process.env.REACT_APP_API_BASE || '';
@@ -23,6 +23,11 @@ const C = {
 // Sobredimensionado → riesgo de sobrestock/merma (ámbar). Subdimensionado → riesgo de quiebre (rojo).
 const COLOR_SOBRE = C.amber;
 const COLOR_SUB = C.danger;
+// Gráfico comparativo: una serie por anticipación (lado a lado, nunca combinadas en una métrica)
+const COLOR_H2 = '#AFA9EC';
+const COLOR_H1 = C.blue;
+const COLOR_REAL = C.teal;
+const COLOR_LY = C.gray;
 
 const s = {
   card: {background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:10,padding:'16px 20px',marginBottom:16},
@@ -78,6 +83,28 @@ function TooltipSemana({active, payload}) {
   );
 }
 
+function TooltipComparativo({active, payload}) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0].payload;
+  const vsLy = (v) => (v == null || !p.ly_cj) ? '' : ` (${fmtPct(100 * (v - p.ly_cj) / p.ly_cj)} vs año ant.)`;
+  const estado = p.estado === 'cerrada' ? '' : p.estado === 'en_curso' ? ' · en curso' : ' · proyección';
+  const fila = (color, lbl, v, extra = '') => (
+    <div><span style={{display:'inline-block',width:9,height:9,background:color,borderRadius:2,marginRight:6}}/>
+      {lbl}: <strong>{v == null ? '—' : `${fmtNum(v)} cj`}</strong>{extra}</div>
+  );
+  return (
+    <div style={{background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:8,padding:'10px 14px',fontSize:12,maxWidth:360}}>
+      <div style={{fontWeight:700,marginBottom:6,color:C.text}}>Semana {p.rango}{estado}</div>
+      {fila(COLOR_H2, 'Forecast 2 semanas antes', p.fc_h2_cj, vsLy(p.fc_h2_cj))}
+      {fila(COLOR_H1, 'Forecast 1 semana antes', p.fc_h1_cj, vsLy(p.fc_h1_cj))}
+      {p.estado === 'cerrada'
+        ? fila(COLOR_REAL, 'Venta real', p.real_cj, vsLy(p.real_cj))
+        : <div style={{color:C.textMuted}}>Venta real: aún no disponible</div>}
+      {fila(COLOR_LY, `Año anterior (${p.ly_rango})`, p.ly_cj)}
+    </div>
+  );
+}
+
 const COLUMNAS = [
   ['sku','SKU'], ['descripcion','Descripción'], ['categoria','Categoría'], ['linea','Línea'],
   ['real_cj','Real (cj)'], ['yhat_cj','Forecast (cj)'], ['error_abs_cj','Error abs. (cj)'],
@@ -102,6 +129,9 @@ export default function PrecisionForecast() {
   const [semSel, setSemSel] = useState('');       // semana clickeada en el gráfico ('' = ventana completa)
   const [dataSem, setDataSem] = useState(null);
   const [cargandoSem, setCargandoSem] = useState(false);
+  const [vista, setVista] = useState('desviacion');   // 'desviacion' | 'comparativo'
+  const [comp, setComp] = useState(null);
+  const [cargandoComp, setCargandoComp] = useState(false);
 
   useEffect(() => {
     axios.get(`${API}/precision/filtros`)
@@ -137,6 +167,19 @@ export default function PrecisionForecast() {
       .catch(e => setError(e?.response?.data?.detail || 'Error al cargar la precisión del forecast.'))
       .finally(() => setCargando(false));
   }, [paramsBase, desde, hasta]);
+
+  useEffect(() => {
+    if (vista !== 'comparativo') return;
+    const params = {...paramsBase};
+    delete params.horizonte;                         // el comparativo muestra ambas anticipaciones
+    if (desde) params.desde = desde;
+    if (hasta) params.hasta = hasta;
+    setCargandoComp(true);
+    axios.get(`${API}/precision/comparativo`, {params})
+      .then(r => setComp(r.data))
+      .catch(e => setError(e?.response?.data?.detail || 'Error al cargar el gráfico comparativo.'))
+      .finally(() => setCargandoComp(false));
+  }, [vista, paramsBase, desde, hasta]);
 
   // Si la semana seleccionada ya no está en la serie (cambio de filtros/rango), se vuelve al total.
   useEffect(() => {
@@ -200,6 +243,14 @@ export default function PrecisionForecast() {
     if (!p || p.hueco) return;
     setSemSel(cur => (cur === p.semana ? '' : p.semana));
   };
+  const clicComparativo = (st) => {
+    const p = st?.activePayload?.[0]?.payload;
+    if (!p || p.estado !== 'cerrada') return;
+    setSemSel(cur => (cur === p.semana ? '' : p.semana));
+  };
+  const compData = comp?.semanas || [];
+  const compFuturas = compData.filter(w => w.estado !== 'cerrada');
+  const opac = (w) => (semSel && w.semana !== semSel ? 0.3 : 1);
   const puntoSel = semSel ? serieGrafico.find(p => p.semana === semSel) : null;
   const kpiSem = dataSem?.kpi;
 
@@ -314,43 +365,103 @@ export default function PrecisionForecast() {
             </div>
           </div>
 
-          {/* ── Gráfico: desviación en el tiempo ── */}
+          {/* ── Gráficos (selector: desviación / comparativo) ── */}
           <div style={s.card}>
-            <div style={s.cardTitle}>
-              Desviación semanal — {horizonte === 1 ? '1 semana' : '2 semanas'} de anticipación
-              {skuSel ? ` · SKU ${skuSel}` : ''}
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8,marginBottom:10}}>
+              <div style={{...s.cardTitle, marginBottom:0}}>
+                {vista === 'desviacion'
+                  ? `Desviación semanal — ${horizonte === 1 ? '1 semana' : '2 semanas'} de anticipación`
+                  : 'Forecast vs. real vs. año anterior (cajas)'}
+                {skuSel ? ` · SKU ${skuSel}` : ''}
+              </div>
+              <div style={{display:'flex',gap:6}}>
+                <button style={s.btn(vista === 'desviacion')} onClick={() => setVista('desviacion')}>Desviación</button>
+                <button style={s.btn(vista === 'comparativo')} onClick={() => setVista('comparativo')}>Forecast vs real vs año anterior</button>
+              </div>
             </div>
-            <div style={{display:'flex',gap:16,fontSize:11,color:C.textMuted,marginBottom:8,flexWrap:'wrap'}}>
-              <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_SOBRE,borderRadius:2,marginRight:4}}/>Sesgo sobre 0: sobredimensionado (riesgo de sobrestock)</span>
-              <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_SUB,borderRadius:2,marginRight:4}}/>Sesgo bajo 0: subdimensionado (riesgo de quiebre)</span>
-              <span><span style={{display:'inline-block',width:14,height:2,background:C.purple,marginRight:4,verticalAlign:'middle'}}/>WMAPE (magnitud)</span>
-              <span>· <strong>clic en una semana</strong> para ver solo esa semana en la tabla</span>
-            </div>
-            <ResponsiveContainer width="100%" height={320}>
-              <ComposedChart data={serieGrafico} margin={{top:20,right:20,left:0,bottom:5}}
-                             onClick={clicGrafico} style={{cursor:'pointer'}}>
-                <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="rango" tick={{fontSize:11}}
-                       tickFormatter={(v) => {
-                         const p = serieGrafico.find(x => x.rango === v);
-                         return p && p.hueco ? `${v} (sin forecast)` : v;
-                       }} />
-                <YAxis tick={{fontSize:11}} tickFormatter={(v) => `${v}%`} />
-                <Tooltip content={<TooltipSemana />} />
-                <ReferenceLine y={0} stroke={C.gray} strokeWidth={1.5} />
-                <Bar dataKey="sesgo_pct" name="Sesgo" maxBarSize={56}>
-                  {serieGrafico.map((p, i) => (
-                    <Cell key={i} fill={p.sesgo_pct > 0 ? COLOR_SOBRE : COLOR_SUB}
-                          fillOpacity={semSel && p.semana !== semSel ? 0.3 : 1}
-                          stroke={p.semana === semSel ? C.text : 'none'} strokeWidth={2} />
-                  ))}
-                  <LabelList dataKey="sesgo_pct" position="top" style={{fontSize:11,fontWeight:700,fill:C.text}}
-                             formatter={(v) => (v == null ? '' : fmtPct(v))} />
-                </Bar>
-                <Line dataKey="wmape_pct" name="WMAPE" stroke={C.purple} strokeWidth={2}
-                      dot={{r:3}} connectNulls={false} />
-              </ComposedChart>
-            </ResponsiveContainer>
+
+            {vista === 'desviacion' && (
+              <>
+                <div style={{display:'flex',gap:16,fontSize:11,color:C.textMuted,marginBottom:8,flexWrap:'wrap'}}>
+                  <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_SOBRE,borderRadius:2,marginRight:4}}/>Sesgo sobre 0: sobredimensionado (riesgo de sobrestock)</span>
+                  <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_SUB,borderRadius:2,marginRight:4}}/>Sesgo bajo 0: subdimensionado (riesgo de quiebre)</span>
+                  <span><span style={{display:'inline-block',width:14,height:2,background:C.purple,marginRight:4,verticalAlign:'middle'}}/>WMAPE (magnitud)</span>
+                  <span>· <strong>clic en una semana</strong> para ver solo esa semana en la tabla</span>
+                </div>
+                <ResponsiveContainer width="100%" height={320}>
+                  <ComposedChart data={serieGrafico} margin={{top:20,right:20,left:0,bottom:5}}
+                                 onClick={clicGrafico} style={{cursor:'pointer'}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    <XAxis dataKey="rango" tick={{fontSize:11}}
+                           tickFormatter={(v) => {
+                             const p = serieGrafico.find(x => x.rango === v);
+                             return p && p.hueco ? `${v} (sin forecast)` : v;
+                           }} />
+                    <YAxis tick={{fontSize:11}} tickFormatter={(v) => `${v}%`} />
+                    <Tooltip content={<TooltipSemana />} />
+                    <ReferenceLine y={0} stroke={C.gray} strokeWidth={1.5} />
+                    <Bar dataKey="sesgo_pct" name="Sesgo" maxBarSize={56}>
+                      {serieGrafico.map((p, i) => (
+                        <Cell key={i} fill={p.sesgo_pct > 0 ? COLOR_SOBRE : COLOR_SUB}
+                              fillOpacity={semSel && p.semana !== semSel ? 0.3 : 1}
+                              stroke={p.semana === semSel ? C.text : 'none'} strokeWidth={2} />
+                      ))}
+                      <LabelList dataKey="sesgo_pct" position="top" style={{fontSize:11,fontWeight:700,fill:C.text}}
+                                 formatter={(v) => (v == null ? '' : fmtPct(v))} />
+                    </Bar>
+                    <Line dataKey="wmape_pct" name="WMAPE" stroke={C.purple} strokeWidth={2}
+                          dot={{r:3}} connectNulls={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </>
+            )}
+
+            {vista === 'comparativo' && (
+              <>
+                <div style={{display:'flex',gap:16,fontSize:11,color:C.textMuted,marginBottom:8,flexWrap:'wrap'}}>
+                  <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_H2,borderRadius:2,marginRight:4}}/>Forecast 2 semanas antes</span>
+                  <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_H1,borderRadius:2,marginRight:4}}/>Forecast 1 semana antes</span>
+                  <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_REAL,borderRadius:2,marginRight:4}}/>Venta real</span>
+                  <span><span style={{display:'inline-block',width:16,height:0,borderTop:`2px dashed ${COLOR_LY}`,marginRight:4,verticalAlign:'middle'}}/>Misma semana del año anterior</span>
+                  <span>· zona gris: semana en curso y próximas (sin venta real aún)</span>
+                </div>
+                {cargandoComp && !comp && <div style={{fontSize:12,color:C.textMuted}}>Cargando…</div>}
+                <ResponsiveContainer width="100%" height={340}>
+                  <ComposedChart data={compData} margin={{top:24,right:20,left:10,bottom:5}}
+                                 onClick={clicComparativo} style={{cursor:'pointer'}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                    {compFuturas.length > 0 && (
+                      <ReferenceArea x1={compFuturas[0].rango} x2={compFuturas[compFuturas.length - 1].rango}
+                                     fill={C.grayLt} fillOpacity={0.8} ifOverflow="extendDomain"
+                                     label={{value:'Proyección', position:'insideTop', fontSize:11, fill:C.textMuted}} />
+                    )}
+                    <XAxis dataKey="rango" tick={{fontSize:11}}
+                           tickFormatter={(v) => {
+                             const p = compData.find(x => x.rango === v);
+                             return p && p.estado === 'en_curso' ? `${v} (en curso)` : v;
+                           }} />
+                    <YAxis tick={{fontSize:11}} tickFormatter={(v) => fmtNum(v)} />
+                    <Tooltip content={<TooltipComparativo />} />
+                    <Bar dataKey="fc_h2_cj" name="Forecast 2 sem" fill={COLOR_H2} maxBarSize={26}>
+                      {compData.map((w, i) => <Cell key={i} fillOpacity={opac(w)} />)}
+                    </Bar>
+                    <Bar dataKey="fc_h1_cj" name="Forecast 1 sem" fill={COLOR_H1} maxBarSize={26}>
+                      {compData.map((w, i) => <Cell key={i} fillOpacity={opac(w)} />)}
+                    </Bar>
+                    <Bar dataKey="real_cj" name="Real" fill={COLOR_REAL} maxBarSize={26}>
+                      {compData.map((w, i) => <Cell key={i} fillOpacity={opac(w)} />)}
+                    </Bar>
+                    <Line dataKey="ly_cj" name="Año anterior" stroke={COLOR_LY} strokeDasharray="5 4"
+                          strokeWidth={2} dot={{r:3}} connectNulls={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+                <div style={{fontSize:11,color:C.textMuted,marginTop:6}}>
+                  Cada anticipación es una serie propia, mostradas lado a lado: no se combinan en ninguna métrica.
+                  Los KPI y la tabla siguen la anticipación seleccionada arriba. Año anterior = 52 semanas antes (misma semana de domingo a sábado).
+                  {' '}<strong>Clic en una semana cerrada</strong> para ver solo esa semana en la tabla.
+                </div>
+              </>
+            )}
           </div>
 
           {/* ── Ranking por SKU ── */}

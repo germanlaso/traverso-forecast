@@ -18,8 +18,12 @@ Reglas (acordadas 06-10-2026):
     informa % (explota con denominadores chicos), solo cajas.
 
 Endpoints:
-  GET /precision/filtros  -> opciones de filtros + semanas disponibles por horizonte
-  GET /precision          -> serie semanal, KPI de la ventana, ranking por SKU, huecos
+  GET /precision/filtros      -> opciones de filtros + semanas disponibles por horizonte
+  GET /precision              -> serie semanal, KPI de la ventana, ranking por SKU, huecos
+  GET /precision/comparativo  -> por semana: forecast h=2, forecast h=1, real y venta del
+                                 ano anterior (52 sem), incluida la semana en curso y las
+                                 2 siguientes (proyeccion). Series SEPARADAS por horizonte:
+                                 se muestran lado a lado, no se combinan en una metrica.
 """
 from datetime import date, timedelta
 from typing import Optional
@@ -35,6 +39,8 @@ router = APIRouter(prefix="/precision", tags=["Precision forecast"])
 SIN_LINEA = "SIN_LINEA"
 UMBRAL_CJ_SEMANA_DEFAULT = 5.0
 TOL_ACIERTO_PCT = 0.5          # |sesgo| < 0,5% se informa como "en linea"
+LY_DIAS = 364                  # misma semana del ano anterior (52 semanas, conserva domingo)
+SEMANAS_ADELANTE = 2           # proyeccion: semana en curso + 2 siguientes
 
 
 # -- Helpers -------------------------------------------------------------------
@@ -72,27 +78,33 @@ def _metricas(g: pd.DataFrame) -> dict:
                 n_sku=int(g["sku"].nunique()))
 
 
-def _cargar_base(h: int, desde: Optional[date], hasta: Optional[date],
-                 categoria: Optional[str], linea: Optional[str],
-                 q: Optional[str], skus: Optional[str]) -> pd.DataFrame:
-    where = ["v.horizonte_sem = :h"]
-    params: dict = {"h": h}
-    if desde:
-        where.append("v.semana_objetivo >= :desde"); params["desde"] = desde
-    if hasta:
-        where.append("v.semana_objetivo <= :hasta"); params["hasta"] = hasta
+def _filtros_sql(categoria: Optional[str], linea: Optional[str], q: Optional[str],
+                 skus: Optional[str], col_sku: str) -> tuple[list, dict]:
+    """Clausulas de filtro sobre mrp_sku_params (alias p) y la columna de SKU dada."""
+    where, params = [], {"sin_linea": SIN_LINEA}
     if categoria:
         where.append("p.categoria = :categoria"); params["categoria"] = categoria
     if linea:
         where.append("COALESCE(NULLIF(p.linea_preferida, ''), :sin_linea) = :linea")
         params["linea"] = linea
     if q:
-        where.append("(v.sku ILIKE :q OR p.descripcion ILIKE :q)"); params["q"] = f"%{q.strip()}%"
+        where.append(f"({col_sku} ILIKE :q OR p.descripcion ILIKE :q)"); params["q"] = f"%{q.strip()}%"
     if skus:
-        lista = [s.strip() for s in skus.split(",") if s.strip()]
+        lista = [x.strip() for x in skus.split(",") if x.strip()]
         if lista:
-            where.append("v.sku = ANY(:skus)"); params["skus"] = lista
-    params["sin_linea"] = SIN_LINEA
+            where.append(f"{col_sku} = ANY(:skus)"); params["skus"] = lista
+    return where, params
+
+
+def _cargar_base(h: int, desde: Optional[date], hasta: Optional[date],
+                 categoria: Optional[str], linea: Optional[str],
+                 q: Optional[str], skus: Optional[str]) -> pd.DataFrame:
+    where, params = _filtros_sql(categoria, linea, q, skus, "v.sku")
+    where.insert(0, "v.horizonte_sem = :h"); params["h"] = h
+    if desde:
+        where.append("v.semana_objetivo >= :desde"); params["desde"] = desde
+    if hasta:
+        where.append("v.semana_objetivo <= :hasta"); params["hasta"] = hasta
     where_sql = " AND ".join(where)
     sql = f"""
         SELECT v.sku, v.semana_objetivo AS semana, v.domingo_corte, v.con_evento,
@@ -231,3 +243,76 @@ def precision(
 
     return {"meta": meta, "kpi": kpi, "serie": serie, "ranking_sku": ranking,
             "semanas_sin_vintage": huecos}
+
+
+@router.get("/comparativo")
+def precision_comparativo(
+    desde: Optional[date] = Query(None, description="Semana inicial (domingo)"),
+    hasta: Optional[date] = Query(None, description="Ultima semana CERRADA a mostrar; la proyeccion se agrega siempre"),
+    categoria: Optional[str] = None,
+    linea: Optional[str] = None,
+    q: Optional[str] = None,
+    skus: Optional[str] = None,
+):
+    """Por semana: forecast h=2, forecast h=1, venta real (solo semanas cerradas) y
+    venta de la misma semana del ano anterior. Incluye la semana en curso y las
+    SEMANAS_ADELANTE siguientes (estado 'en_curso' / 'futura'). Todo en cajas y
+    sobre el mismo universo de SKU (los que tienen vintage), con los filtros dados."""
+    hoy = date.today()
+    vigente = hoy - timedelta(days=(hoy.weekday() + 1) % 7)       # domingo de la semana en curso
+    ultima_cerrada = vigente - timedelta(days=7)
+    tope_futuro = vigente + timedelta(days=7 * SEMANAS_ADELANTE)
+
+    where_f, params = _filtros_sql(categoria, linea, q, skus, "v.sku")
+    where_v, _ = _filtros_sql(categoria, linea, q, skus, "s.sku")
+    # (sin comillas dentro de las expresiones f-string: Python 3.11 del container)
+    and_f = ("AND " + " AND ".join(where_f)) if where_f else ""
+    and_v = ("AND " + " AND ".join(where_v)) if where_v else ""
+    sql_fc = f"""
+        SELECT v.semana_objetivo AS semana, v.horizonte_sem AS h, SUM(v.yhat_cj)::float AS cj
+          FROM mrp_forecast_vintage v
+          LEFT JOIN mrp_sku_params p ON p.sku = v.sku
+         WHERE v.semana_objetivo <= :tope {and_f}
+         GROUP BY 1, 2
+    """
+    sql_venta = f"""
+        SELECT s.semana, SUM(s.venta_cj)::float AS cj
+          FROM mrp_venta_semanal s
+          LEFT JOIN mrp_sku_params p ON p.sku = s.sku
+         WHERE s.sku IN (SELECT DISTINCT sku FROM mrp_forecast_vintage)
+               {and_v}
+         GROUP BY 1
+    """
+    params["tope"] = tope_futuro
+    with get_session() as session:
+        fc_rows = session.execute(text(sql_fc), params).mappings().all()
+        v_rows = session.execute(text(sql_venta), params).mappings().all()
+
+    fc: dict = {}
+    for r in fc_rows:
+        fc.setdefault(r["semana"], {})[int(r["h"])] = r["cj"]
+    venta = {r["semana"]: r["cj"] for r in v_rows}
+
+    filas = []
+    for w in sorted(fc):
+        estado = "cerrada" if w <= ultima_cerrada else ("en_curso" if w == vigente else "futura")
+        if estado == "cerrada":
+            if (desde and w < desde) or (hasta and w > hasta):
+                continue
+        elif desde and w < desde:
+            continue
+        w_ly = w - timedelta(days=LY_DIAS)
+        real = venta.get(w) if estado == "cerrada" else None
+        ly = venta.get(w_ly)
+        filas.append({
+            "semana": str(w), "rango": _rango_semana(w), "estado": estado,
+            "fc_h2_cj": None if fc[w].get(2) is None else round(fc[w][2], 1),
+            "fc_h1_cj": None if fc[w].get(1) is None else round(fc[w][1], 1),
+            "real_cj": None if real is None else round(real, 1),
+            "ly_cj": None if ly is None else round(ly, 1),
+            "ly_semana": str(w_ly), "ly_rango": _rango_semana(w_ly),
+            "real_vs_ly_pct": _pct(real - ly, ly) if (real is not None and ly) else None,
+        })
+    return {"meta": {"semana_en_curso": str(vigente), "ultima_cerrada": str(ultima_cerrada),
+                     "ly_dias": LY_DIAS, "unidad": "cajas"},
+            "semanas": filas}
