@@ -22,9 +22,17 @@ Definiciones acordadas (06-10-2026):
   - yhat en UNIDADES (el MRP lo consume como unidades; cajas se derivan al
     consultar con unidades_por_caja).
 
+PASO 4 (--escribir): persiste en mrp_forecast_vintage (ON CONFLICT DO NOTHING,
+el primer modelo del corte gana). TODO O NADA por corte: si un SKU falla, ese
+corte no se escribe (evita cortes parciales silenciosos). yhat redondeado a 1
+decimal = lo que consumio el plan (_format_forecast).
+
 Uso:
   python3 /app/precision_forecast.py --corte 2026-09-27 --solo 250010495,141010175
   python3 /app/precision_forecast.py --corte 2026-10-04 --verificar
+  python3 /app/precision_forecast.py --todos                     # dry-run, resumen por corte
+  python3 /app/precision_forecast.py --corte 2026-09-27 --escribir
+  python3 /app/precision_forecast.py --todos --escribir --origen backfill
 """
 import argparse
 import glob
@@ -167,39 +175,83 @@ def _vintage_produccion(sku, corte, df_ventas, eventos_sku, fz):
 
 # -- Modos -----------------------------------------------------------------------
 
-def _dry_run(corte, cand, eventos, solo, df_ventas, col_fecha, fz) -> int:
+def _construir_filas(corte, cand, eventos, solo, df_ventas, col_fecha, fz, origen):
+    """Devuelve (filas, errores). Cada fila trae las columnas de la tabla mas
+    ult_hist/fuente (solo display)."""
     skus = sorted(set(cand) | {s for s in eventos if not solo or s in solo})
     filas, errores = [], []
     for sku in skus:
         try:
             if sku in eventos:
                 yh, ult = _vintage_evento(sku, corte, df_ventas, col_fecha, eventos[sku], fz)
-                fuente, con_ev = "evento", True
+                fuente, con_ev, mtime = "evento", True, None
             else:
                 mt, path = cand[sku]
                 yh, ult = _vintage_pickle(sku, path, corte, df_ventas, fz)
-                fuente = os.path.basename(os.path.dirname(path))
-                con_ev = False
+                fuente, con_ev = os.path.basename(os.path.dirname(path)), False
+                mtime = datetime.fromtimestamp(mt)
             for h in HORIZONTES:
-                filas.append(dict(sku=sku, h=h, corte=corte,
-                                  semana_obj=corte + timedelta(days=7 * h),
-                                  yhat_u=round(yh[h], 2), con_evento=con_ev,
+                filas.append(dict(sku=sku, semana_objetivo=corte + timedelta(days=7 * h),
+                                  horizonte_sem=h, domingo_corte=corte,
+                                  yhat_u=round(yh[h], 1), con_evento=con_ev,
+                                  modelo_mtime=mtime, origen=origen,
                                   ult_hist=ult, fuente=fuente))
         except Exception as e:
             errores.append((sku, repr(e)))
-            log.error("SKU %s: %r", sku, e)
+            log.error("corte %s SKU %s: %r", corte, sku, e)
+    return filas, errores
 
-    if filas:
-        out = pd.DataFrame(filas).sort_values(["h", "sku"])
-        with pd.option_context("display.max_rows", 50, "display.width", 160):
-            print(out.head(50).to_string(index=False))
-        esperado = corte - timedelta(days=7)
-        n_atras = int((out.drop_duplicates("sku")["ult_hist"] != esperado).sum())
-        log.info("ult_hist distinto de %s (historia corta / intermitentes): %d SKU", esperado, n_atras)
 
-    log.info("=== RESUMEN: %d SKU ok | %d error | %d filas (NO se escribio en BD) ===",
-             len(skus) - len(errores), len(errores), len(filas))
-    return 1 if errores else 0
+def _resumen_corte(corte, filas, errores) -> str:
+    if not filas:
+        return f"corte {corte}: 0 filas | {len(errores)} error"
+    df = pd.DataFrame(filas)
+    esperado = corte - timedelta(days=7)
+    u = df.drop_duplicates("sku")
+    n_atras = int((u["ult_hist"] != esperado).sum())
+    fuentes = ",".join(sorted(u["fuente"].unique()))
+    return (f"corte {corte}: {u.shape[0]} SKU ({int(u.con_evento.sum())} evento) | "
+            f"{len(df)} filas | {len(errores)} error | ult_hist!={esperado}: {n_atras} | "
+            f"fuente: {fuentes}")
+
+
+def _imprimir_tabla(filas):
+    out = pd.DataFrame(filas)[["sku", "horizonte_sem", "domingo_corte", "semana_objetivo",
+                               "yhat_u", "con_evento", "ult_hist", "fuente"]]
+    out = out.sort_values(["horizonte_sem", "sku"])
+    with pd.option_context("display.max_rows", 50, "display.width", 160):
+        print(out.head(50).to_string(index=False))
+
+
+def _procesar(cortes, cand_por_corte, eventos, solo, df_ventas, col_fecha, fz,
+              escribir, origen) -> int:
+    from db_mrp import insertar_forecast_vintage
+    cols_db = ("sku", "semana_objetivo", "horizonte_sem", "domingo_corte", "yhat_u",
+               "con_evento", "modelo_mtime", "origen")
+    n_err_total = 0
+    for corte in cortes:
+        cand = cand_por_corte[corte]
+        if not cand:
+            log.warning("corte %s: SIN modelos del corte (no hubo reentrenamiento?) -> se omite", corte)
+            continue
+        filas, errores = _construir_filas(corte, cand, eventos, solo, df_ventas,
+                                          col_fecha, fz, origen)
+        n_err_total += len(errores)
+        log.info(_resumen_corte(corte, filas, errores))
+        if len(cortes) == 1 and not escribir:
+            _imprimir_tabla(filas)
+        if not escribir:
+            continue
+        if errores:
+            log.error("corte %s: %d error(es) -> NO se escribe (todo o nada por corte)",
+                      corte, len(errores))
+            continue
+        r = insertar_forecast_vintage([{k: f[k] for k in cols_db} for f in filas])
+        log.info("corte %s ESCRITO: recibidas %d | insertadas %d | existentes %d",
+                 corte, r["recibidas"], r["insertadas"], r["existentes"])
+    modo = "ESCRITURA" if escribir else "DRY-RUN (NO se escribio en BD)"
+    log.info("=== RESUMEN %s: %d corte(s) | %d error(es) ===", modo, len(cortes), n_err_total)
+    return 1 if n_err_total else 0
 
 
 def _verificar(corte, cand, eventos, solo, df_ventas, col_fecha, fz) -> int:
@@ -258,17 +310,19 @@ def _verificar(corte, cand, eventos, solo, df_ventas, col_fecha, fz) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--corte", required=True, help="domingo de corte YYYY-MM-DD")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--corte", help="domingo de corte YYYY-MM-DD")
+    g.add_argument("--todos", action="store_true",
+                   help=f"todos los cortes desde {CORTE_MIN} hasta el vigente")
     ap.add_argument("--solo", default="", help="SKU separados por coma")
     ap.add_argument("--verificar", action="store_true",
                     help="test de fidelidad contra el camino de produccion (solo corte vigente)")
+    ap.add_argument("--escribir", action="store_true",
+                    help="persistir en mrp_forecast_vintage (sin esto: dry-run)")
+    ap.add_argument("--origen", default="backfill", choices=("backfill", "cron"))
     a = ap.parse_args()
-
-    corte = date.fromisoformat(a.corte)
-    if corte.weekday() != 6:
-        sys.exit(f"ERROR: --corte {corte} no es domingo")
-    if corte < CORTE_MIN:
-        sys.exit(f"ERROR: --corte {corte} anterior a {CORTE_MIN} (regimen pre-cron)")
+    if a.verificar and (a.escribir or a.todos):
+        sys.exit("ERROR: --verificar no se combina con --escribir ni --todos")
     solo = {s.strip() for s in a.solo.split(",") if s.strip()}
 
     from forecaster import make_forecast, _cap_forecast, get_categoria, run_sku_pipeline
@@ -277,23 +331,38 @@ def main() -> int:
     from eventos import cargar_eventos_activos
     from main import get_sales_df
     for n in ("cmdstanpy", "prophet"):
-        logging.getLogger(n).setLevel(logging.WARNING)
+        lg = logging.getLogger(n)
+        lg.setLevel(logging.WARNING)
+        lg.disabled = True        # setLevel solo no alcanza: algo lo reconfigura al entrenar
     fz = dict(make_forecast=make_forecast, _cap_forecast=_cap_forecast,
               get_categoria=get_categoria, run_sku_pipeline=run_sku_pipeline,
               get_regressors=get_regressors)
 
     vigente = _domingo(date.today(), semana_viz_inicio)
-    if corte > vigente:
-        sys.exit(f"ERROR: --corte {corte} es futuro")
-    if a.verificar and corte != vigente:
-        sys.exit(f"ERROR: --verificar solo aplica al corte vigente ({vigente}): "
-                 f"es el unico donde produccion de hoy = produccion de entonces")
+    if a.todos:
+        cortes, c = [], CORTE_MIN
+        while c <= vigente:
+            cortes.append(c)
+            c += timedelta(days=7)
+    else:
+        corte = date.fromisoformat(a.corte)
+        if corte.weekday() != 6:
+            sys.exit(f"ERROR: --corte {corte} no es domingo")
+        if corte < CORTE_MIN:
+            sys.exit(f"ERROR: --corte {corte} anterior a {CORTE_MIN} (regimen pre-cron)")
+        if corte > vigente:
+            sys.exit(f"ERROR: --corte {corte} es futuro")
+        if a.verificar and corte != vigente:
+            sys.exit(f"ERROR: --verificar solo aplica al corte vigente ({vigente}): "
+                     f"es el unico donde produccion de hoy = produccion de entonces")
+        cortes = [corte]
 
-    modo = "VERIFICAR" if a.verificar else "DRY-RUN"
-    log.info("=== %s corte=%s | h=%s | solo=%s ===", modo, corte, HORIZONTES, sorted(solo) or "todos")
-    cand = _candidatos_corte(corte, semana_viz_inicio, solo)
+    modo = "VERIFICAR" if a.verificar else ("ESCRIBIR" if a.escribir else "DRY-RUN")
+    log.info("=== %s cortes=%s | h=%s | solo=%s | origen=%s ===", modo,
+             [str(c) for c in cortes], HORIZONTES, sorted(solo) or "todos", a.origen)
+    cand_por_corte = {c: _candidatos_corte(c, semana_viz_inicio, solo) for c in cortes}
     eventos = cargar_eventos_activos()
-    log.info("candidatos pickle: %d | SKU con evento: %s", len(cand), sorted(eventos))
+    log.info("SKU con evento: %s", sorted(eventos))
 
     log.info("cargando ventas (get_sales_df)...")
     df_ventas = get_sales_df()
@@ -303,8 +372,10 @@ def main() -> int:
     log.info("ventas: %d filas | columna fecha = %s", len(df_ventas), col_fecha)
 
     if a.verificar:
-        return _verificar(corte, cand, eventos, solo, df_ventas, col_fecha, fz)
-    return _dry_run(corte, cand, eventos, solo, df_ventas, col_fecha, fz)
+        c = cortes[0]
+        return _verificar(c, cand_por_corte[c], eventos, solo, df_ventas, col_fecha, fz)
+    return _procesar(cortes, cand_por_corte, eventos, solo, df_ventas, col_fecha, fz,
+                     a.escribir, a.origen)
 
 
 if __name__ == "__main__":
