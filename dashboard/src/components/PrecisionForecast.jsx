@@ -99,6 +99,9 @@ export default function PrecisionForecast() {
   const [error, setError] = useState('');
   const [orden, setOrden] = useState({col:'error_abs_cj', asc:false});
   const [verTodos, setVerTodos] = useState(false);
+  const [semSel, setSemSel] = useState('');       // semana clickeada en el gráfico ('' = ventana completa)
+  const [dataSem, setDataSem] = useState(null);
+  const [cargandoSem, setCargandoSem] = useState(false);
 
   useEffect(() => {
     axios.get(`${API}/precision/filtros`)
@@ -112,14 +115,20 @@ export default function PrecisionForecast() {
   }, [texto]);
 
   // Al cambiar de horizonte, el rango de semanas cambia: se limpia.
-  useEffect(() => { setDesde(''); setHasta(''); }, [horizonte]);
+  useEffect(() => { setDesde(''); setHasta(''); setSemSel(''); }, [horizonte]);
+
+  // Filtros comunes al gráfico y a la tabla (sin el rango de semanas)
+  const paramsBase = useMemo(() => {
+    const p = {horizonte};
+    if (categoria) p.categoria = categoria;
+    if (linea) p.linea = linea;
+    if (q) p.q = q;
+    if (skuSel) p.skus = skuSel;
+    return p;
+  }, [horizonte, categoria, linea, q, skuSel]);
 
   useEffect(() => {
-    const params = {horizonte};
-    if (categoria) params.categoria = categoria;
-    if (linea) params.linea = linea;
-    if (q) params.q = q;
-    if (skuSel) params.skus = skuSel;
+    const params = {...paramsBase};
     if (desde) params.desde = desde;
     if (hasta) params.hasta = hasta;
     setCargando(true); setError('');
@@ -127,7 +136,22 @@ export default function PrecisionForecast() {
       .then(r => setData(r.data))
       .catch(e => setError(e?.response?.data?.detail || 'Error al cargar la precisión del forecast.'))
       .finally(() => setCargando(false));
-  }, [horizonte, categoria, linea, q, skuSel, desde, hasta]);
+  }, [paramsBase, desde, hasta]);
+
+  // Si la semana seleccionada ya no está en la serie (cambio de filtros/rango), se vuelve al total.
+  useEffect(() => {
+    if (semSel && data && !(data.serie || []).some(p => p.semana === semSel)) setSemSel('');
+  }, [data, semSel]);
+
+  // Tabla de UNA semana (clic en el gráfico, mismo patrón que Faltantes): desde = hasta = semana.
+  useEffect(() => {
+    if (!semSel) { setDataSem(null); return; }
+    setCargandoSem(true);
+    axios.get(`${API}/precision`, {params: {...paramsBase, desde: semSel, hasta: semSel}})
+      .then(r => setDataSem(r.data))
+      .catch(e => setError(e?.response?.data?.detail || 'Error al cargar el detalle de la semana.'))
+      .finally(() => setCargandoSem(false));
+  }, [paramsBase, semSel]);
 
   const nombreLinea = useMemo(() => {
     const m = {};
@@ -147,8 +171,9 @@ export default function PrecisionForecast() {
     return pts.sort((a, b) => a.semana.localeCompare(b.semana));
   }, [data]);
 
+  const fuenteTabla = semSel ? dataSem : data;
   const ranking = useMemo(() => {
-    const filas = [...(data?.ranking_sku || [])];
+    const filas = [...(fuenteTabla?.ranking_sku || [])];
     const {col, asc} = orden;
     filas.sort((a, b) => {
       const va = a[col], vb = b[col];
@@ -159,7 +184,7 @@ export default function PrecisionForecast() {
       return asc ? r : -r;
     });
     return filas;
-  }, [data, orden]);
+  }, [fuenteTabla, orden]);
 
   const kpi = data?.kpi;
   const ultima = serieGrafico.filter(p => !p.hueco).slice(-1)[0];
@@ -167,6 +192,16 @@ export default function PrecisionForecast() {
   const filasVisibles = verTodos ? ranking : ranking.slice(0, 30);
 
   const ordenarPor = (col) => setOrden(o => ({col, asc: o.col === col ? !o.asc : false}));
+
+  // Clic en cualquier punto de la columna de una semana (no solo la barra: una de +1,8% es casi invisible).
+  // Segundo clic en la misma semana vuelve al total. Las semanas sin forecast no se seleccionan.
+  const clicGrafico = (st) => {
+    const p = st?.activePayload?.[0]?.payload;
+    if (!p || p.hueco) return;
+    setSemSel(cur => (cur === p.semana ? '' : p.semana));
+  };
+  const puntoSel = semSel ? serieGrafico.find(p => p.semana === semSel) : null;
+  const kpiSem = dataSem?.kpi;
 
   return (
     <div>
@@ -289,9 +324,11 @@ export default function PrecisionForecast() {
               <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_SOBRE,borderRadius:2,marginRight:4}}/>Sesgo sobre 0: sobredimensionado (riesgo de sobrestock)</span>
               <span><span style={{display:'inline-block',width:10,height:10,background:COLOR_SUB,borderRadius:2,marginRight:4}}/>Sesgo bajo 0: subdimensionado (riesgo de quiebre)</span>
               <span><span style={{display:'inline-block',width:14,height:2,background:C.purple,marginRight:4,verticalAlign:'middle'}}/>WMAPE (magnitud)</span>
+              <span>· <strong>clic en una semana</strong> para ver solo esa semana en la tabla</span>
             </div>
             <ResponsiveContainer width="100%" height={320}>
-              <ComposedChart data={serieGrafico} margin={{top:20,right:20,left:0,bottom:5}}>
+              <ComposedChart data={serieGrafico} margin={{top:20,right:20,left:0,bottom:5}}
+                             onClick={clicGrafico} style={{cursor:'pointer'}}>
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
                 <XAxis dataKey="rango" tick={{fontSize:11}}
                        tickFormatter={(v) => {
@@ -303,7 +340,9 @@ export default function PrecisionForecast() {
                 <ReferenceLine y={0} stroke={C.gray} strokeWidth={1.5} />
                 <Bar dataKey="sesgo_pct" name="Sesgo" maxBarSize={56}>
                   {serieGrafico.map((p, i) => (
-                    <Cell key={i} fill={p.sesgo_pct > 0 ? COLOR_SOBRE : COLOR_SUB} />
+                    <Cell key={i} fill={p.sesgo_pct > 0 ? COLOR_SOBRE : COLOR_SUB}
+                          fillOpacity={semSel && p.semana !== semSel ? 0.3 : 1}
+                          stroke={p.semana === semSel ? C.text : 'none'} strokeWidth={2} />
                   ))}
                   <LabelList dataKey="sesgo_pct" position="top" style={{fontSize:11,fontWeight:700,fill:C.text}}
                              formatter={(v) => (v == null ? '' : fmtPct(v))} />
@@ -317,9 +356,29 @@ export default function PrecisionForecast() {
           {/* ── Ranking por SKU ── */}
           <div style={s.card}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',flexWrap:'wrap',gap:8}}>
-              <div style={s.cardTitle}>Detalle por SKU — ordenado por error absoluto</div>
+              <div style={s.cardTitle}>
+                Detalle por SKU — {semSel && puntoSel
+                  ? `semana ${puntoSel.rango}`
+                  : `total de la ventana (${kpi.n_semanas} semana${kpi.n_semanas === 1 ? '' : 's'})`}
+              </div>
               <div style={{fontSize:11,color:C.textMuted}}>Clic en una fila para ver su evolución en el gráfico</div>
             </div>
+            {semSel && puntoSel && (
+              <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',marginBottom:10}}>
+                <span style={s.chip}>
+                  Semana {puntoSel.rango}
+                  <span style={{cursor:'pointer'}} onClick={() => setSemSel('')} title="Volver al total de la ventana">✕</span>
+                </span>
+                {kpiSem && (
+                  <span style={{fontSize:12,color:C.text}}>
+                    Real <strong>{fmtNum(kpiSem.real_cj)} cj</strong> · Forecast <strong>{fmtNum(kpiSem.yhat_cj)} cj</strong> ·
+                    Sesgo <strong style={{color: kpiSem.sesgo_pct > 0 ? COLOR_SOBRE : COLOR_SUB}}>{fmtPct(kpiSem.sesgo_pct)}</strong> ·
+                    WMAPE <strong style={{color:C.purple}}>{fmtPct(kpiSem.wmape_pct, false)}</strong>
+                  </span>
+                )}
+                {cargandoSem && <span style={{fontSize:11,color:C.textMuted}}>Cargando…</span>}
+              </div>
+            )}
             <div style={{overflowX:'auto'}}>
               <table style={{width:'100%',borderCollapse:'collapse'}}>
                 <thead>
