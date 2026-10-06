@@ -132,6 +132,10 @@ def _semanas_sin_vintage(h: int, desde: Optional[date], hasta: Optional[date]) -
           FROM mrp_venta_semanal s
          WHERE NOT EXISTS (SELECT 1 FROM mrp_forecast_vintage v
                             WHERE v.semana_objetivo = s.semana AND v.horizonte_sem = :h)
+           -- Solo desde la primera semana objetivo posible del horizonte: antes no
+           -- es un hueco, es anterior a la ventana (ej. W=06-09 en h=2 pediria corte 23-08).
+           AND s.semana >= (SELECT MIN(semana_objetivo) FROM mrp_forecast_vintage
+                             WHERE horizonte_sem = :h)
            {filtro}
          ORDER BY s.semana
     """
