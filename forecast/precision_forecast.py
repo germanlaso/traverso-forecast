@@ -74,27 +74,53 @@ def _domingo(d: date, semana_viz_inicio) -> date:
 # -- Seleccion de modelos del corte ---------------------------------------------
 
 def _candidatos_corte(corte: date, semana_viz_inicio, solo: set) -> dict:
-    """sku -> (mtime, path) del PRIMER pkl cuyo domingo de corte == corte."""
+    """sku -> (mtime, path) del PRIMER pkl cuyo domingo de corte == corte,
+    tomado solo de COHORTES VALIDAS.
+
+    Cohorte = pkl de un mismo directorio asignados al mismo corte por mtime.
+    Valida sii max(ult_hist) == corte - 7: con D2-bis, un reentrenamiento real
+    siempre tiene algun SKU que vendio en la ultima semana cerrada. Descarta
+    copias que no preservaron el mtime (caso models_bak_20260903: `cp -r`
+    manual, 441 pkl de julio con mtime 03-09 17:01). Se valida sobre la cohorte
+    COMPLETA (ignorando --solo), para que un subconjunto de intermitentes no la
+    invalide por error."""
+    esperado = corte - timedelta(days=7)
     dirs = sorted(glob.glob(os.path.join(APP, "models_bak_*"))) + [MODELS_DIR]
     elegidos = {}
     for d in dirs:
         if not os.path.isdir(d):
             continue
-        n_dir = 0
+        cohorte = {}
         for path in glob.glob(os.path.join(d, "*.pkl")):
             sku = os.path.basename(path)[:-4]
             if "__" in sku:                      # huerfanos de segmentacion
                 continue
+            mt = os.path.getmtime(path)
+            if _domingo(datetime.fromtimestamp(mt).date(), semana_viz_inicio) == corte:
+                cohorte[sku] = (mt, path)
+        if not cohorte:
+            continue
+        ults = []
+        for sku, (mt, path) in cohorte.items():
+            try:
+                ults.append(pd.Timestamp(_cargar_pkl(path).history["ds"].max()).date())
+            except Exception as e:
+                log.warning("  %s/%s: no se pudo leer historia: %r", os.path.basename(d), sku, e)
+        mx = max(ults) if ults else None
+        if mx != esperado:
+            log.warning("  %s: cohorte de %d pkl del corte %s DESCARTADA: max(ult_hist)=%s != %s "
+                        "(el mtime no es fecha de entrenamiento)",
+                        os.path.basename(d), len(cohorte), corte, mx, esperado)
+            continue
+        n_sel = 0
+        for sku, (mt, path) in cohorte.items():
             if solo and sku not in solo:
                 continue
-            mt = os.path.getmtime(path)
-            if _domingo(datetime.fromtimestamp(mt).date(), semana_viz_inicio) != corte:
-                continue
-            n_dir += 1
+            n_sel += 1
             if sku not in elegidos or mt < elegidos[sku][0]:
                 elegidos[sku] = (mt, path)
-        if n_dir:
-            log.info("  %s: %d pkl del corte %s", os.path.basename(d), n_dir, corte)
+        log.info("  %s: %d pkl del corte %s | cohorte VALIDA (max ult_hist=%s) | %d seleccionados",
+                 os.path.basename(d), len(cohorte), corte, mx, n_sel)
     return elegidos
 
 
