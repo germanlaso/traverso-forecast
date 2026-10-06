@@ -2278,8 +2278,10 @@ def get_monitor_datalake(horas: int = 24) -> dict:
 #   Los horizontes NUNCA se mezclan en una métrica.
 # domingo_corte = semana_viz_inicio(mtime del pkl): el cron de reentrenamiento
 # corre el LUNES (0 3 * * 1 UTC); la fecha de corrida no sirve como clave.
-# yhat_u en UNIDADES, redondeado a 1 decimal = exactamente lo que consumió el plan
-# (_format_forecast). Test de fidelidad 06-10-2026: 199 SKU, |diff| <= 0,05.
+# yhat_cj en CAJAS (Prophet entrena sobre dbo.ventas, que viene en cajas; el MRP
+# multiplica por u_por_caja para pasar a unidades). Redondeado a 1 decimal =
+# exactamente lo que consumio el plan (_format_forecast). Fidelidad 06-10-2026:
+# 199 SKU, |diff| <= 0,05. (Columna renombrada desde yhat_u el 06-10-2026.)
 # ON CONFLICT DO NOTHING: el PRIMER modelo del corte gana (el vigente al abrir la
 # semana). Para corregir una fila: backup -> DELETE -> re-correr el backfill.
 # Ver precision_forecast.py.
@@ -2293,7 +2295,7 @@ def crear_tabla_forecast_vintage():
                 semana_objetivo  DATE          NOT NULL,   -- domingo que abre la semana W
                 horizonte_sem    SMALLINT      NOT NULL,   -- 1 | 2
                 domingo_corte    DATE          NOT NULL,
-                yhat_u           NUMERIC(14,1) NOT NULL,   -- UNIDADES; cajas al consultar
+                yhat_cj          NUMERIC(14,1) NOT NULL,   -- CAJAS (unidad de dbo.ventas)
                 con_evento       BOOLEAN       NOT NULL DEFAULT FALSE,
                 modelo_mtime     TIMESTAMP,                -- NULL en SKU con evento (modelo en memoria)
                 origen           VARCHAR(10)   NOT NULL,   -- 'backfill' | 'cron'
@@ -2302,7 +2304,7 @@ def crear_tabla_forecast_vintage():
                 CONSTRAINT mrp_fv_horizonte  CHECK (horizonte_sem IN (1, 2)),
                 CONSTRAINT mrp_fv_domingo    CHECK (EXTRACT(DOW FROM domingo_corte) = 0),
                 CONSTRAINT mrp_fv_coherencia CHECK (semana_objetivo = domingo_corte + 7 * horizonte_sem),
-                CONSTRAINT mrp_fv_yhat       CHECK (yhat_u >= 0),
+                CONSTRAINT mrp_fv_yhat       CHECK (yhat_cj >= 0),
                 CONSTRAINT mrp_fv_origen     CHECK (origen IN ('backfill', 'cron'))
             );
             CREATE INDEX IF NOT EXISTS ix_fv_corte  ON mrp_forecast_vintage (domingo_corte);
@@ -2314,7 +2316,7 @@ def crear_tabla_forecast_vintage():
 
 def insertar_forecast_vintage(filas: list[dict]) -> dict:
     """INSERT ... ON CONFLICT DO NOTHING (el primer modelo del corte gana).
-    Cada fila: sku, semana_objetivo, horizonte_sem, domingo_corte, yhat_u,
+    Cada fila: sku, semana_objetivo, horizonte_sem, domingo_corte, yhat_cj,
     con_evento, modelo_mtime, origen. Devuelve {recibidas, insertadas, existentes}."""
     if not filas:
         return {"recibidas": 0, "insertadas": 0, "existentes": 0}
@@ -2322,10 +2324,10 @@ def insertar_forecast_vintage(filas: list[dict]) -> dict:
         antes = session.execute(text("SELECT COUNT(*) FROM mrp_forecast_vintage")).scalar()
         session.execute(text("""
             INSERT INTO mrp_forecast_vintage
-                (sku, semana_objetivo, horizonte_sem, domingo_corte, yhat_u,
+                (sku, semana_objetivo, horizonte_sem, domingo_corte, yhat_cj,
                  con_evento, modelo_mtime, origen)
             VALUES
-                (:sku, :semana_objetivo, :horizonte_sem, :domingo_corte, :yhat_u,
+                (:sku, :semana_objetivo, :horizonte_sem, :domingo_corte, :yhat_cj,
                  :con_evento, :modelo_mtime, :origen)
             ON CONFLICT (sku, semana_objetivo, horizonte_sem) DO NOTHING
         """), filas)
@@ -2342,6 +2344,7 @@ def insertar_forecast_vintage(filas: list[dict]) -> dict:
 # ultima venta; sin el 0, los intermitentes desaparecerian de la evaluacion).
 # UPSERT: el cron reescribe las ultimas N semanas para absorber correcciones
 # tardias (notas de credito, ajustes del datalake).
+# venta_cj en CAJAS (unidad de dbo.ventas). Renombrada desde venta_u el 06-10-2026.
 
 def crear_tabla_venta_semanal():
     """Crea mrp_venta_semanal si no existe. Idempotente. La llama crear_tablas_params()."""
@@ -2350,11 +2353,11 @@ def crear_tabla_venta_semanal():
             CREATE TABLE IF NOT EXISTS mrp_venta_semanal (
                 sku             VARCHAR(30)   NOT NULL,
                 semana          DATE          NOT NULL,   -- domingo que abre la semana
-                venta_u         NUMERIC(14,1) NOT NULL,   -- UNIDADES; cajas al consultar
+                venta_cj        NUMERIC(14,1) NOT NULL,   -- CAJAS (unidad de dbo.ventas)
                 actualizado_en  TIMESTAMP     DEFAULT NOW(),
                 PRIMARY KEY (sku, semana),
                 CONSTRAINT mrp_vs_domingo CHECK (EXTRACT(DOW FROM semana) = 0),
-                CONSTRAINT mrp_vs_venta   CHECK (venta_u >= 0)
+                CONSTRAINT mrp_vs_venta   CHECK (venta_cj >= 0)
             );
             CREATE INDEX IF NOT EXISTS ix_vs_semana ON mrp_venta_semanal (semana);
         """))
@@ -2363,7 +2366,7 @@ def crear_tabla_venta_semanal():
 
 
 def upsert_venta_semanal(filas: list[dict]) -> dict:
-    """UPSERT por (sku, semana). Cada fila: sku, semana, venta_u.
+    """UPSERT por (sku, semana). Cada fila: sku, semana, venta_cj.
     Devuelve {recibidas, nuevas, cambiadas, iguales}."""
     if not filas:
         return {"recibidas": 0, "nuevas": 0, "cambiadas": 0, "iguales": 0}
@@ -2371,11 +2374,11 @@ def upsert_venta_semanal(filas: list[dict]) -> dict:
         antes = session.execute(text("SELECT COUNT(*) FROM mrp_venta_semanal")).scalar()
         marca = session.execute(text("SELECT NOW()")).scalar()
         session.execute(text("""
-            INSERT INTO mrp_venta_semanal (sku, semana, venta_u)
-            VALUES (:sku, :semana, :venta_u)
+            INSERT INTO mrp_venta_semanal (sku, semana, venta_cj)
+            VALUES (:sku, :semana, :venta_cj)
             ON CONFLICT (sku, semana) DO UPDATE
-               SET venta_u = EXCLUDED.venta_u, actualizado_en = NOW()
-             WHERE mrp_venta_semanal.venta_u IS DISTINCT FROM EXCLUDED.venta_u
+               SET venta_cj = EXCLUDED.venta_cj, actualizado_en = NOW()
+             WHERE mrp_venta_semanal.venta_cj IS DISTINCT FROM EXCLUDED.venta_cj
         """), filas)
         despues = session.execute(text("SELECT COUNT(*) FROM mrp_venta_semanal")).scalar()
         tocadas = session.execute(text(

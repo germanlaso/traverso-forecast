@@ -19,8 +19,8 @@ Definiciones acordadas (06-10-2026):
   - SKU con evento: run_sku_pipeline con ventas truncadas al sabado previo al
     corte + extra_events, persistir=False (replica del camino del plan).
   - Ventana: cortes >= 2026-08-30 (regimen de reentrenamiento semanal).
-  - yhat en UNIDADES (el MRP lo consume como unidades; cajas se derivan al
-    consultar con unidades_por_caja).
+  - yhat en CAJAS: Prophet entrena sobre dbo.ventas, que viene en cajas. El MRP
+    multiplica por u_por_caja para pasar a unidades. (Corregido 06-10-2026.)
 
 PASO 4 (--escribir): persiste en mrp_forecast_vintage (ON CONFLICT DO NOTHING,
 el primer modelo del corte gana). TODO O NADA por corte: si un SKU falla, ese
@@ -232,7 +232,7 @@ def _construir_filas(corte, cand, eventos, solo, df_ventas, col_fecha, fz, orige
             for h in HORIZONTES:
                 filas.append(dict(sku=sku, semana_objetivo=corte + timedelta(days=7 * h),
                                   horizonte_sem=h, domingo_corte=corte,
-                                  yhat_u=round(yh[h], 1), con_evento=con_ev,
+                                  yhat_cj=round(yh[h], 1), con_evento=con_ev,
                                   modelo_mtime=mtime, origen=origen,
                                   ult_hist=ult, fuente=fuente))
         except Exception as e:
@@ -256,7 +256,7 @@ def _resumen_corte(corte, filas, errores) -> str:
 
 def _imprimir_tabla(filas):
     out = pd.DataFrame(filas)[["sku", "horizonte_sem", "domingo_corte", "semana_objetivo",
-                               "yhat_u", "con_evento", "ult_hist", "fuente"]]
+                               "yhat_cj", "con_evento", "ult_hist", "fuente"]]
     out = out.sort_values(["horizonte_sem", "sku"])
     with pd.option_context("display.max_rows", 50, "display.width", 160):
         print(out.head(50).to_string(index=False))
@@ -265,7 +265,7 @@ def _imprimir_tabla(filas):
 def _procesar(cortes, cand_por_corte, eventos, solo, df_ventas, col_fecha, fz,
               escribir, origen) -> int:
     from db_mrp import insertar_forecast_vintage
-    cols_db = ("sku", "semana_objetivo", "horizonte_sem", "domingo_corte", "yhat_u",
+    cols_db = ("sku", "semana_objetivo", "horizonte_sem", "domingo_corte", "yhat_cj",
                "con_evento", "modelo_mtime", "origen")
     n_err_total = 0
     for corte in cortes:
@@ -368,7 +368,7 @@ def _ventas_semanales(skus, df_ventas, desde, hasta, prepare_prophet_df):
                 serie = dict(zip(f, pdf["y"].astype(float)))
             for w in semanas:
                 filas.append(dict(sku=sku, semana=w,
-                                  venta_u=round(max(serie.get(w, 0.0), 0.0), 1)))
+                                  venta_cj=round(max(serie.get(w, 0.0), 0.0), 1)))
         except Exception as e:
             errores.append((sku, repr(e)))
             log.error("venta SKU %s: %r", sku, e)
@@ -395,8 +395,8 @@ def _procesar_ventas(a, vigente, cand_por_corte, eventos, solo, df_ventas, fz) -
                                                 fz["prepare_prophet_df"])
     df = pd.DataFrame(filas)
     if len(df):
-        tot = df.groupby("semana")["venta_u"].sum().round(0)
-        log.info("venta real %s..%s | %d SKU x %d sem = %d filas | %d error | total u por semana: %s",
+        tot = df.groupby("semana")["venta_cj"].sum().round(0)
+        log.info("venta real %s..%s | %d SKU x %d sem = %d filas | %d error | total cj por semana: %s",
                  desde, hasta, len(skus), len(semanas), len(df), len(errores),
                  {str(k): int(v) for k, v in tot.items()})
     if not a.escribir:

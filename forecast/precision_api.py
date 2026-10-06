@@ -10,8 +10,8 @@ Reglas (acordadas 06-10-2026):
   - Solo semanas cerradas (la venta real solo existe para semanas cerradas).
   - Sesgo%  = (S yhat - S real) / S real  -> signo: + sobredimensionado, - subdimensionado.
   - WMAPE%  = S |yhat - real| / S real    -> magnitud, no se cancela entre SKU.
-  - Agregacion en CAJAS (u / u_por_caja): unidad de negocio de stock y produccion.
-    El % por SKU individual es identico en u o cj (invariante a escala).
+  - Todo en CAJAS: yhat (Prophet) y venta (dbo.ventas) vienen en cajas de origen.
+    NO se divide por u_por_caja (bug corregido 06-10-2026: dividia cajas por u/caja).
   - Linea = linea_preferida de mrp_sku_params (particion: cada SKU en UNA linea;
     sin linea -> 'SIN_LINEA'). Suma de lineas = total, sin doble conteo.
   - SKU de bajo volumen (venta real promedio < umbral_cj por semana): no se
@@ -66,8 +66,6 @@ def _metricas(g: pd.DataFrame) -> dict:
     real, yhat = float(g["real_cj"].sum()), float(g["yhat_cj"].sum())
     err_abs = float((g["yhat_cj"] - g["real_cj"]).abs().sum())
     return dict(real_cj=round(real, 1), yhat_cj=round(yhat, 1),
-                real_u=round(float(g["real_u"].sum()), 1),
-                yhat_u=round(float(g["yhat_u"].sum()), 1),
                 error_abs_cj=round(err_abs, 1),
                 sesgo_pct=_pct(yhat - real, real),
                 wmape_pct=_pct(err_abs, real),
@@ -98,8 +96,7 @@ def _cargar_base(h: int, desde: Optional[date], hasta: Optional[date],
     where_sql = " AND ".join(where)
     sql = f"""
         SELECT v.sku, v.semana_objetivo AS semana, v.domingo_corte, v.con_evento,
-               v.yhat_u::float AS yhat_u, s.venta_u::float AS real_u,
-               GREATEST(COALESCE(p.u_por_caja, 1), 1) AS upc,
+               v.yhat_cj::float AS yhat_cj, s.venta_cj::float AS real_cj,
                p.descripcion, p.categoria,
                COALESCE(NULLIF(p.linea_preferida, ''), :sin_linea) AS linea
           FROM mrp_forecast_vintage v
@@ -113,8 +110,6 @@ def _cargar_base(h: int, desde: Optional[date], hasta: Optional[date],
     if df.empty:
         return df
     df["semana"] = pd.to_datetime(df["semana"]).dt.date
-    df["real_cj"] = df["real_u"] / df["upc"]
-    df["yhat_cj"] = df["yhat_u"] / df["upc"]
     return df
 
 
