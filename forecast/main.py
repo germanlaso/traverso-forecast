@@ -22,6 +22,7 @@ from stock import (fetch_and_save_stock, load_stock_parquet,
                    calcular_stock_disponible, stock_summary)
 from ordenes import router as ordenes_router
 from campanas_api import router as campanas_router
+from precision_api import router as precision_router
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
@@ -61,6 +62,7 @@ app = FastAPI(
 
 app.include_router(ordenes_router)
 app.include_router(campanas_router)   # V6: campanas de granel
+app.include_router(precision_router)  # Precision del forecast (vintages h=1/h=2)
 
 app.add_middleware(
     CORSMiddleware,
