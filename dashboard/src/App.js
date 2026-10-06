@@ -15,6 +15,7 @@ import ConciliacionOF from './components/ConciliacionOF';
 import FaltantesResumen from './components/FaltantesResumen';
 import MonitorDatalake from './components/MonitorDatalake';
 import Landing from './components/Landing';
+import PrecisionForecast from './components/PrecisionForecast';
 
 const API = process.env.REACT_APP_API_BASE || '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -44,7 +45,7 @@ const MAIN_MAXW_ANCHO = 1800;
 // ── Modelo de navegación en dos niveles (mismos keys de tab de siempre) ──
 const NAV = [
   { key:'home', label:'🏠 Inicio', tab:'home' },
-  { key:'forecast', label:'📈 Forecast', tabs:[['forecast','Forecast de Demanda'],['eventos','Eventos']] },
+  { key:'forecast', label:'📈 Forecast', tabs:[['forecast','Forecast de Demanda'],['eventos','Eventos'],['precision','Precisión Forecast']] },
   { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
   { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake']] },
   { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
@@ -1333,6 +1334,7 @@ function AppInner() {
         {activeTab === 'campanas' && <Campanas />}
         {activeTab === 'eventos' && <Eventos skus={skus} />}
         {activeTab === 'parametros' && <ParametrosDiagnostico />}
+        {activeTab === 'precision' && <PrecisionForecast />}
       </div>
     </div>
   );
