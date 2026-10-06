@@ -33,6 +33,12 @@ Uso:
   python3 /app/precision_forecast.py --todos                     # dry-run, resumen por corte
   python3 /app/precision_forecast.py --corte 2026-09-27 --escribir
   python3 /app/precision_forecast.py --todos --escribir --origen backfill
+
+PASO 5 (cron semanal, lunes 04:00 UTC, 1 h despues de cron_retrain):
+  python3 /app/precision_forecast.py --ultimos 3 --escribir --origen cron
+  --ultimos 3 = corte vigente + 2 anteriores: AUTORREPARABLE. Si una semana el
+  job falla, la siguiente rellena el corte pendiente (DO NOTHING respeta lo ya
+  escrito). Con --origen cron, cualquier error o excepcion manda alerta al admin.
 """
 import argparse
 import glob
@@ -334,12 +340,24 @@ def _verificar(corte, cand, eventos, solo, df_ventas, col_fecha, fz) -> int:
 
 # -- Main ------------------------------------------------------------------------
 
+def _alerta(asunto: str, cuerpo: str) -> None:
+    """Mismo patron que cron_retrain.py: un fallo del mail no tira el proceso."""
+    try:
+        from enviar_faltantes import enviar_alerta
+        enviar_alerta(asunto, cuerpo, None)       # None -> destinatario admin por defecto
+        log.info("mail enviado: %s", asunto)
+    except Exception:
+        log.exception("no se pudo enviar el mail de alerta")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--corte", help="domingo de corte YYYY-MM-DD")
     g.add_argument("--todos", action="store_true",
                    help=f"todos los cortes desde {CORTE_MIN} hasta el vigente")
+    g.add_argument("--ultimos", type=int,
+                   help="los N cortes mas recientes (incluye el vigente)")
     ap.add_argument("--solo", default="", help="SKU separados por coma")
     ap.add_argument("--verificar", action="store_true",
                     help="test de fidelidad contra el camino de produccion (solo corte vigente)")
@@ -347,8 +365,39 @@ def main() -> int:
                     help="persistir en mrp_forecast_vintage (sin esto: dry-run)")
     ap.add_argument("--origen", default="backfill", choices=("backfill", "cron"))
     a = ap.parse_args()
-    if a.verificar and (a.escribir or a.todos):
-        sys.exit("ERROR: --verificar no se combina con --escribir ni --todos")
+    if a.verificar and (a.escribir or a.todos or a.ultimos):
+        sys.exit("ERROR: --verificar no se combina con --escribir, --todos ni --ultimos")
+    if a.ultimos is not None and a.ultimos < 1:
+        sys.exit("ERROR: --ultimos debe ser >= 1")
+    if a.origen != "cron":
+        return _main(a)
+    # Modo cron: cualquier error o excepcion avisa al admin (patron cron_faltantes)
+    try:
+        rc = _main(a)
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else 1
+        if rc:
+            _alerta("[Traverso][PRECISION] vintages: fallo de validacion",
+                    f"precision_forecast.py --origen cron abortó: {e.code}\n"
+                    f"Revisar /home/ubuntu/traverso_precision.log")
+        return rc
+    except Exception as e:
+        log.exception("excepcion no controlada")
+        _alerta("[Traverso][PRECISION] vintages: EXCEPCION",
+                f"precision_forecast.py --origen cron falló con excepción: {e!r}\n"
+                f"No se escribieron vintages. La próxima corrida (--ultimos) "
+                f"rellena los cortes pendientes si los modelos siguen en backup.\n"
+                f"Revisar /home/ubuntu/traverso_precision.log")
+        return 1
+    if rc:
+        _alerta("[Traverso][PRECISION] vintages con errores",
+                f"precision_forecast.py --origen cron terminó con rc={rc}: algún corte "
+                f"tuvo errores y NO se escribió (todo o nada por corte).\n"
+                f"Revisar /home/ubuntu/traverso_precision.log")
+    return rc
+
+
+def _main(a) -> int:
     solo = {s.strip() for s in a.solo.split(",") if s.strip()}
 
     from forecaster import make_forecast, _cap_forecast, get_categoria, run_sku_pipeline
@@ -370,6 +419,9 @@ def main() -> int:
         while c <= vigente:
             cortes.append(c)
             c += timedelta(days=7)
+    elif a.ultimos:
+        cortes = [vigente - timedelta(days=7 * k) for k in range(a.ultimos - 1, -1, -1)]
+        cortes = [c for c in cortes if c >= CORTE_MIN]
     else:
         corte = date.fromisoformat(a.corte)
         if corte.weekday() != 6:
