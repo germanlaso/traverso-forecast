@@ -2298,6 +2298,7 @@ def crear_tabla_forecast_vintage():
                 yhat_cj          NUMERIC(14,1) NOT NULL,   -- CAJAS (unidad de dbo.ventas)
                 con_evento       BOOLEAN       NOT NULL DEFAULT FALSE,
                 modelo_mtime     TIMESTAMP,                -- NULL en SKU con evento (modelo en memoria)
+                corte_modelo     DATE,                     -- corte del modelo usado (< domingo_corte = heredado)
                 origen           VARCHAR(10)   NOT NULL,   -- 'backfill' | 'cron'
                 created_at       TIMESTAMP     DEFAULT NOW(),
                 PRIMARY KEY (sku, semana_objetivo, horizonte_sem),
@@ -2307,6 +2308,10 @@ def crear_tabla_forecast_vintage():
                 CONSTRAINT mrp_fv_yhat       CHECK (yhat_cj >= 0),
                 CONSTRAINT mrp_fv_origen     CHECK (origen IN ('backfill', 'cron'))
             );
+            -- Migracion idempotente (06-10-2026): semana sin reentrenamiento -> se guarda el
+            -- forecast del modelo VIGENTE (el que uso el plan) y aqui el corte de ese modelo.
+            ALTER TABLE mrp_forecast_vintage ADD COLUMN IF NOT EXISTS corte_modelo DATE;
+            UPDATE mrp_forecast_vintage SET corte_modelo = domingo_corte WHERE corte_modelo IS NULL;
             CREATE INDEX IF NOT EXISTS ix_fv_corte  ON mrp_forecast_vintage (domingo_corte);
             CREATE INDEX IF NOT EXISTS ix_fv_semana ON mrp_forecast_vintage (semana_objetivo, horizonte_sem);
         """))
@@ -2317,7 +2322,7 @@ def crear_tabla_forecast_vintage():
 def insertar_forecast_vintage(filas: list[dict]) -> dict:
     """INSERT ... ON CONFLICT DO NOTHING (el primer modelo del corte gana).
     Cada fila: sku, semana_objetivo, horizonte_sem, domingo_corte, yhat_cj,
-    con_evento, modelo_mtime, origen. Devuelve {recibidas, insertadas, existentes}."""
+    con_evento, modelo_mtime, corte_modelo, origen. Devuelve {recibidas, insertadas, existentes}."""
     if not filas:
         return {"recibidas": 0, "insertadas": 0, "existentes": 0}
     with get_session() as session:
@@ -2325,10 +2330,10 @@ def insertar_forecast_vintage(filas: list[dict]) -> dict:
         session.execute(text("""
             INSERT INTO mrp_forecast_vintage
                 (sku, semana_objetivo, horizonte_sem, domingo_corte, yhat_cj,
-                 con_evento, modelo_mtime, origen)
+                 con_evento, modelo_mtime, corte_modelo, origen)
             VALUES
                 (:sku, :semana_objetivo, :horizonte_sem, :domingo_corte, :yhat_cj,
-                 :con_evento, :modelo_mtime, :origen)
+                 :con_evento, :modelo_mtime, :corte_modelo, :origen)
             ON CONFLICT (sku, semana_objetivo, horizonte_sem) DO NOTHING
         """), filas)
         despues = session.execute(text("SELECT COUNT(*) FROM mrp_forecast_vintage")).scalar()

@@ -19,6 +19,10 @@ Definiciones acordadas (06-10-2026):
   - SKU con evento: run_sku_pipeline con ventas truncadas al sabado previo al
     corte + extra_events, persistir=False (replica del camino del plan).
   - Ventana: cortes >= 2026-08-30 (regimen de reentrenamiento semanal).
+  - Corte SIN reentrenamiento (ej. 20-09, fallo el cron del 21-09): se usa el modelo
+    VIGENTE = ultima cohorte valida anterior, que es el que uso el plan esa semana.
+    corte_modelo guarda el corte de ese modelo (auditoria; no se muestra en el
+    dashboard). Los SKU con evento se reentrenan igual que en el plan (datos frescos).
   - yhat en CAJAS: Prophet entrena sobre dbo.ventas, que viene en cajas. El MRP
     multiplica por u_por_caja para pasar a unidades. (Corregido 06-10-2026.)
 
@@ -177,7 +181,10 @@ def _extraer(fc: pd.DataFrame, corte: date, col_f: str, col_y: str) -> dict:
 
 # -- Caminos de prediccion -------------------------------------------------------
 
-def _vintage_pickle(sku, path, corte, df_ventas, fz):
+def _vintage_pickle(sku, path, corte, df_ventas, fz, hist_tope=None):
+    """hist_tope: historia para el tope de _cap_forecast. None -> model.history (igual
+    a la que veia produccion cuando el modelo es del corte). En modelo heredado se pasa
+    la historia truncada al corte, que es la que veia el plan esa semana."""
     model = _cargar_pkl(path)
     regs = fz["get_regressors"](fz["get_categoria"](df_ventas, sku))
     ult = pd.Timestamp(model.history["ds"].max()).date()
@@ -186,7 +193,8 @@ def _vintage_pickle(sku, path, corte, df_ventas, fz):
     if periods < 1:
         raise RuntimeError(f"historia del modelo ({ult}) posterior a la semana objetivo")
     fc = fz["make_forecast"](model, periods, regs)
-    fc = fz["_cap_forecast"](fc, model.history[["ds", "y"]])
+    tope = model.history[["ds", "y"]] if hist_tope is None else hist_tope
+    fc = fz["_cap_forecast"](fc, tope)
     return _extraer(fc, corte, "ds", "yhat"), ult
 
 
@@ -217,26 +225,35 @@ def _vintage_produccion(sku, corte, df_ventas, eventos_sku, fz):
 
 # -- Modos -----------------------------------------------------------------------
 
-def _construir_filas(corte, cand, eventos, solo, df_ventas, col_fecha, fz, origen):
+def _construir_filas(corte, cand, eventos, solo, df_ventas, col_fecha, fz, origen,
+                     corte_modelo=None):
     """Devuelve (filas, errores). Cada fila trae las columnas de la tabla mas
-    ult_hist/fuente (solo display)."""
+    ult_hist/fuente (solo display). corte_modelo: corte de la cohorte usada para los
+    SKU sin evento (== corte salvo modelo heredado)."""
+    corte_modelo = corte_modelo or corte
+    heredado = corte_modelo != corte
+    df_trunc = df_ventas[pd.to_datetime(df_ventas[col_fecha]).dt.date < corte] if heredado else None
     skus = sorted(set(cand) | {s for s in eventos if not solo or s in solo})
     filas, errores = [], []
     for sku in skus:
         try:
             if sku in eventos:
                 yh, ult = _vintage_evento(sku, corte, df_ventas, col_fecha, eventos[sku], fz)
-                fuente, con_ev, mtime = "evento", True, None
+                fuente, con_ev, mtime, cm = "evento", True, None, corte
             else:
                 mt, path = cand[sku]
-                yh, ult = _vintage_pickle(sku, path, corte, df_ventas, fz)
+                hist_tope = None
+                if heredado:
+                    pdf = fz["prepare_prophet_df"](df_trunc, sku)
+                    hist_tope = pdf[["ds", "y"]] if pdf is not None and not pdf.empty else None
+                yh, ult = _vintage_pickle(sku, path, corte, df_ventas, fz, hist_tope)
                 fuente, con_ev = os.path.basename(os.path.dirname(path)), False
-                mtime = datetime.fromtimestamp(mt)
+                mtime, cm = datetime.fromtimestamp(mt), corte_modelo
             for h in HORIZONTES:
                 filas.append(dict(sku=sku, semana_objetivo=corte + timedelta(days=7 * h),
                                   horizonte_sem=h, domingo_corte=corte,
                                   yhat_cj=round(yh[h], 1), con_evento=con_ev,
-                                  modelo_mtime=mtime, origen=origen,
+                                  modelo_mtime=mtime, corte_modelo=cm, origen=origen,
                                   ult_hist=ult, fuente=fuente))
         except Exception as e:
             errores.append((sku, repr(e)))
@@ -244,17 +261,19 @@ def _construir_filas(corte, cand, eventos, solo, df_ventas, col_fecha, fz, orige
     return filas, errores
 
 
-def _resumen_corte(corte, filas, errores) -> str:
+def _resumen_corte(corte, filas, errores, corte_modelo=None) -> str:
     if not filas:
         return f"corte {corte}: 0 filas | {len(errores)} error"
     df = pd.DataFrame(filas)
-    esperado = corte - timedelta(days=7)
+    esperado = (corte_modelo or corte) - timedelta(days=7)
     u = df.drop_duplicates("sku")
     n_atras = int((u["ult_hist"] != esperado).sum())
     fuentes = ",".join(sorted(u["fuente"].unique()))
     return (f"corte {corte}: {u.shape[0]} SKU ({int(u.con_evento.sum())} evento) | "
             f"{len(df)} filas | {len(errores)} error | ult_hist!={esperado}: {n_atras} | "
-            f"fuente: {fuentes}")
+            f"fuente: {fuentes}"
+            + (f" | MODELO VIGENTE del corte {corte_modelo} (sin reentrenamiento)"
+               if corte_modelo and corte_modelo != corte else ""))
 
 
 def _imprimir_tabla(filas):
@@ -265,21 +284,38 @@ def _imprimir_tabla(filas):
         print(out.head(50).to_string(index=False))
 
 
+def _modelo_vigente(corte, cand_por_corte, semana_viz_inicio, solo):
+    """Corte sin reentrenamiento: la ultima cohorte valida anterior es la que siguio
+    usando el plan. Devuelve (corte_modelo, cand) o (None, {})."""
+    c = corte - timedelta(days=7)
+    while c >= CORTE_MIN:
+        if c not in cand_por_corte:
+            cand_por_corte[c] = _candidatos_corte(c, semana_viz_inicio, solo)
+        if cand_por_corte[c]:
+            return c, cand_por_corte[c]
+        c -= timedelta(days=7)
+    return None, {}
+
+
 def _procesar(cortes, cand_por_corte, eventos, solo, df_ventas, col_fecha, fz,
-              escribir, origen) -> int:
+              escribir, origen, semana_viz_inicio) -> int:
     from db_mrp import insertar_forecast_vintage
     cols_db = ("sku", "semana_objetivo", "horizonte_sem", "domingo_corte", "yhat_cj",
-               "con_evento", "modelo_mtime", "origen")
+               "con_evento", "modelo_mtime", "corte_modelo", "origen")
     n_err_total = 0
     for corte in cortes:
-        cand = cand_por_corte[corte]
+        cand, corte_modelo = cand_por_corte[corte], corte
         if not cand:
-            log.warning("corte %s: SIN modelos del corte (no hubo reentrenamiento?) -> se omite", corte)
-            continue
+            corte_modelo, cand = _modelo_vigente(corte, cand_por_corte, semana_viz_inicio, solo)
+            if not cand:
+                log.warning("corte %s: sin modelos del corte ni modelo vigente anterior -> se omite", corte)
+                continue
+            log.warning("corte %s: sin reentrenamiento -> se usa el modelo VIGENTE del corte %s "
+                        "(el que uso el plan esa semana)", corte, corte_modelo)
         filas, errores = _construir_filas(corte, cand, eventos, solo, df_ventas,
-                                          col_fecha, fz, origen)
+                                          col_fecha, fz, origen, corte_modelo)
         n_err_total += len(errores)
-        log.info(_resumen_corte(corte, filas, errores))
+        log.info(_resumen_corte(corte, filas, errores, corte_modelo))
         if len(cortes) == 1 and not escribir:
             _imprimir_tabla(filas)
         if not escribir:
@@ -528,7 +564,7 @@ def _main(a) -> int:
         c = cortes[0]
         return _verificar(c, cand_por_corte[c], eventos, solo, df_ventas, col_fecha, fz)
     rc_v = _procesar(cortes, cand_por_corte, eventos, solo, df_ventas, col_fecha, fz,
-                     a.escribir, a.origen)
+                     a.escribir, a.origen, semana_viz_inicio)
     rc_s = _procesar_ventas(a, vigente, cand_por_corte, eventos, solo, df_ventas, fz)
     return rc_v or rc_s
 
