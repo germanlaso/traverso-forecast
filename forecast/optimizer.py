@@ -2455,6 +2455,100 @@ def _correr_dos_pasadas(**rich_kwargs) -> dict:
     return resC
 
 
+
+def _proyeccion_sin_optimizar(pasivos: dict[str, dict], fecha_inicio: date,
+                              horizonte_dias: int) -> tuple[dict, dict]:
+    """(14-10-2026) Proyeccion de inventario SIN produccion propuesta para los SKU
+    que V6.12-mini saca del solver (stock_inicial > cap_bodega).
+
+    Misma aritmetica que el bloque "Detalle diario y encabezado por SKU" de
+    optimizar_plan_v12_rich, con produccion = 0: demanda = max(forecast, OV)
+    (netear_pedidos_a_diario), SS de cobertura (calcular_ss_diario sobre forecast
+    extendido +35 d) y OF aprobadas (_entradas_del_dia). Mismas claves, para que
+    el dashboard lo dibuje igual que cualquier SKU.
+
+    NO entra en alertas, resumen ni uso_linea: el SKU sigue fuera del modelo.
+    Si su stock llega a quiebre dentro del horizonte, aparece como estado=QUIEBRE
+    en detalle_diario (y por lo tanto en medir_quiebres): es informacion real.
+    """
+    detalle: dict[str, dict] = {}
+    encabezado: dict[str, dict] = {}
+    if not pasivos:
+        return detalle, encabezado
+
+    horizonte = generar_horizonte_diario(fecha_inicio, horizonte_dias)
+    fecha_fin = horizonte[-1]
+    fecha_fin_ext = fecha_fin + timedelta(days=35)
+
+    for s, p in pasivos.items():
+        sp = p["params"]
+        upc = int(sp.get("u_por_caja", 1) or 1)
+        ss_dias = int(sp.get("ss_dias", 0) or 0)
+        pedidos_s = p.get("pedidos") or {}
+
+        fc_base = distribuir_forecast_a_diario(
+            p.get("forecast") or {}, fecha_inicio=fecha_inicio, fecha_fin=fecha_fin)
+        fc_ext = distribuir_forecast_a_diario(
+            p.get("forecast") or {}, fecha_inicio=fecha_inicio, fecha_fin=fecha_fin_ext)
+        consumo_s = netear_pedidos_a_diario(
+            {s: fc_base}, {s: pedidos_s} if pedidos_s else None, {s: sp},
+            fecha_inicio, fecha_fin,
+        ).get(s, {})
+        ea = {s: p.get("entradas") or []}
+
+        serie = {}
+        stock_prev = float(p["stock_u"])
+        stock_min = None
+        stock_final = 0
+        for d in horizonte:
+            fc_d = fc_base.get(d, 0.0)
+            consumo_d = consumo_s.get(d, 0.0)
+            pedidos_d = max(0.0, consumo_d - fc_d)
+            pedidos_crudos_d = float(pedidos_s.get(d, 0.0) or 0.0) * upc
+            ss_d = calcular_ss_diario(fc_ext, d, ss_dias)
+            entrada_d = _entradas_del_dia(s, d, ea)
+
+            stock_disp = stock_prev - consumo_d          # piso intradia
+            stock_fin = stock_disp + entrada_d            # cierre: sin produccion propuesta
+            if stock_disp < 0:
+                estado = "QUIEBRE"
+            elif ss_d > 0 and stock_fin < ss_d:
+                estado = "BAJO_SS"
+            else:
+                estado = "OK"
+
+            serie[d.isoformat()] = {
+                "stock_ini_disp_u": int(round(stock_prev)),
+                "stock_disp_u": int(round(stock_disp)),
+                "entrada_aprobada_u": int(round(entrada_d)),
+                "pedidos_u": int(round(pedidos_d)),
+                "pedidos_crudos_u": int(round(pedidos_crudos_d)),
+                "demanda_corr_u": int(round(consumo_d)),
+                "forecast_u": int(round(fc_d)),
+                "stock_fin_u": int(round(stock_fin)),
+                "ss_u": int(round(ss_d)),
+                "oft_cajas": None,
+                "estado": estado,
+            }
+            stock_min = stock_fin if stock_min is None else min(stock_min, stock_fin)
+            stock_final = stock_fin
+            stock_prev = stock_fin
+
+        detalle[s] = serie
+        encabezado[s] = {
+            "disponible_inicial_u": int(round(float(p["stock_u"]))),
+            "stock_final_u": int(round(stock_final)),
+            "stock_min_u": int(round(stock_min)) if stock_min is not None else 0,
+            "ss_dias": ss_dias,
+            "u_por_caja": upc,
+            "stock_fisico_u": None,      # los completa cron_plan.py (6/8)
+            "comprometido_u": None,
+            "fuera_optimizador": "stock_inicial > cap_bodega",
+            "cap_bodega_u": int(sp.get("cap_bodega_u", 0) or 0),
+        }
+    return detalle, encabezado
+
+
 def optimizar_plan(
     ordenes_mrp: list,
     sku_params: dict,
@@ -2695,6 +2789,10 @@ def optimizar_plan(
     # muta -> se trabaja sobre una copia para no alterar el estado de cron_plan.
     pedidos_abiertos = dict(pedidos_abiertos or {})
     skus_filtrados_cap_bodega = []
+    # (14-10-2026) El SKU sale del SOLVER (correcto: cap_bodega es infactible
+    # desde el dia 0), pero NO del PLAN: se guardan sus datos para proyectar su
+    # inventario sin produccion propuesta (ver _proyeccion_sin_optimizar).
+    _pasivos_cap: dict[str, dict] = {}
     for sku in list(sku_params_rich.keys()):
         cap_u = sku_params_rich[sku].get("cap_bodega_u", 0) or 0
         stock_u = stock_inicial_rich.get(sku, 0) or 0
@@ -2711,6 +2809,13 @@ def optimizar_plan(
                 "ov_descartada_cj": round(float(_dem_cj), 1),
                 "razon": "stock_inicial > cap_bodega (genera infactibilidad estructural)",
             })
+            _pasivos_cap[sku] = {
+                "params": dict(sku_params_rich[sku]),
+                "forecast": dict(forecast_rich.get(sku) or {}),
+                "stock_u": float(stock_u),
+                "entradas": list(entradas_aprobadas_rich.get(sku) or []),
+                "pedidos": dict(pedidos_abiertos.get(sku) or {}),
+            }
             sku_params_rich.pop(sku, None)
             forecast_rich.pop(sku, None)
             stock_inicial_rich.pop(sku, None)
@@ -2773,6 +2878,24 @@ def optimizar_plan(
         resultado = _correr_dos_pasadas(**_rich_kwargs)
     else:
         resultado = optimizar_plan_v12_rich(**_rich_kwargs)
+
+    # (14-10-2026) SKU fuera del solver por stock > cap_bodega: se agregan al plan
+    # con su proyeccion sin produccion. IN PLACE sobre `resultado`: cron_plan.py
+    # persiste este MISMO objeto (captura via monkeypatch de v12_rich -> _RICH[-1]).
+    # Es solo visualizacion: si falla, se loguea y el plan sigue intacto.
+    if _pasivos_cap:
+        try:
+            _det_p, _enc_p = _proyeccion_sin_optimizar(_pasivos_cap, fecha_inicio, horizonte_dias)
+            if resultado.get("detalle_diario") is None:
+                resultado["detalle_diario"] = {}
+            if resultado.get("encabezado_sku") is None:
+                resultado["encabezado_sku"] = {}
+            resultado["detalle_diario"].update(_det_p)
+            resultado["encabezado_sku"].update(_enc_p)
+            resultado["skus_fuera_optimizador"] = skus_filtrados_cap_bodega
+            logger.info(f"[V6.12-mini] proyeccion sin optimizar agregada al plan: {sorted(_det_p)}")
+        except Exception as _e:
+            logger.error(f"[V6.12-mini] FALLO la proyeccion sin optimizar (el plan NO se afecta): {_e!r}")
 
     # ─── 8. Convertir OFTs ricas → órdenes legacy ────────────────────────────
     from calendario import semana_viz_inicio
