@@ -2793,9 +2793,32 @@ def optimizar_plan(
     # desde el dia 0), pero NO del PLAN: se guardan sus datos para proyectar su
     # inventario sin produccion propuesta (ver _proyeccion_sin_optimizar).
     _pasivos_cap: dict[str, dict] = {}
+    # (23-10-2026) N2_CAP_EFECTIVA (off por default): alternativa a excluir el SKU
+    # del solver por TODO el horizonte. La premisa del filtro ("no hay nada que
+    # producir") solo vale los primeros dias: el stock baja de la cap y el SKU
+    # quedaba sin OFT por 8 semanas (9 SKU al 23-10). Ademas, al sacar sus
+    # entradas_aprobadas, R1a/R1b no descontaban la capacidad de sus OF aprobadas.
+    import os as _os_ce
+    _CAP_EFECTIVA = _os_ce.environ.get("N2_CAP_EFECTIVA", "0") == "1"
+    _hoy_ce = date.today()
+    _hd_ce = max(horizonte_semanas * 7, 14)
+    skus_cap_efectiva: list[tuple[str, int, int]] = []
     for sku in list(sku_params_rich.keys()):
         cap_u = sku_params_rich[sku].get("cap_bodega_u", 0) or 0
         stock_u = stock_inicial_rich.get(sku, 0) or 0
+        if cap_u and stock_u > cap_u and _CAP_EFECTIVA:
+            # cap_eff = max(cap, stock + entradas aprobadas del horizonte): con
+            # produccion 0 el stock nunca supera cap_eff -> factible desde el dia 0.
+            # El SKU conserva forecast/OV/OF aprobadas y puede recibir OFT.
+            _ent_tot = sum(
+                _entradas_del_dia(sku, _hoy_ce + timedelta(days=_i), entradas_aprobadas_rich)
+                for _i in range(_hd_ce))
+            _cap_eff = int(stock_u + _ent_tot) + 1
+            sku_params_rich[sku] = {**sku_params_rich[sku],
+                                    "cap_bodega_u": _cap_eff,
+                                    "cap_bodega_u_fisico": int(cap_u)}
+            skus_cap_efectiva.append((sku, int(cap_u), _cap_eff))
+            continue
         if cap_u and stock_u > cap_u:
             upc = sku_params_rich[sku].get("u_por_caja", 1) or 1
             _dem_cj = sum((pedidos_abiertos.get(sku) or {}).values())
@@ -2821,6 +2844,11 @@ def optimizar_plan(
             stock_inicial_rich.pop(sku, None)
             entradas_aprobadas_rich.pop(sku, None)
             pedidos_abiertos.pop(sku, None)   # <- evita el re-ingreso sin stock
+
+    if skus_cap_efectiva:
+        logger.warning(
+            f"[N2_CAP_EFECTIVA] {len(skus_cap_efectiva)} SKU stock>cap quedan en el solver "
+            f"con cap relajada (sku, cap_fisica_u, cap_eff_u): {skus_cap_efectiva}")
 
     if skus_filtrados_cap_bodega:
         logger.warning(
