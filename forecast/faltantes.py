@@ -81,6 +81,7 @@ SKU_EXCLUIDOS = {
     "115038175",
     "210038250", "220038250",            # AJI CREMA/PEBRE NUESTRA COCINA - discontinuados temp. glaso 13-10-2026
     "230030105",                         # AJI SALSA TOTTUS 10x1000 BOLSA - discontinuado temp. cambio de imagen, reintegrar al definir Tottus nueva imagen. glaso 27-10-2026
+    "260033175",                         # MOSTAZA CUISINE &CO 12x500 DOYPACK - descontinuado hasta nuevo aviso glaso 29-10-2026
 }
 
 # Clientes excluidos del informe: sus OV NO cuentan como faltante.
