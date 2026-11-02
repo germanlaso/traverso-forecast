@@ -26,11 +26,11 @@ from typing import Iterable
 FERIADOS_CHILE: dict[int, frozenset[date]] = {
     2026: frozenset({
         date(2026, 1, 1),    # Año Nuevo
-        date(2026, 3, 29),   # Domingo de Resurrección
-        date(2026, 3, 30),   # Lunes de Resurrección (movible)
-        date(2026, 4, 6),    # Día Nacional Pueblos Indígenas
+        date(2026, 4, 3),    # Viernes Santo
+        date(2026, 4, 4),    # Sábado Santo
         date(2026, 5, 1),    # Día del Trabajador
         date(2026, 5, 21),   # Día de las Glorias Navales
+        date(2026, 6, 21),   # Día Nacional de los Pueblos Indígenas
         date(2026, 6, 29),   # San Pedro y San Pablo
         date(2026, 7, 16),   # Virgen del Carmen
         date(2026, 8, 15),   # Asunción de la Virgen
@@ -39,7 +39,6 @@ FERIADOS_CHILE: dict[int, frozenset[date]] = {
         date(2026, 10, 12),  # Encuentro de Dos Mundos
         date(2026, 10, 31),  # Día de las Iglesias Evangélicas
         date(2026, 11, 1),   # Todos los Santos
-        date(2026, 11, 2),   # Día de los Difuntos (irregular)
         date(2026, 12, 8),   # Inmaculada Concepción
         date(2026, 12, 25),  # Navidad
     }),
@@ -315,6 +314,13 @@ if __name__ == "__main__":
     assert es_feriado(date(2026, 5, 1)), "1 mayo debería ser feriado"
     assert es_feriado(date(2026, 9, 18)), "18 sep debería ser feriado"
     assert not es_feriado(date(2026, 5, 2)), "2 mayo no es feriado"
+    # Regresión 02-11-2026: feriados móviles mal cargados suprimían informes en días hábiles
+    assert es_feriado(date(2026, 4, 3)), "3 abr 2026 es Viernes Santo"
+    assert es_feriado(date(2026, 6, 21)), "21 jun 2026 es Día de los Pueblos Indígenas"
+    assert not es_feriado(date(2026, 3, 30)), "30 mar 2026 NO es feriado"
+    assert not es_feriado(date(2026, 4, 6)), "6 abr 2026 NO es feriado"
+    assert es_habil(date(2026, 11, 2)), "2 nov 2026 es lunes hábil (Difuntos NO es feriado en Chile)"
+    assert len(FERIADOS_CHILE[2026]) == 16, "2026 tiene 16 feriados nacionales"
     print("✓ Feriados detectados correctamente")
 
     # Test 2: días hábiles
