@@ -8,6 +8,7 @@
 -- Clases:
 --   LINEA                 produce en una línea (requiere linea + u_por_caja) -> entra a KPIs de línea
 --   IMPORTADO_ETIQUETADO  Kikkoman / Melitta: importado + etiquetado, fuera del MRP (decisión 04-11-26)
+--   MAQUILA               mayonesas de maquila (decisión 04-11-26: solo la 300x8 está en el MRP)
 --   ARMADO                bi/tri packs: armado manual, no ocupa línea
 --   SEMIELABORADO         códigos 8xxxxxxxxx (bolsas 250 gr): no son cajas de PT (POR CONFIRMAR)
 --   POR_CLASIFICAR        sin regla: se informa aparte hasta clasificarlo
@@ -19,7 +20,8 @@ CREATE TABLE IF NOT EXISTS mrp_operacion_sku_linea (
     sku               VARCHAR(30)  PRIMARY KEY,
     descripcion       VARCHAR(160),
     clase             VARCHAR(30)  NOT NULL
-        CHECK (clase IN ('LINEA','IMPORTADO_ETIQUETADO','ARMADO','SEMIELABORADO','POR_CLASIFICAR')),
+        CONSTRAINT ck_clase CHECK (clase IN ('LINEA','IMPORTADO_ETIQUETADO','MAQUILA','ARMADO',
+                                             'SEMIELABORADO','POR_CLASIFICAR')),
     linea             VARCHAR(20),
     u_por_caja        NUMERIC(10,2),
     factor_velocidad  DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (factor_velocidad > 0),
@@ -58,6 +60,7 @@ clasif AS (
            CASE
                WHEN c.descripcion ILIKE '%KIKKOMAN%' OR c.descripcion ILIKE '%MELITTA%'
                     THEN 'IMPORTADO_ETIQUETADO'
+               WHEN c.descripcion ILIKE '%MAYONESA%' THEN 'MAQUILA'
                WHEN c.descripcion ~* '(BI|TRI)\s*PACK' THEN 'ARMADO'
                WHEN c.sku LIKE '8%' AND length(c.sku) = 10 THEN 'SEMIELABORADO'
                WHEN h.linea IS NOT NULL AND h.share >= 0.6 THEN 'LINEA'
@@ -73,12 +76,13 @@ SELECT sku, LEFT(descripcion, 160), clase,
        CASE WHEN clase = 'LINEA' THEN h_upc END,
        CASE clase
            WHEN 'IMPORTADO_ETIQUETADO' THEN 'regla_marca'
+           WHEN 'MAQUILA'              THEN 'regla_marca'
            WHEN 'ARMADO'               THEN 'regla_descripcion'
            WHEN 'SEMIELABORADO'        THEN 'regla_codigo'
            WHEN 'LINEA'                THEN 'regla_formato'
            ELSE 'sin_regla'
        END,
-       clase = 'IMPORTADO_ETIQUETADO',          -- decisión explícita de Germán; el resto queda por validar
+       clase IN ('IMPORTADO_ETIQUETADO','MAQUILA'),   -- decisiones explícitas de Germán; el resto por validar
        CASE WHEN clase = 'LINEA'
             THEN 'formato ' || right(sku, 4) || ': ' || n || '/' || n_total || ' SKU del catálogo en ' || h_linea
        END

@@ -11,7 +11,7 @@ Contrato de datos verificado con dato (04-11-2026):
     (235 SKU 1 línea, 13 SKU 2 líneas -> 'ambigua', se usa la preferida y se informa).
   - ~120 SKU producidos no están en el catálogo -> mrp_operacion_sku_linea (tabla propia del
     módulo, no la lee el solver). Solo clase LINEA entra a KPIs; IMPORTADO_ETIQUETADO
-    (Kikkoman/Melitta), ARMADO, SEMIELABORADO y POR_CLASIFICAR se informan aparte y NO se
+    (Kikkoman/Melitta), MAQUILA (mayonesas salvo 300x8), ARMADO, SEMIELABORADO y POR_CLASIFICAR se informan aparte y NO se
     suman a los totales (mezclarían bolsas/unidades con cajas de PT).
   - Granel (es_granel) fuera de los KPIs de línea.
   - Plan app = última versión por numero_of en mrp_aprobaciones con estado APROBADA/MODIFICADA,
@@ -50,7 +50,7 @@ SQL_SKU_OVERRIDE = (
     "SELECT sku, clase, linea, u_por_caja, factor_velocidad, validado "
     "FROM mrp_operacion_sku_linea"
 )
-CLASES_FUERA = ("IMPORTADO_ETIQUETADO", "ARMADO", "SEMIELABORADO", "POR_CLASIFICAR")
+CLASES_FUERA = ("IMPORTADO_ETIQUETADO", "MAQUILA", "ARMADO", "SEMIELABORADO", "POR_CLASIFICAR")
 
 # Producción real: MAX por (OF, TR) porque cant_producida se repite entre lotes del mismo TR.
 SQL_TR = """
