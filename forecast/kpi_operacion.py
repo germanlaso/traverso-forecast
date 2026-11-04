@@ -40,10 +40,12 @@ router = APIRouter(prefix="/operacion", tags=["operacion"])
 UMBRAL_EFICIENCIA_ALTA = 1.05   # sobre esto: capacidad nominal probablemente subparametrizada
 ESTADOS_PROGRAMADO_APP = ("APROBADA", "MODIFICADA")
 
+# Categoría desde la tabla propia del módulo (mrp_lineas.area mezcla planta/línea y no sirve).
 SQL_LINEAS = (
-    "SELECT codigo, nombre, COALESCE(NULLIF(TRIM(area), ''), nombre) AS categoria, "
-    "       turnos_dia, horas_turno, dias_semana, velocidad_u_hr "
-    "FROM mrp_lineas WHERE activa"
+    "SELECT l.codigo, l.nombre, COALESCE(ol.categoria, 'SIN CATEGORÍA') AS categoria, "
+    "       l.turnos_dia, l.horas_turno, l.dias_semana, l.velocidad_u_hr "
+    "FROM mrp_lineas l LEFT JOIN mrp_operacion_lineas ol ON ol.codigo = l.codigo "
+    "WHERE l.activa"
 )
 SQL_SKU_LINEAS = "SELECT sku, linea, preferida, factor_velocidad FROM mrp_sku_lineas"
 SQL_SKU_PARAMS = "SELECT sku, u_por_caja FROM mrp_sku_params"
