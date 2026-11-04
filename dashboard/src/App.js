@@ -14,6 +14,7 @@ import Eventos from './components/Eventos';
 import ConciliacionOF from './components/ConciliacionOF';
 import FaltantesResumen from './components/FaltantesResumen';
 import MonitorDatalake from './components/MonitorDatalake';
+import BitacoraEventos from './components/BitacoraEventos';
 import Landing from './components/Landing';
 import PrecisionForecast from './components/PrecisionForecast';
 
@@ -47,7 +48,7 @@ const NAV = [
   { key:'home', label:'🏠 Inicio', tab:'home' },
   { key:'forecast', label:'📈 Forecast', tabs:[['forecast','Forecast de Demanda'],['eventos','Eventos'],['precision','Precisión Forecast']] },
   { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
-  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake']] },
+  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake'],['bitacora','Bitácora']] },
   { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
 ];
 
@@ -1331,6 +1332,7 @@ function AppInner() {
         {activeTab === 'conciliacion' && <ConciliacionOF />}
         {activeTab === 'resumen30' && <FaltantesResumen />}
         {activeTab === 'monitor' && <MonitorDatalake />}
+        {activeTab === 'bitacora' && <BitacoraEventos />}
         {activeTab === 'campanas' && <Campanas />}
         {activeTab === 'eventos' && <Eventos skus={skus} />}
         {activeTab === 'parametros' && <ParametrosDiagnostico />}
