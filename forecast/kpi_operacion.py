@@ -41,7 +41,8 @@ UMBRAL_EFICIENCIA_ALTA = 1.05   # sobre esto: capacidad nominal probablemente su
 ESTADOS_PROGRAMADO_APP = ("APROBADA", "MODIFICADA")
 
 SQL_LINEAS = (
-    "SELECT codigo, nombre, turnos_dia, horas_turno, dias_semana, velocidad_u_hr "
+    "SELECT codigo, nombre, COALESCE(NULLIF(TRIM(area), ''), nombre) AS categoria, "
+    "       turnos_dia, horas_turno, dias_semana, velocidad_u_hr "
     "FROM mrp_lineas WHERE activa"
 )
 SQL_SKU_LINEAS = "SELECT sku, linea, preferida, factor_velocidad FROM mrp_sku_lineas"
@@ -121,8 +122,21 @@ def _r2(x):
     return round(x, 2)
 
 
+def dias_laborables(desde: date, hasta: date, dias_semana: int) -> int:
+    """Días del rango con weekday < dias_semana (5 = lunes a viernes). Feriados NO se descuentan."""
+    n, d = 0, desde
+    while d <= hasta:
+        if d.weekday() < (dias_semana or 0):
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
 def calcular_semana(desde: date) -> dict:
-    hasta = desde + timedelta(days=6)
+    return calcular_periodo(desde, desde + timedelta(days=6))
+
+
+def calcular_periodo(desde: date, hasta: date) -> dict:
     p = {"desde": desde, "hasta": hasta}
 
     q_app = sa.text(SQL_PROG_APP).bindparams(sa.bindparam("estados", expanding=True))
@@ -259,7 +273,8 @@ def calcular_semana(desde: date) -> dict:
     res_lineas = []
     for cod in sorted(lineas):
         L, a = lineas[cod], acc[cod]
-        nominal = float((L.turnos_dia or 0) * (L.horas_turno or 0) * (L.dias_semana or 0))
+        nominal = float((L.turnos_dia or 0) * (L.horas_turno or 0)
+                        * dias_laborables(desde, hasta, L.dias_semana))
         pp, pn, sp = a["parada_plan_h"], a["parada_noplan_h"], a["sin_programa_h"]
         disponible = max(nominal - pp, 0.0)
         cap_real = max(disponible - pn, 0.0)
@@ -284,6 +299,7 @@ def calcular_semana(desde: date) -> dict:
         res_lineas.append({
             "linea": cod,
             "nombre": L.nombre,
+            "categoria": L.categoria,
             "con_bitacora": con_bitacora,
             "n_eventos": int(a["n_eventos"]),
             "horas": {
@@ -384,7 +400,8 @@ def calcular_semana(desde: date) -> dict:
     }
 
     return {
-        "semana": {"desde": desde.isoformat(), "hasta": hasta.isoformat()},
+        "semana": {"desde": desde.isoformat(), "hasta": hasta.isoformat()},   # alias histórico
+        "periodo": {"desde": desde.isoformat(), "hasta": hasta.isoformat()},
         "resumen": resumen,
         "lineas": res_lineas,
         "conciliacion_sku": conciliacion,
@@ -406,6 +423,137 @@ def calcular_semana(desde: date) -> dict:
 @router.get("/semana")
 def kpi_semana(desde: Optional[date] = Query(None)):
     return calcular_semana(desde or semana_default())
+
+
+# ============================================================================
+# Dashboard de rendimiento (menú Control): período filtrado + evolutivo semanal
+# ============================================================================
+MAX_DIAS_DASHBOARD = 182   # 26 semanas
+
+SQL_EVENTOS_DETALLE = """
+SELECT e.linea, e.tipo, t.nombre AS tipo_nombre, t.categoria,
+       SUM(COALESCE(e.duracion_min, 0)) AS minutos, COUNT(*) AS n
+FROM mrp_eventos_linea e JOIN mrp_eventos_tipos t ON t.codigo = e.tipo
+WHERE NOT e.anulado AND e.fecha BETWEEN :desde AND :hasta
+GROUP BY 1, 2, 3, 4
+ORDER BY minutos DESC
+"""
+
+
+def _lineas_sel(resultado, linea, categoria):
+    return {
+        x["linea"] for x in resultado["lineas"]
+        if (not linea or x["linea"] == linea) and (not categoria or x["categoria"] == categoria)
+    }
+
+
+def _resumir(resultado, sel):
+    """Totales de un resultado de calcular_periodo restringidos a las líneas 'sel'."""
+    ls = [x for x in resultado["lineas"] if x["linea"] in sel]
+
+    def H(k):
+        return sum(x["horas"][k] for x in ls)
+
+    conc = [c for c in resultado["conciliacion_sku"]
+            if c["clase"] == "LINEA" and c["linea_atribuida"] in sel]
+
+    def C(k, cats=None):
+        return sum(c[k] for c in conc if cats is None or c["categoria"] in cats)
+
+    nominal = H("nominal")
+    sap, app, real = C("cj_programado_sap"), C("cj_programado_app"), C("cj_real")
+    return {
+        "cj_programado_app": _r2(app),
+        "cj_programado_sap": _r2(sap),
+        "cj_real": _r2(real),
+        "adopcion_app_sobre_sap": _ratio(C("cj_programado_sap", {"ambos"}), sap),
+        "cumplimiento_vs_sap": _ratio(real, sap),
+        "produccion_fuera_de_app_pct": _ratio(C("cj_real", {"solo_sap", "sin_programa"}), real),
+        "horas_nominales": _r2(nominal),
+        "heq_producidas": _r2(H("heq_producidas")),
+        "heq_programadas_sap": _r2(H("heq_programadas_sap")),
+        "heq_programadas_app": _r2(H("heq_programadas_app")),
+        "horas_parada_planificada": _r2(H("parada_planificada")),
+        "horas_parada_no_planificada": _r2(H("parada_no_planificada")),
+        "horas_sin_programa": _r2(H("sin_programa")),
+        "eficiencia": _ratio(H("heq_producidas"), nominal),
+        "ocupacion_programada_sap": _ratio(H("heq_programadas_sap"), nominal),
+        "ocupacion_programada_app": _ratio(H("heq_programadas_app"), nominal),
+        "n_lineas": len(ls),
+        "lineas_con_bitacora": sum(1 for x in ls if x["con_bitacora"]),
+    }
+
+
+@router.get("/dashboard")
+def dashboard(
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+    linea: Optional[str] = Query(None),
+    categoria: Optional[str] = Query(None),
+):
+    from fastapi import HTTPException   # import local: el módulo también corre como CLI
+
+    hasta = hasta or (semana_default() + timedelta(days=6))
+    desde = desde or (hasta - timedelta(days=8 * 7 - 1))
+    if desde > hasta:
+        raise HTTPException(422, "El rango es inválido: 'desde' es posterior a 'hasta'.")
+    if (hasta - desde).days + 1 > MAX_DIAS_DASHBOARD:
+        raise HTTPException(422, "El rango máximo es de 26 semanas.")
+    linea = linea or None
+    categoria = categoria or None
+
+    periodo = calcular_periodo(desde, hasta)
+    sel = _lineas_sel(periodo, linea, categoria)
+    if (linea or categoria) and not sel:
+        raise HTTPException(422, "No hay líneas activas para el filtro seleccionado.")
+    hay_filtro = bool(linea or categoria)
+
+    with _engine.connect() as c:
+        eventos = [dict(r._mapping) for r in
+                   c.execute(sa.text(SQL_EVENTOS_DETALLE), {"desde": desde, "hasta": hasta})
+                   if r.linea in sel]
+
+    # Evolutivo: semanas completas lunes-domingo que tocan el rango
+    evolutivo, evo_lineas = [], defaultdict(list)
+    lunes = desde - timedelta(days=desde.weekday())
+    while lunes <= hasta:
+        domingo = lunes + timedelta(days=6)
+        r = calcular_periodo(lunes, domingo)
+        fila = {"semana": lunes.isoformat(),
+                "parcial": lunes < desde or domingo > hasta or domingo >= date.today()}
+        fila.update(_resumir(r, sel))
+        evolutivo.append(fila)
+        for x in r["lineas"]:
+            if x["linea"] in sel:
+                evo_lineas[x["linea"]].append({
+                    "semana": lunes.isoformat(),
+                    "eficiencia": x["kpi"]["eficiencia"],
+                    "ocupacion_programada_sap": x["kpi"]["ocupacion_programada_sap"],
+                    "cumplimiento_vs_sap": x["kpi"]["cumplimiento_vs_sap"],
+                    "heq_producidas": x["horas"]["heq_producidas"],
+                })
+        lunes += timedelta(days=7)
+
+    conc = [x for x in periodo["conciliacion_sku"]
+            if not hay_filtro or (x["clase"] == "LINEA" and x["linea_atribuida"] in sel)]
+
+    return {
+        "periodo": {"desde": desde.isoformat(), "hasta": hasta.isoformat()},
+        "filtros": {"linea": linea, "categoria": categoria},
+        "opciones": {
+            "lineas": [{"codigo": x["linea"], "categoria": x["categoria"]} for x in periodo["lineas"]],
+            "categorias": sorted({x["categoria"] for x in periodo["lineas"] if x["categoria"]}),
+        },
+        "resumen": _resumir(periodo, sel),
+        "fuera_de_lineas": {} if hay_filtro else periodo["resumen"]["fuera_de_lineas"],
+        "lineas": [x for x in periodo["lineas"] if x["linea"] in sel],
+        "conciliacion_sku": conc,
+        "eventos": eventos,
+        "evolutivo": evolutivo,
+        "evolutivo_lineas": dict(evo_lineas),
+        "advertencias": periodo["advertencias"],
+        "definiciones": periodo["definiciones"],
+    }
 
 
 def _pct(x):
