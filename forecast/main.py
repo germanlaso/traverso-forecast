@@ -24,6 +24,7 @@ from ordenes import router as ordenes_router
 from campanas_api import router as campanas_router
 from precision_api import router as precision_router
 from bitacora import router as bitacora_router   # Bitacora de eventos por linea
+from kpi_operacion import router as operacion_router   # KPIs semanales de operacion
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
@@ -65,6 +66,7 @@ app.include_router(ordenes_router)
 app.include_router(campanas_router)   # V6: campanas de granel
 app.include_router(precision_router)  # Precision del forecast (vintages h=1/h=2)
 app.include_router(bitacora_router)   # Bitacora de eventos por linea (evaluacion operacion)
+app.include_router(operacion_router)  # KPIs semanales de operacion por linea
 
 app.add_middleware(
     CORSMiddleware,
