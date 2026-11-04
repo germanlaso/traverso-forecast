@@ -9,6 +9,10 @@ Contrato de datos verificado con dato (04-11-2026):
   - cant_planificada se repite por fila -> MAX por OF.
   - mrp_of_sap.linea vacía en el 100% de las OF (8 semanas) -> línea atribuida vía mrp_sku_lineas
     (235 SKU 1 línea, 13 SKU 2 líneas -> 'ambigua', se usa la preferida y se informa).
+  - ~120 SKU producidos no están en el catálogo -> mrp_operacion_sku_linea (tabla propia del
+    módulo, no la lee el solver). Solo clase LINEA entra a KPIs; IMPORTADO_ETIQUETADO
+    (Kikkoman/Melitta), ARMADO, SEMIELABORADO y POR_CLASIFICAR se informan aparte y NO se
+    suman a los totales (mezclarían bolsas/unidades con cajas de PT).
   - Granel (es_granel) fuera de los KPIs de línea.
   - Plan app = última versión por numero_of en mrp_aprobaciones con estado APROBADA/MODIFICADA,
     cantidad en cajas (cantidad_real_cj; nunca cantidad_real_u, ver incidente upc=1).
@@ -42,6 +46,11 @@ SQL_LINEAS = (
 )
 SQL_SKU_LINEAS = "SELECT sku, linea, preferida, factor_velocidad FROM mrp_sku_lineas"
 SQL_SKU_PARAMS = "SELECT sku, u_por_caja FROM mrp_sku_params"
+SQL_SKU_OVERRIDE = (
+    "SELECT sku, clase, linea, u_por_caja, factor_velocidad, validado "
+    "FROM mrp_operacion_sku_linea"
+)
+CLASES_FUERA = ("IMPORTADO_ETIQUETADO", "ARMADO", "SEMIELABORADO", "POR_CLASIFICAR")
 
 # Producción real: MAX por (OF, TR) porque cant_producida se repite entre lotes del mismo TR.
 SQL_TR = """
@@ -123,21 +132,37 @@ def calcular_semana(desde: date) -> dict:
         for r in c.execute(sa.text(SQL_SKU_LINEAS)):
             sku_lin[r.sku].append(r)
         upc = {r.sku: r.u_por_caja for r in c.execute(sa.text(SQL_SKU_PARAMS))}
+        override = {r.sku: r for r in c.execute(sa.text(SQL_SKU_OVERRIDE))}
         filas_tr = list(c.execute(sa.text(SQL_TR), p))
         filas_sap = list(c.execute(sa.text(SQL_PROG_SAP), p))
         filas_app = list(c.execute(q_app, {**p, "estados": list(ESTADOS_PROGRAMADO_APP)}))
         filas_ev = list(c.execute(sa.text(SQL_EVENTOS), p))
 
     adv = {k: set() for k in (
-        "sku_sin_linea", "sku_linea_ambigua", "sku_sin_upc",
+        "sku_sin_clasificar", "sku_por_clasificar", "sku_linea_ambigua", "sku_sin_upc",
         "linea_inactiva_o_desconocida", "velocidad_invalida", "evento_linea_desconocida",
+        "sku_linea_sin_validar",
     )}
+
+    def clase_de(sku):
+        """LINEA si está en el catálogo o clasificado LINEA; si no, su clase fuera de línea."""
+        if sku in sku_lin:
+            return "LINEA"
+        ov = override.get(sku)
+        if ov is None:
+            adv["sku_sin_clasificar"].add(sku)   # SKU nuevo: re-ejecutar migrate_operacion_sku_linea.sql
+            return "POR_CLASIFICAR"
+        if ov.clase == "POR_CLASIFICAR":
+            adv["sku_por_clasificar"].add(sku)
+        if ov.clase == "LINEA" and not ov.validado:
+            adv["sku_linea_sin_validar"].add(sku)
+        return ov.clase
 
     def atribuir(sku):
         opciones = sku_lin.get(sku, [])
         if not opciones:
-            adv["sku_sin_linea"].add(sku)
-            return None
+            ov = override.get(sku)
+            return ov.linea if ov is not None and ov.clase == "LINEA" else None
         if len(opciones) > 1:
             adv["sku_linea_ambigua"].add(sku)
             pref = [o for o in opciones if o.preferida]
@@ -145,7 +170,7 @@ def calcular_semana(desde: date) -> dict:
         return opciones[0].linea
 
     def h_eq(sku, linea, cj):
-        u = upc.get(sku)
+        u = upc.get(sku) if sku in upc else getattr(override.get(sku), "u_por_caja", None)
         if u is None or float(u) <= 0:
             adv["sku_sin_upc"].add(sku)
             return None
@@ -153,7 +178,10 @@ def calcular_semana(desde: date) -> dict:
         if L is None:
             adv["linea_inactiva_o_desconocida"].add(linea)
             return None
-        f = next((o.factor_velocidad for o in sku_lin.get(sku, []) if o.linea == linea), 1.0)
+        f = next((o.factor_velocidad for o in sku_lin.get(sku, []) if o.linea == linea), None)
+        if f is None:
+            ov = override.get(sku)
+            f = ov.factor_velocidad if ov is not None and ov.linea == linea else 1.0
         vel = float(L.velocidad_u_hr or 0) * float(f or 0)
         if vel <= 0:
             adv["velocidad_invalida"].add(sku + "@" + linea)
@@ -164,6 +192,16 @@ def calcular_semana(desde: date) -> dict:
     diario = {cod: defaultdict(float) for cod in lineas}
     por_sku = defaultdict(lambda: defaultdict(float))
     linea_sku = {}
+    clase_sku = {}
+    fuera = {k: defaultdict(float) for k in CLASES_FUERA}
+
+    def es_linea(sku, campo_cj, cj):
+        """Registra la clase; si es fuera de línea acumula aparte y devuelve False."""
+        cl = clase_sku.setdefault(sku, clase_de(sku))
+        if cl == "LINEA":
+            return True
+        fuera[cl][campo_cj] += float(cj or 0)
+        return False
 
     def sumar(campo_h, campo_cj, sku, linea, cj, fecha=None):
         if linea is None:
@@ -180,12 +218,18 @@ def calcular_semana(desde: date) -> dict:
             diario[linea][fecha.isoformat()] += h
 
     for r in filas_tr:
+        if not es_linea(r.sku, "cj_real", r.cj):
+            por_sku[r.sku]["cj_real"] += float(r.cj)
+            continue
         lin = atribuir(r.sku)
         linea_sku[r.sku] = lin
         por_sku[r.sku]["cj_real"] += float(r.cj)
         sumar("heq_real", "cj_real", r.sku, lin, r.cj, r.fecha_tr)
 
     for r in filas_sap:
+        if not es_linea(r.sku, "cj_prog_sap", r.cj):
+            por_sku[r.sku]["cj_prog_sap"] += float(r.cj)
+            continue
         lin = atribuir(r.sku)
         linea_sku[r.sku] = lin
         por_sku[r.sku]["cj_prog_sap"] += float(r.cj)
@@ -193,6 +237,9 @@ def calcular_semana(desde: date) -> dict:
         sumar("heq_prog_sap", "cj_prog_sap", r.sku, lin, r.cj)
 
     for r in filas_app:
+        if not es_linea(r.sku, "cj_prog_app", r.cj):
+            por_sku[r.sku]["cj_prog_app"] += float(r.cj or 0)
+            continue
         lin = r.linea or atribuir(r.sku)
         linea_sku.setdefault(r.sku, lin)
         por_sku[r.sku]["cj_prog_app"] += float(r.cj or 0)
@@ -290,14 +337,11 @@ def calcular_semana(desde: date) -> dict:
             cat = "solo_app"
         else:
             cat = "sin_programa"   # producido sin OF con centro de tramo en la semana
-        tot["app"] += app
-        tot["sap"] += sap
-        tot["real"] += real
-        tot["sap_" + cat] += sap
-        tot["real_" + cat] += real
+        clase = clase_sku.get(sku, "LINEA")
         conciliacion.append({
             "sku": sku,
-            "linea_atribuida": linea_sku.get(sku),
+            "clase": clase,
+            "linea_atribuida": linea_sku.get(sku) if clase == "LINEA" else None,
             "categoria": cat,
             "cj_programado_app": _r2(app),
             "cj_programado_sap": _r2(sap),
@@ -307,6 +351,13 @@ def calcular_semana(desde: date) -> dict:
             "n_of_sap": int(v["n_of_sap"]),
             "n_of_app": int(v["n_of_app"]),
         })
+        if clase != "LINEA":
+            continue
+        tot["app"] += app
+        tot["sap"] += sap
+        tot["real"] += real
+        tot["sap_" + cat] += sap
+        tot["real_" + cat] += real
 
     resumen = {
         "cj_programado_app": _r2(tot["app"]),
@@ -316,8 +367,17 @@ def calcular_semana(desde: date) -> dict:
         "adopcion_app_sobre_sap": _ratio(tot["sap_ambos"], tot["sap"]),
         "produccion_fuera_de_app_pct": _ratio(tot["real_solo_sap"] + tot["real_sin_programa"], tot["real"]),
         "n_skus_por_categoria": {
-            k: sum(1 for x in conciliacion if x["categoria"] == k)
+            k: sum(1 for x in conciliacion if x["categoria"] == k and x["clase"] == "LINEA")
             for k in ("ambos", "solo_sap", "solo_app", "sin_programa")
+        },
+        "fuera_de_lineas": {
+            cl: {
+                "cj_real": _r2(v["cj_real"]),
+                "cj_programado_sap": _r2(v["cj_prog_sap"]),
+                "cj_programado_app": _r2(v["cj_prog_app"]),
+                "n_skus": sum(1 for s_, c_ in clase_sku.items() if c_ == cl),
+            }
+            for cl, v in fuera.items() if any(v.values())
         },
         "lineas_con_bitacora": sum(1 for x in res_lineas if x["con_bitacora"]),
         "lineas_total": len(res_lineas),
@@ -338,6 +398,7 @@ def calcular_semana(desde: date) -> dict:
             "capacidad_real_vs_teorica": "(nominal - paradas planificadas - no planificadas) / nominal (solo con bitácora)",
             "semana_sap": "OF SAP asignada a la semana del centro de su tramo planificado",
             "semana_real": "fecha_tr del recibo",
+            "totales_resumen": "solo SKU clase LINEA; el resto va en resumen.fuera_de_lineas",
         },
     }
 
@@ -368,5 +429,7 @@ if __name__ == "__main__":
             print(f"{x['linea']:<14}{h['nominal']:>7.1f}{h['heq_producidas']:>8.1f}"
                   f"{_pct(k['eficiencia']):>7}{_pct(k['ocupacion_programada_sap']):>8}"
                   f"{_pct(k['cumplimiento_vs_sap']):>7}{x['n_eventos']:>4}  {len(x['alertas'])}")
-        print("Resumen:", json.dumps(r["resumen"], ensure_ascii=False, default=str))
+        fl = r["resumen"].pop("fuera_de_lineas")
+        print("Resumen (solo LINEA):", json.dumps(r["resumen"], ensure_ascii=False, default=str))
+        print("Fuera de líneas:", json.dumps(fl, ensure_ascii=False, default=str))
         print("Advertencias:", {k: len(v) for k, v in r["advertencias"].items()})
