@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import axios from "axios";
 import ProyeccionModal from "./ProyeccionModal";
 import MiniStock from "./MiniStock";
+import ModalBitacora, { useBitacoraConteo, BotonBitacora, MinutosDetencion } from "./ModalBitacora";
 
 const API = process.env.REACT_APP_API_BASE || "";
 const C = {
@@ -552,6 +553,9 @@ export default function DetalleProduccion({
 
   const diasExt=useMemo(()=>diasDesde(semanaBase,2),[semanaBase]);
   const dias=useMemo(()=>diasExt.slice(0,7),[diasExt]);
+  // Bitácora: badge y minutos de detención por línea/día (una consulta por semana visible)
+  const [modalBitacora,setModalBitacora]=useState(null);   // {fecha, linea}
+  const {conteo:bitConteo,recargar:recargarBitacora}=useBitacoraConteo(dias[0]?.fecha,dias[dias.length-1]?.fecha);
   const aprobMap=useMemo(()=>{
     // F3 (12/05/2026): indexar por numero_of. Datos vienen del prop ordenesAprobadas
     // (single source of truth en App.js). Antes era state local con su propio fetch.
@@ -593,6 +597,8 @@ export default function DetalleProduccion({
 
   return(
     <div style={{fontFamily:"Arial,sans-serif",color:C.text}}>
+      {modalBitacora&&<ModalBitacora fecha={modalBitacora.fecha} linea={modalBitacora.linea}
+        onClose={()=>setModalBitacora(null)} onCambio={recargarBitacora}/>}
       {modalEditar&&<ModalEditar orden={modalEditar.orden} aprobacion={modalEditar.aprobacion}
         onGuardar={(aprobUpdated)=>{
           setModalEditar(null);
@@ -810,6 +816,10 @@ export default function DetalleProduccion({
                   <div key={dia.fecha} style={s.dayCol(dia.feriado,dia.finDeSemana)}>
                     <div style={s.dayLbl(dia.habil,dia.feriado)}>
                       {dia.feriado?dia.label+" 🇨🇱":dia.label}
+                      <span style={{marginLeft:4,verticalAlign:"middle"}}>
+                        <BotonBitacora info={bitConteo[`${linea.codigo}|${dia.fecha}`]} atenuado={dia.fecha>hoy}
+                          onClick={()=>setModalBitacora({fecha:dia.fecha,linea:linea.codigo})}/>
+                      </span>
                       {!dia.habil&&<div style={{fontSize:8,color:dia.feriado?"#854F0B":C.textMuted}}>{dia.feriado?"Feriado":"Fin de semana"}</div>}
                     </div>
                     <div style={{minHeight:44}}>
@@ -847,6 +857,11 @@ export default function DetalleProduccion({
                       <div style={{fontSize:8.5,color:"#7B5C1A",marginTop:2,textAlign:"center"}}
                         title={`Setup en este día: ${fmtN(setupUDia)} u`}>
                         ⚙ {fmtPct(setupPctDia)} setup
+                      </div>
+                    )}
+                    {bitConteo[`${linea.codigo}|${dia.fecha}`]&&(
+                      <div style={{display:"flex",justifyContent:"center",marginTop:2}}>
+                        <MinutosDetencion info={bitConteo[`${linea.codigo}|${dia.fecha}`]}/>
                       </div>
                     )}
                   </div>
