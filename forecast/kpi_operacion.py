@@ -427,6 +427,34 @@ def kpi_semana(desde: Optional[date] = Query(None)):
     return calcular_semana(desde or semana_default())
 
 
+# Producción real por SKU y día (Terminal Report) para la grilla de Detalle Producción.
+# Misma regla que SQL_TR: MAX por (OF, TR) porque cant_producida se repite entre lotes.
+SQL_REAL_DIARIO = """
+SELECT sku, fecha_tr AS fecha, SUM(prod_tr) AS cj FROM (
+    SELECT orden_produccion, terminal_report, sku, fecha_tr, MAX(cant_producida) AS prod_tr
+    FROM mrp_of_sap
+    WHERE terminal_report <> '' AND NOT es_granel AND fecha_tr BETWEEN :desde AND :hasta
+    GROUP BY 1, 2, 3, 4
+) t
+GROUP BY 1, 2
+ORDER BY 2, 1
+"""
+
+
+@router.get("/real_diario")
+def real_diario(desde: date = Query(...), hasta: date = Query(...)):
+    from fastapi import HTTPException
+    if desde > hasta or (hasta - desde).days > 62:
+        raise HTTPException(422, "Rango inválido (máximo 62 días).")
+    with _engine.connect() as c:
+        filas = [{"sku": r.sku, "fecha": r.fecha.isoformat(), "cj": float(r.cj)}
+                 for r in c.execute(sa.text(SQL_REAL_DIARIO), {"desde": desde, "hasta": hasta})]
+        ultima = c.execute(sa.text(
+            "SELECT MAX(fecha_tr) FROM mrp_of_sap WHERE terminal_report <> ''")).scalar()
+    return {"desde": desde.isoformat(), "hasta": hasta.isoformat(),
+            "ultima_fecha_tr": ultima.isoformat() if ultima else None, "real": filas}
+
+
 # ============================================================================
 # Dashboard de rendimiento (menú Control): período filtrado + evolutivo semanal
 # ============================================================================

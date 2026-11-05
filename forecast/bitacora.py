@@ -8,7 +8,9 @@ Endpoints:
   POST /bitacora/eventos/{id}/anular       -> anula (no borra) un evento
 
 Validaciones fail-loud (422) en vez de defaults silenciosos: línea y tipo deben
-existir y estar activos; duración obligatoria si el tipo la requiere; fecha no futura.
+existir y estar activos; duración obligatoria si el tipo la requiere.
+Fechas futuras: solo categorías PARADA_PLANIFICADA y SIN_PROGRAMA, hasta 90 días
+(se anotan de antemano desde la grilla; cuentan en KPIs recién cuando se evalúa su semana).
 """
 from datetime import date, timedelta
 from typing import Optional
@@ -28,6 +30,9 @@ SQL_TIPOS = (
 )
 
 router = APIRouter(prefix="/bitacora", tags=["bitacora"])
+
+CATEGORIAS_FUTURAS = ("PARADA_PLANIFICADA", "SIN_PROGRAMA")
+MAX_DIAS_FUTURO = 90
 
 
 class EventoIn(BaseModel):
@@ -96,8 +101,6 @@ def crear_evento(ev: EventoIn):
     registrado_por = _limpiar(ev.registrado_por)
     if not registrado_por:
         raise HTTPException(422, "Indica quién registra el evento.")
-    if ev.fecha > date.today():
-        raise HTTPException(422, "La fecha no puede ser futura.")
 
     with _engine.begin() as c:
         lineas = set(c.execute(sa.text(SQL_CODIGOS_LINEA)).scalars().all())
@@ -105,11 +108,18 @@ def crear_evento(ev: EventoIn):
             raise HTTPException(422, f"Línea '{ev.linea}' no existe o no está activa.")
 
         tipo = c.execute(
-            sa.text("SELECT requiere_duracion FROM mrp_eventos_tipos WHERE codigo = :c AND activo"),
+            sa.text("SELECT requiere_duracion, categoria FROM mrp_eventos_tipos WHERE codigo = :c AND activo"),
             {"c": ev.tipo},
         ).first()
         if tipo is None:
             raise HTTPException(422, f"Tipo de evento '{ev.tipo}' no existe o no está activo.")
+
+        if ev.fecha > date.today():
+            if tipo.categoria not in CATEGORIAS_FUTURAS:
+                raise HTTPException(422, "En fechas futuras solo se pueden registrar paradas "
+                                         "planificadas y línea disponible sin programa.")
+            if ev.fecha > date.today() + timedelta(days=MAX_DIAS_FUTURO):
+                raise HTTPException(422, f"Solo se pueden anotar eventos hasta {MAX_DIAS_FUTURO} días adelante.")
 
         duracion = ev.duracion_min
         if tipo.requiere_duracion and not duracion:

@@ -21,6 +21,7 @@ const guardarUsuario = (v) => {
 };
 
 const FORM_VACIO = { linea: '', tipo: '', duracion_min: '', sku: '', comentario: '' };
+const CATEGORIAS_FUTURAS = ['PARADA_PLANIFICADA', 'SIN_PROGRAMA'];   // mismo criterio que bitacora.py
 
 const estilos = {
   wrap: { padding: 16, maxWidth: 1100 },
@@ -52,10 +53,20 @@ export default function BitacoraEventos() {
     [catalogos.tipos, form.tipo]
   );
   const pideDuracion = tipoSel ? tipoSel.requiere_duracion : true;
+  const futuro = fecha > hoyLocal();
+  const tiposDisp = futuro ? catalogos.tipos.filter((t) => CATEGORIAS_FUTURAS.includes(t.categoria)) : catalogos.tipos;
+  useEffect(() => {
+    if (form.tipo && !tiposDisp.some((t) => t.codigo === form.tipo)) setForm((f) => ({ ...f, tipo: '' }));
+    // eslint-disable-next-line
+  }, [futuro, catalogos.tipos]);
 
   const cargarEventos = async () => {
     try {
-      const params = filtroLinea ? { linea: filtroLinea } : {};
+      const base = new Date();
+      const d0 = new Date(base); d0.setDate(base.getDate() - 6);
+      const d1 = new Date(base); d1.setDate(base.getDate() + 30);
+      const f = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const params = { desde: f(d0), hasta: f(d1), ...(filtroLinea ? { linea: filtroLinea } : {}) };
       const { data } = await axios.get(`${API}/bitacora/eventos`, { params });
       setEventos(data.eventos || []);
     } catch (e) {
@@ -125,7 +136,7 @@ export default function BitacoraEventos() {
             <input style={estilos.input} value={usuario} onChange={(e) => setUsuario(e.target.value)} placeholder="Nombre y apellido" />
           </label>
           <label style={estilos.label}>Fecha
-            <input style={estilos.input} type="date" value={fecha} max={hoyLocal()} onChange={(e) => setFecha(e.target.value)} />
+            <input style={estilos.input} type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
           </label>
           <label style={estilos.label}>Línea
             <select style={estilos.input} value={form.linea} onChange={set('linea')}>
@@ -136,7 +147,7 @@ export default function BitacoraEventos() {
           <label style={estilos.label}>Tipo de evento
             <select style={estilos.input} value={form.tipo} onChange={set('tipo')}>
               <option value="">Seleccionar…</option>
-              {catalogos.tipos.map((t) => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
+              {tiposDisp.map((t) => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
             </select>
           </label>
           {pideDuracion && (
@@ -161,7 +172,7 @@ export default function BitacoraEventos() {
 
       <div style={estilos.card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <strong>Últimos 7 días</strong>
+          <strong>Últimos 7 días y planificados (próximos 30)</strong>
           <select style={estilos.input} value={filtroLinea} onChange={(e) => setFiltroLinea(e.target.value)}>
             <option value="">Todas las líneas</option>
             {catalogos.lineas.map((l) => <option key={l.codigo} value={l.codigo}>{l.nombre && l.nombre !== l.codigo ? `${l.codigo} · ${l.nombre}` : l.codigo}</option>)}

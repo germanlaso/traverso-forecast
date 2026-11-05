@@ -45,7 +45,7 @@ function CapBar({uso}){
     <div style={{height:6,width:`${pct*100}%`,background:color,borderRadius:3}}/></div>);
 }
 
-function OrdenBadge({orden,esPreferida,estaAprobada,onClick,desc}){
+function OrdenBadge({orden,esPreferida,estaAprobada,onClick,desc,real}){
   const esDesborde=orden.esDesborde;
   // estaAprobada viene del aprobMap del padre (fuente de verdad: /ordenes/aprobadas).
   // Usar esto en vez de orden.aprobada evita un parpadeo ámbar→verde mientras
@@ -64,6 +64,9 @@ function OrdenBadge({orden,esPreferida,estaAprobada,onClick,desc}){
     tooltipLines.push(orden.setup_unidades
       ? `⚙ Setup: ${fmtN(orden.setup_unidades)} u`
       : `⚙ Paga setup`);
+  }
+  if (real && real.reportado) {
+    tooltipLines.push(`Real (Terminal Report): ${fmtN(real.cj)} cj`+(real.pct!=null?` · ${fmtPct(real.pct)} de lo aprobado`:"")+(real.enCurso?" · en curso":""));
   }
   tooltipLines.push("", estaAprobada ? "Click para editar / retirar aprobación" : "Click para aprobar");
   return(
@@ -92,6 +95,14 @@ function OrdenBadge({orden,esPreferida,estaAprobada,onClick,desc}){
         {orden.cjProduccion!=null && ` · ${fmtN(orden.cjProduccion)} cj`}
         {" · "}{fmtPct(orden.usoPct)}
       </div>
+      {/* (05-11) producción real del SKU en la ventana de la OF (Terminal Report) */}
+      {real && real.reportado && (()=>{
+        const p=real.pct;
+        const col=real.enCurso?C.textMuted:p==null?C.textMuted:p>=0.9?C.tealMid:p>=0.5?"#854F0B":C.red;
+        return(<div style={{fontSize:8.5,fontWeight:700,color:col,marginTop:1,borderTop:`0.5px dashed ${bord}`,paddingTop:1}}>
+          real {fmtN(real.cj)} cj{p!=null?` · ${fmtPct(p)}`:""}{real.enCurso?" …":""}
+        </div>);
+      })()}
     </div>
   );
 }
@@ -564,6 +575,54 @@ export default function DetalleProduccion({
     (creadasLocal??[]).forEach(cx=>{ if(!m[cx.numero_of]) m[cx.numero_of]=cx; });
     return m;
   },[ordenesAprobadas,creadasLocal]);
+
+  // (05-11) Producción real (Terminal Report) por SKU/día. Cada OF aprobada toma la
+  // producción de su SKU desde su lanzamiento hasta el día antes de la siguiente OF
+  // aprobada del mismo SKU (máx. 7 días): el 25% de los TR cae después del fin planificado.
+  // Lo que no cae en ninguna ventana se muestra al pie del día como "sin OF".
+  const [realDiario,setRealDiario]=useState({porSku:{},ultima:null});
+  useEffect(()=>{
+    if(!dias.length) return;
+    const desde=addDias(dias[0].fecha,-7), hasta=addDias(dias[dias.length-1].fecha,7);
+    axios.get(`${API}/operacion/real_diario`,{params:{desde,hasta}})
+      .then(({data})=>{
+        const m={};
+        (data.real||[]).forEach(r=>{(m[r.sku]=m[r.sku]||[]).push({fecha:String(r.fecha).slice(0,10),cj:Number(r.cj)||0});});
+        setRealDiario({porSku:m,ultima:data.ultima_fecha_tr?String(data.ultima_fecha_tr).slice(0,10):null});
+      })
+      .catch(()=>setRealDiario({porSku:{},ultima:null}));   // la grilla sigue sin el dato real
+  },[dias]);
+  const {realPorOF,sinOFPorLineaDia}=useMemo(()=>{
+    const ofsPorSku={};
+    Object.values(aprobMap).forEach(a=>{
+      const L=String(a.fecha_lanzamiento_real||a.fecha_lanzamiento||"").slice(0,10);
+      if(!a.sku||!L) return;
+      (ofsPorSku[a.sku]=ofsPorSku[a.sku]||[]).push({numero_of:a.numero_of,L,cj:Number(a.cantidad_real_cj??a.cantidad_cajas)||0});
+    });
+    const porOF={};const cubierto=new Set();const ultima=realDiario.ultima;
+    Object.entries(ofsPorSku).forEach(([sku,ofs])=>{
+      ofs.sort((x,y)=>(x.L<y.L?-1:x.L>y.L?1:0));
+      const reales=realDiario.porSku[sku]||[];
+      ofs.forEach((of,i)=>{
+        let fin=addDias(of.L,6);
+        const sig=ofs[i+1]?.L;
+        if(sig&&sig>of.L&&addDias(sig,-1)<fin) fin=addDias(sig,-1);
+        let cj=0;
+        reales.forEach(r=>{const k=sku+"|"+r.fecha;if(r.fecha>=of.L&&r.fecha<=fin&&!cubierto.has(k)){cj+=r.cj;cubierto.add(k);}});
+        porOF[of.numero_of]={cj,pct:of.cj?cj/of.cj:null,reportado:!!ultima&&of.L<=ultima,enCurso:!ultima||fin>ultima};
+      });
+    });
+    const sinOF={};
+    Object.entries(realDiario.porSku).forEach(([sku,reales])=>{
+      const lin=params[sku]?.linea; if(!lin) return;   // SKU fuera del catálogo (maquila, importados): no van a la grilla
+      reales.forEach(r=>{
+        if(cubierto.has(sku+"|"+r.fecha)) return;
+        const k=lin+"|"+r.fecha; const e=(sinOF[k]=sinOF[k]||{cj:0,detalle:[]});
+        e.cj+=r.cj; e.detalle.push(`${sku} ${params[sku]?.descripcion||""}: ${fmtN(r.cj)} cj`);
+      });
+    });
+    return {realPorOF:porOF,sinOFPorLineaDia:sinOF};
+  },[aprobMap,realDiario,params]);
   const hoy=new Date().toISOString().slice(0,10);
   const ordenesProd=useMemo(()=>ordenes.filter(o=>o.tipo==="PRODUCCION"),[ordenes]);
   function getOrdenesLinea(linea){
@@ -829,6 +888,7 @@ export default function DetalleProduccion({
                         return(<OrdenBadge key={i} orden={o} esPreferida={esPreferida}
                           desc={o.descripcion||params[o.sku]?.descripcion||""}
                           estaAprobada={!!aprobacion}
+                          real={aprobacion?realPorOF[o.numero_of]:undefined}
                           onClick={()=>{
                             // V6.39: simetria con la tabla. Aprobada -> editar/desaprobar.
                             // Pendiente -> aprobar (mismo modal del boton "Aprobar" de tabla).
@@ -862,6 +922,12 @@ export default function DetalleProduccion({
                     {bitConteo[`${linea.codigo}|${dia.fecha}`]&&(
                       <div style={{display:"flex",justifyContent:"center",marginTop:2}}>
                         <MinutosDetencion info={bitConteo[`${linea.codigo}|${dia.fecha}`]}/>
+                      </div>
+                    )}
+                    {sinOFPorLineaDia[`${linea.codigo}|${dia.fecha}`]&&(
+                      <div style={{fontSize:8.5,color:C.purple||"#534AB7",marginTop:2,textAlign:"center",cursor:"help"}}
+                        title={"Producido sin OF aprobada en la app:\n"+sinOFPorLineaDia[`${linea.codigo}|${dia.fecha}`].detalle.join("\n")}>
+                        + {fmtN(sinOFPorLineaDia[`${linea.codigo}|${dia.fecha}`].cj)} cj sin OF
                       </div>
                     )}
                   </div>

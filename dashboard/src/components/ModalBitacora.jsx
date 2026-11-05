@@ -26,6 +26,8 @@ const COLOR_CATEGORIA = {
   SIN_PROGRAMA: C.amber,
   INFORMATIVO: C.gray,
 };
+// En fechas futuras solo se anotan estas categorías (mismo criterio que bitacora.py)
+export const CATEGORIAS_FUTURAS = ['PARADA_PLANIFICADA', 'SIN_PROGRAMA'];
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
 const hoyLocal = () => {
@@ -134,6 +136,9 @@ export default function ModalBitacora({ fecha, linea, onClose, onCambio }) {
   const [guardando, setGuardando] = useState(false);
   const futuro = fecha > hoyLocal();
 
+  const tiposDisp = useMemo(
+    () => (futuro ? tipos.filter((t) => CATEGORIAS_FUTURAS.includes(t.categoria)) : tipos),
+    [tipos, futuro]);
   const tipoSel = useMemo(() => tipos.find((t) => t.codigo === form.tipo), [tipos, form.tipo]);
   const pideDuracion = tipoSel ? tipoSel.requiere_duracion : true;
   const totalMin = eventos.reduce((a, e) => a + (e.duracion_min || 0), 0);
@@ -244,13 +249,15 @@ export default function ModalBitacora({ fecha, linea, onClose, onCambio }) {
         </div>
 
         {/* Formulario */}
-        {futuro ? (
-          <div style={{ fontSize: 12, background: C.amberLt, color: '#633806', borderRadius: 8, padding: '8px 10px' }}>
-            Es un día futuro: la bitácora registra eventos ocurridos (hasta hoy).
-          </div>
-        ) : (
+        {(
           <div style={{ borderTop: `1px solid ${C.grayLt}`, paddingTop: 12 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Registrar evento</div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{futuro ? 'Anotar evento planificado' : 'Registrar evento'}</div>
+            {futuro && (
+              <div style={{ fontSize: 12, background: C.amberLt, color: '#633806', borderRadius: 8, padding: '6px 10px', marginBottom: 10 }}>
+                Día futuro: solo se pueden anotar paradas planificadas (mantención, limpieza, cambio de formato) y
+                línea disponible sin programa. Si el plan cambia, anúlalo.
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <label style={label}>Registrado por
                 <input style={input} value={usuario} onChange={(e) => setUsuario(e.target.value)} placeholder="Nombre y apellido" />
@@ -258,7 +265,7 @@ export default function ModalBitacora({ fecha, linea, onClose, onCambio }) {
               <label style={label}>Tipo de evento
                 <select style={input} value={form.tipo} onChange={set('tipo')}>
                   <option value="">Seleccionar…</option>
-                  {tipos.map((t) => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
+                  {tiposDisp.map((t) => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}
                 </select>
               </label>
               {pideDuracion && (
