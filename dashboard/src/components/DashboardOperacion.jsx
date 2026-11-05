@@ -66,7 +66,34 @@ const rangoSemanas = (n) => {
   desde.setDate(desde.getDate() - n * 7 + 1);
   return { desde: iso(desde), hasta: iso(hasta) };
 };
-const etiquetaSemana = (isoStr) => `${isoStr.slice(8, 10)}/${isoStr.slice(5, 7)}`;
+const ddmm = (isoStr) => `${isoStr.slice(8, 10)}/${isoStr.slice(5, 7)}`;
+// Semana ISO (lunes a domingo), igual que el motor (date.isocalendar)
+const semanaIso = (isoStr) => {
+  const d = new Date(Date.UTC(+isoStr.slice(0, 4), +isoStr.slice(5, 7) - 1, +isoStr.slice(8, 10)));
+  const dia = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dia);
+  const inicio = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d - inicio) / 86400000 + 1) / 7);
+};
+const lunesDe = (isoStr) => {
+  const d = new Date(+isoStr.slice(0, 4), +isoStr.slice(5, 7) - 1, +isoStr.slice(8, 10));
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return iso(d);
+};
+const etiquetaSemana = (isoStr, sem) => `Sem ${sem ?? semanaIso(isoStr)} · ${ddmm(isoStr)}`;
+
+// Tick de eje X en dos líneas: "Sem 44" / "26/10"
+const TickSemana = ({ x, y, payload, filas }) => {
+  const f = (filas || []).find((e) => e.etiqueta === payload.value);
+  const sem = f ? `Sem ${f.semana_iso}${f.parcial ? '*' : ''}` : payload.value;
+  const fecha = f ? ddmm(f.semana) : '';
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text x={0} y={0} dy={12} textAnchor="middle" fontSize={11} fill={C.text}>{sem}</text>
+      <text x={0} y={0} dy={25} textAnchor="middle" fontSize={10} fill={C.textMuted}>{fecha}</text>
+    </g>
+  );
+};
 const pct = (v, dec = 0) => (v === null || v === undefined ? '–' : `${(v * 100).toFixed(dec)}%`);
 const cj = (v) => (v === null || v === undefined ? '–' : Math.round(v).toLocaleString('es-CL'));
 const h1 = (v) => (v === null || v === undefined ? '–' : v.toLocaleString('es-CL', { maximumFractionDigits: 1 }));
@@ -83,10 +110,46 @@ const colorPct = (v, indicador) => {
 };
 
 const INDICADORES = [
-  ['eficiencia', 'Eficiencia (real / nominal)'],
-  ['ocupacion_programada_sap', 'Ocupación programada SAP'],
-  ['cumplimiento_vs_sap', 'Cumplimiento real vs SAP'],
+  {
+    k: 'ocupacion_real', l: 'Ocupación real',
+    formula: 'h-eq producidas ÷ h nominales',
+    detalle: 'h-eq = cajas × u/caja ÷ (velocidad u/h × factor velocidad SKU). Sobre 100% = la línea produjo más que su capacidad parametrizada (turnos, días o velocidad subestimados).',
+  },
+  {
+    k: 'ocupacion_programada_sap', l: 'Ocupación programada',
+    formula: 'h-eq programadas en SAP ÷ h nominales',
+    detalle: 'Cada OF SAP se asigna a la semana del centro de su tramo planificado. 1 − ocupación programada = capacidad ociosa.',
+  },
+  {
+    k: 'cumplimiento_vs_sap', l: 'Cumplimiento',
+    formula: 'cajas reales (Terminal Report) ÷ cajas programadas en SAP',
+    detalle: 'Rojo bajo 70%, ámbar sobre 130%. Oscilaciones semana a semana suelen ser producción que se corre de semana; mirar 2-4 semanas juntas.',
+  },
+  {
+    k: 'eficiencia', l: 'Eficiencia',
+    formula: 'h-eq producidas ÷ h de funcionamiento',
+    detalle: 'h de funcionamiento = nominal − paradas (planificadas y no planificadas) − sin programa, según la bitácora. Solo se calcula para líneas con eventos registrados.',
+  },
 ];
+
+const KPIS = [
+  { campo: 'cj_programado_app', label: 'Programado app', tipo: 'cj', color: C.purple, nota: () => 'cajas (OF aprobadas)' },
+  { campo: 'cj_programado_sap', label: 'Programado SAP', tipo: 'cj', color: C.blue, nota: () => 'cajas (OF SAP)' },
+  { campo: 'cj_real', label: 'Producido real', tipo: 'cj', color: C.teal, nota: () => 'cajas (Terminal Report)' },
+  { campo: 'adopcion_app_sobre_sap', label: 'Adopción app', tipo: 'pct', color: C.purple, nota: () => 'programa SAP con OF de la app',
+    formula: 'cajas SAP de SKU que también tienen OF en la app ÷ cajas programadas en SAP' },
+  { campo: 'cumplimiento_vs_sap', label: 'Cumplimiento', tipo: 'pct', color: C.blue, nota: () => 'real / programado SAP',
+    formula: 'cajas reales (Terminal Report) ÷ cajas programadas en SAP' },
+  { campo: 'ocupacion_real', label: 'Ocupación real', tipo: 'pct', color: C.teal,
+    nota: (r) => `${h1(r.heq_producidas)} h-eq de ${h1(r.horas_nominales)} h nominales`,
+    formula: 'h-eq producidas ÷ h nominales' },
+  { campo: 'ocupacion_programada_sap', label: 'Ocupación programada', tipo: 'pct', color: C.amber,
+    nota: () => 'h-eq programadas SAP / nominal', formula: 'h-eq programadas en SAP ÷ h nominales' },
+  { campo: 'eficiencia', label: 'Eficiencia', tipo: 'pct', color: C.tealMid,
+    nota: (r) => (r.lineas_con_bitacora ? `${r.lineas_con_bitacora} línea(s) con bitácora` : 'requiere registrar eventos'),
+    formula: 'h-eq producidas ÷ h de funcionamiento (nominal − paradas − sin programa; solo líneas con bitácora)' },
+];
+const KPIS_CJ = KPIS.filter((d) => d.tipo === 'cj');
 
 const CLASES_FUERA = {
   IMPORTADO_ETIQUETADO: 'Importado + etiquetado',
@@ -108,8 +171,8 @@ const TooltipBox = ({ active, payload, label, fmt }) => {
   );
 };
 
-const Kpi = ({ label, valor, nota, serie, campo, color = C.teal }) => (
-  <div style={s.kpi}>
+const Kpi = ({ label, valor, nota, serie, campo, color = C.teal, onClick }) => (
+  <div style={{ ...s.kpi, cursor: 'pointer' }} onClick={onClick} title="Clic para ver el evolutivo ampliado">
     <div style={s.kpiLabel}>{label}</div>
     <div style={{ ...s.kpiValor, color }}>{valor}</div>
     <div style={s.kpiNota}>{nota}</div>
@@ -125,6 +188,77 @@ const Kpi = ({ label, valor, nota, serie, campo, color = C.teal }) => (
   </div>
 );
 
+// ---------- popup de KPI ----------
+function ModalKpi({ def, evo, resumen, onClose }) {
+  useEffect(() => {
+    const esc = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [onClose]);
+  const esCj = def.tipo === 'cj';
+  const series = esCj ? KPIS_CJ : [def];
+  const fmt = esCj ? cj : (v) => pct(v, 1);
+  const tick = <TickSemana filas={evo} />;
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(44,44,42,0.45)', zIndex: 1000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: '#fff', borderRadius: 12, padding: 20, width: 'min(960px, 100%)', maxHeight: '90vh', overflowY: 'auto',
+        boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <h3 style={{ ...s.h3, fontSize: 17 }}>{esCj ? 'Programado app vs SAP vs real' : def.label}</h3>
+            <p style={s.sub}>
+              {esCj ? 'Cajas por semana' : def.formula} · valor del período: <strong>{fmt(resumen[def.campo])}</strong>
+            </p>
+          </div>
+          <span onClick={onClose} style={{ cursor: 'pointer', fontSize: 20, color: C.gray, padding: '0 4px' }} title="Cerrar (Esc)">✕</span>
+        </div>
+        <ResponsiveContainer width="100%" height={360}>
+          {esCj ? (
+            <ComposedChart data={evo} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.grayLt} />
+              <XAxis dataKey="etiqueta" height={36} interval={0} tick={tick} />
+              <YAxis tick={{ fontSize: 11, fill: C.textMuted }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+              <Tooltip content={<TooltipBox fmt={(v) => cj(v)} />} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {series.map((d) => <Bar key={d.campo} dataKey={d.campo} name={d.label} fill={d.color} radius={[3, 3, 0, 0]} />)}
+            </ComposedChart>
+          ) : (
+            <LineChart data={evo} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={C.grayLt} />
+              <XAxis dataKey="etiqueta" height={36} interval={0} tick={tick} />
+              <YAxis tick={{ fontSize: 11, fill: C.textMuted }} tickFormatter={(v) => pct(v)} />
+              <Tooltip content={<TooltipBox fmt={(v) => pct(v, 1)} />} />
+              <ReferenceLine y={1} stroke={C.textMuted} strokeDasharray="4 4" />
+              <Line type="monotone" dataKey={def.campo} name={def.label} stroke={def.color} strokeWidth={2.5} dot={{ r: 4 }} connectNulls />
+            </LineChart>
+          )}
+        </ResponsiveContainer>
+        <div style={{ overflowX: 'auto', marginTop: 12 }}>
+          <table style={s.tabla}>
+            <thead><tr>
+              <th style={s.th}>Semana</th>
+              {series.map((d) => <th key={d.campo} style={{ ...s.th, ...s.num }}>{d.label}</th>)}
+            </tr></thead>
+            <tbody>
+              {evo.map((e) => (
+                <tr key={e.semana}>
+                  <td style={s.td}>{e.etiqueta}</td>
+                  {series.map((d) => <td key={d.campo} style={{ ...s.td, ...s.num }}>{fmt(e[d.campo])}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- componente ----------
 export default function DashboardOperacion() {
   const inicial = rangoSemanas(8);
@@ -134,7 +268,8 @@ export default function DashboardOperacion() {
   const [data, setData] = useState(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState(null);
-  const [indicador, setIndicador] = useState('eficiencia');
+  const [indicador, setIndicador] = useState('ocupacion_real');
+  const [modal, setModal] = useState(null);
   const [verTodoConc, setVerTodoConc] = useState(false);
 
   useEffect(() => {
@@ -159,7 +294,7 @@ export default function DashboardOperacion() {
   const lineasFiltradas = opciones.lineas.filter((l) => !filtros.categoria || l.categoria === filtros.categoria);
 
   const evo = useMemo(() => (data?.evolutivo || []).map((e) => ({
-    ...e, etiqueta: etiquetaSemana(e.semana) + (e.parcial ? '*' : ''),
+    ...e, etiqueta: etiquetaSemana(e.semana, e.semana_iso) + (e.parcial ? '*' : ''),
   })), [data]);
 
   const ocupacion = useMemo(() => (data?.lineas || []).map((x) => {
@@ -227,14 +362,18 @@ export default function DashboardOperacion() {
         horas-equivalentes a velocidad nominal. Semanas lunes a domingo.
       </p>
 
+      {modal && data && (
+        <ModalKpi def={modal} evo={evo} resumen={data.resumen} onClose={() => setModal(null)} />
+      )}
+
       {/* ---------- Filtros ---------- */}
       <div style={s.card}>
         <div style={s.filtros}>
-          <label style={s.label}>Desde
+          <label style={s.label}>Desde {filtros.desde && <span style={{ color: C.tealMid }}>· Sem {semanaIso(filtros.desde)}</span>}
             <input type="date" style={s.input} value={filtros.desde}
               onChange={(e) => { setPreset(null); setFiltros({ ...filtros, desde: e.target.value }); }} />
           </label>
-          <label style={s.label}>Hasta
+          <label style={s.label}>Hasta {filtros.hasta && <span style={{ color: C.tealMid }}>· Sem {semanaIso(filtros.hasta)}</span>}
             <input type="date" style={s.input} value={filtros.hasta}
               onChange={(e) => { setPreset(null); setFiltros({ ...filtros, hasta: e.target.value }); }} />
           </label>
@@ -269,6 +408,11 @@ export default function DashboardOperacion() {
 
       {data && r && (
         <>
+          <div style={{ fontSize: 13, color: C.gray, margin: '0 0 10px' }}>
+            Período: <strong>{etiquetaSemana(lunesDe(data.periodo.desde))}</strong> a{' '}
+            <strong>{etiquetaSemana(lunesDe(data.periodo.hasta))}</strong>{' '}
+            ({ddmm(data.periodo.desde)} al {ddmm(data.periodo.hasta)}){aplicados.linea ? ` · Línea ${aplicados.linea}` : ''}{aplicados.categoria ? ` · ${aplicados.categoria}` : ''}
+          </div>
           {r.lineas_con_bitacora < r.n_lineas && (
             <div style={s.aviso}>
               {r.lineas_con_bitacora} de {r.n_lineas} líneas tienen eventos en la bitácora para este período.
@@ -278,13 +422,10 @@ export default function DashboardOperacion() {
 
           {/* ---------- KPIs ---------- */}
           <div style={s.kpis}>
-            <Kpi label="Programado app" valor={cj(r.cj_programado_app)} nota="cajas (OF aprobadas)" serie={evo} campo="cj_programado_app" color={C.purple} />
-            <Kpi label="Programado SAP" valor={cj(r.cj_programado_sap)} nota="cajas (OF SAP)" serie={evo} campo="cj_programado_sap" color={C.blue} />
-            <Kpi label="Producido real" valor={cj(r.cj_real)} nota="cajas (Terminal Report)" serie={evo} campo="cj_real" color={C.teal} />
-            <Kpi label="Adopción app" valor={pct(r.adopcion_app_sobre_sap)} nota="programa SAP con OF de la app" serie={evo} campo="adopcion_app_sobre_sap" color={C.purple} />
-            <Kpi label="Cumplimiento" valor={pct(r.cumplimiento_vs_sap)} nota="real / programado SAP" serie={evo} campo="cumplimiento_vs_sap" color={C.blue} />
-            <Kpi label="Eficiencia" valor={pct(r.eficiencia)} nota={`${h1(r.heq_producidas)} h-eq de ${h1(r.horas_nominales)} h nominales`} serie={evo} campo="eficiencia" color={C.teal} />
-            <Kpi label="Ocupación programada" valor={pct(r.ocupacion_programada_sap)} nota="h-eq programadas SAP / nominal" serie={evo} campo="ocupacion_programada_sap" color={C.amber} />
+            {KPIS.map((d) => (
+              <Kpi key={d.campo} label={d.label} valor={d.tipo === 'cj' ? cj(r[d.campo]) : pct(r[d.campo])}
+                nota={d.nota(r)} serie={evo} campo={d.campo} color={d.color} onClick={() => setModal(d)} />
+            ))}
           </div>
 
           {/* ---------- App vs SAP / SAP vs Real ---------- */}
@@ -295,7 +436,7 @@ export default function DashboardOperacion() {
               <ResponsiveContainer width="100%" height={260}>
                 <ComposedChart data={evo} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.grayLt} />
-                  <XAxis dataKey="etiqueta" tick={{ fontSize: 11, fill: C.textMuted }} />
+                  <XAxis dataKey="etiqueta" height={36} interval={0} tick={<TickSemana filas={evo} />} />
                   <YAxis yAxisId="cj" tick={{ fontSize: 11, fill: C.textMuted }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
                   <YAxis yAxisId="pct" orientation="right" domain={[0, 1.2]} tick={{ fontSize: 11, fill: C.textMuted }} tickFormatter={(v) => pct(v)} />
                   <Tooltip content={<TooltipBox fmt={(v, k) => (k === 'adopcion_app_sobre_sap' ? pct(v, 1) : cj(v))} />} />
@@ -313,7 +454,7 @@ export default function DashboardOperacion() {
               <ResponsiveContainer width="100%" height={260}>
                 <ComposedChart data={evo} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={C.grayLt} />
-                  <XAxis dataKey="etiqueta" tick={{ fontSize: 11, fill: C.textMuted }} />
+                  <XAxis dataKey="etiqueta" height={36} interval={0} tick={<TickSemana filas={evo} />} />
                   <YAxis yAxisId="cj" tick={{ fontSize: 11, fill: C.textMuted }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
                   <YAxis yAxisId="pct" orientation="right" domain={[0, 1.4]} tick={{ fontSize: 11, fill: C.textMuted }} tickFormatter={(v) => pct(v)} />
                   <Tooltip content={<TooltipBox fmt={(v, k) => (k === 'cumplimiento_vs_sap' ? pct(v, 1) : cj(v))} />} />
@@ -342,7 +483,7 @@ export default function DashboardOperacion() {
                 <Tooltip content={<TooltipBox fmt={(v) => `${v}%`} />} />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
                 <ReferenceLine x={100} stroke={C.gray} strokeDasharray="4 4" />
-                <Bar dataKey="producido" name="Producido" stackId="o" fill={C.teal} />
+                <Bar dataKey="producido" name="Ocupación real (producido)" stackId="o" fill={C.teal} />
                 <Bar dataKey="parada_plan" name="Parada planificada" stackId="o" fill={C.blue} />
                 <Bar dataKey="parada_noplan" name="Parada no planificada" stackId="o" fill={C.danger} />
                 <Bar dataKey="sin_programa" name="Sin programa" stackId="o" fill={C.amber} />
@@ -356,16 +497,17 @@ export default function DashboardOperacion() {
                 <div style={{ overflowX: 'auto' }}>
                   <table style={s.tabla}>
                     <thead><tr>
-                      {['Línea', 'Nominal h', 'Producido', 'Prog. SAP', 'Cumpl.', 'Bitácora'].map((h) => <th key={h} style={s.th}>{h}</th>)}
+                      {['Línea', 'Nominal h', 'Ocupación real', 'Ocup. programada', 'Cumpl.', 'Eficiencia', 'Eventos'].map((h) => <th key={h} style={s.th}>{h}</th>)}
                     </tr></thead>
                     <tbody>
                       {(data.lineas || []).map((x) => (
                         <tr key={x.linea}>
                           <td style={s.td}>{x.linea}{x.alertas.length > 0 && <span title={x.alertas.join('\n')} style={{ color: C.amber, marginLeft: 4 }}>⚠</span>}</td>
                           <td style={{ ...s.td, ...s.num }}>{h1(x.horas.nominal)}</td>
-                          <td style={{ ...s.td, ...s.num }}>{pct(x.kpi.eficiencia)}</td>
+                          <td style={{ ...s.td, ...s.num, ...colorPct(x.kpi.ocupacion_real, 'ocupacion_real') }}>{pct(x.kpi.ocupacion_real)}</td>
                           <td style={{ ...s.td, ...s.num }}>{pct(x.kpi.ocupacion_programada_sap)}</td>
                           <td style={{ ...s.td, ...s.num, ...colorPct(x.kpi.cumplimiento_vs_sap, 'cumplimiento_vs_sap') }}>{pct(x.kpi.cumplimiento_vs_sap)}</td>
+                          <td style={{ ...s.td, ...s.num }} title={x.con_bitacora ? '' : 'Requiere eventos en la bitácora'}>{pct(x.kpi.eficiencia)}</td>
                           <td style={{ ...s.td, ...s.num }}>{x.n_eventos || '–'}</td>
                         </tr>
                       ))}
@@ -404,14 +546,30 @@ export default function DashboardOperacion() {
                 <p style={{ ...s.sub, marginBottom: 0 }}>Semanas lunes a domingo; * = semana parcial o en curso.</p>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                {INDICADORES.map(([k, l]) => <span key={k} style={s.chip(indicador === k)} onClick={() => setIndicador(k)}>{l}</span>)}
+                {INDICADORES.map((d) => <span key={d.k} style={s.chip(indicador === d.k)} onClick={() => setIndicador(d.k)}>{d.l}</span>)}
               </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 8, marginTop: 12 }}>
+              {INDICADORES.map((d) => (
+                <div key={d.k} onClick={() => setIndicador(d.k)} style={{
+                  cursor: 'pointer', borderRadius: 8, padding: '8px 10px', fontSize: 12,
+                  border: `1px solid ${indicador === d.k ? C.teal : C.grayLt}`, background: indicador === d.k ? C.tealLt : '#fff',
+                }}>
+                  <div style={{ fontWeight: 700 }}>{d.l}</div>
+                  <div style={{ fontFamily: 'monospace', margin: '3px 0', color: C.tealMid }}>{d.formula}</div>
+                  <div style={{ color: C.gray }}>{d.detalle}</div>
+                </div>
+              ))}
             </div>
             <div style={{ overflowX: 'auto', marginTop: 12 }}>
               <table style={{ ...s.tabla, borderCollapse: 'separate', borderSpacing: 2 }}>
                 <thead><tr>
                   <th style={s.th}>Línea</th>
-                  {evo.map((e) => <th key={e.semana} style={{ ...s.th, textAlign: 'center' }}>{e.etiqueta}</th>)}
+                  {evo.map((e) => (
+                    <th key={e.semana} style={{ ...s.th, textAlign: 'center' }}>
+                      Sem {e.semana_iso}{e.parcial ? '*' : ''}<br /><span style={{ fontWeight: 400, color: C.textMuted }}>{ddmm(e.semana)}</span>
+                    </th>
+                  ))}
                 </tr></thead>
                 <tbody>
                   {filasHeat.map((f) => (

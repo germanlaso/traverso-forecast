@@ -37,7 +37,7 @@ from db_mrp import engine as _engine
 
 router = APIRouter(prefix="/operacion", tags=["operacion"])
 
-UMBRAL_EFICIENCIA_ALTA = 1.05   # sobre esto: capacidad nominal probablemente subparametrizada
+UMBRAL_OCUPACION_ALTA = 1.05    # ocupación real sobre esto: capacidad nominal probablemente subparametrizada
 ESTADOS_PROGRAMADO_APP = ("APROBADA", "MODIFICADA")
 
 # Categoría desde la tabla propia del módulo (mrp_lineas.area mezcla planta/línea y no sirve).
@@ -285,10 +285,10 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
         no_expl = max(nominal - heq - pp - pn - sp, 0.0)
         con_bitacora = a["n_eventos"] > 0
         ocup_sap = _ratio(heq_sap, nominal)
-        eficiencia = _ratio(heq, nominal)
+        ocupacion_real = _ratio(heq, nominal)
 
         alertas = []
-        if eficiencia is not None and eficiencia > UMBRAL_EFICIENCIA_ALTA:
+        if ocupacion_real is not None and ocupacion_real > UMBRAL_OCUPACION_ALTA:
             alertas.append("Producción sobre capacidad nominal: revisar turnos_dia, dias_semana "
                            "o velocidad_u_hr de la línea (el solver ve menos capacidad que la real).")
         if heq == 0 and heq_sap > 0:
@@ -324,8 +324,8 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
                 "sin_medir": _r2(a["cj_sin_medir"]),
             },
             "kpi": {
-                "eficiencia": eficiencia,
-                "rendimiento": _ratio(heq, operada) if con_bitacora else None,
+                "ocupacion_real": ocupacion_real,
+                "eficiencia": _ratio(heq, operada) if con_bitacora else None,
                 "ocupacion_programada_sap": ocup_sap,
                 "ocupacion_programada_app": _ratio(heq_app, nominal),
                 "capacidad_ociosa": round(max(1 - ocup_sap, 0), 4) if ocup_sap is not None else None,
@@ -410,8 +410,8 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
         "advertencias": {k: sorted(x for x in v if x) for k, v in adv.items() if v},
         "definiciones": {
             "unidad_horas": "horas-equivalentes a velocidad nominal: cj*u_por_caja/(velocidad_u_hr*factor_velocidad)",
-            "eficiencia": "heq_producidas / nominal",
-            "rendimiento": "heq_producidas / operada (solo con bitácora)",
+            "ocupacion_real": "heq_producidas / nominal",
+            "eficiencia": "heq_producidas / operada; operada = nominal - paradas - sin programa (solo con bitácora)",
             "ocupacion_programada_sap": "heq_programadas_sap / nominal",
             "capacidad_ociosa": "1 - ocupacion_programada_sap",
             "capacidad_real_vs_teorica": "(nominal - paradas planificadas - no planificadas) / nominal (solo con bitácora)",
@@ -478,7 +478,9 @@ def _resumir(resultado, sel):
         "horas_parada_planificada": _r2(H("parada_planificada")),
         "horas_parada_no_planificada": _r2(H("parada_no_planificada")),
         "horas_sin_programa": _r2(H("sin_programa")),
-        "eficiencia": _ratio(H("heq_producidas"), nominal),
+        "ocupacion_real": _ratio(H("heq_producidas"), nominal),
+        "eficiencia": _ratio(sum(x["horas"]["heq_producidas"] for x in ls if x["con_bitacora"]),
+                             sum(x["horas"]["operada"] for x in ls if x["con_bitacora"])),
         "ocupacion_programada_sap": _ratio(H("heq_programadas_sap"), nominal),
         "ocupacion_programada_app": _ratio(H("heq_programadas_app"), nominal),
         "n_lineas": len(ls),
@@ -521,7 +523,8 @@ def dashboard(
     while lunes <= hasta:
         domingo = lunes + timedelta(days=6)
         r = calcular_periodo(lunes, domingo)
-        fila = {"semana": lunes.isoformat(),
+        iso_anio, iso_sem, _ = lunes.isocalendar()
+        fila = {"semana": lunes.isoformat(), "semana_iso": iso_sem, "anio_iso": iso_anio,
                 "parcial": lunes < desde or domingo > hasta or domingo >= date.today()}
         fila.update(_resumir(r, sel))
         evolutivo.append(fila)
@@ -529,6 +532,7 @@ def dashboard(
             if x["linea"] in sel:
                 evo_lineas[x["linea"]].append({
                     "semana": lunes.isoformat(),
+                    "ocupacion_real": x["kpi"]["ocupacion_real"],
                     "eficiencia": x["kpi"]["eficiencia"],
                     "ocupacion_programada_sap": x["kpi"]["ocupacion_programada_sap"],
                     "cumplimiento_vs_sap": x["kpi"]["cumplimiento_vs_sap"],
@@ -572,12 +576,13 @@ if __name__ == "__main__":
     if args.json:
         print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
     else:
-        print("Semana", r["semana"]["desde"], "a", r["semana"]["hasta"])
-        print(f"{'linea':<14}{'nom_h':>7}{'heq':>8}{'efic':>7}{'ocupSAP':>8}{'cumpl':>7}{'ev':>4}  alertas")
+        _d = date.fromisoformat(r["semana"]["desde"])
+        print("Sem", _d.isocalendar()[1], "·", r["semana"]["desde"], "a", r["semana"]["hasta"])
+        print(f"{'linea':<14}{'nom_h':>7}{'heq':>8}{'ocupR':>7}{'ocupSAP':>8}{'cumpl':>7}{'ev':>4}  alertas")
         for x in r["lineas"]:
             h, k = x["horas"], x["kpi"]
             print(f"{x['linea']:<14}{h['nominal']:>7.1f}{h['heq_producidas']:>8.1f}"
-                  f"{_pct(k['eficiencia']):>7}{_pct(k['ocupacion_programada_sap']):>8}"
+                  f"{_pct(k['ocupacion_real']):>7}{_pct(k['ocupacion_programada_sap']):>8}"
                   f"{_pct(k['cumplimiento_vs_sap']):>7}{x['n_eventos']:>4}  {len(x['alertas'])}")
         fl = r["resumen"].pop("fuera_de_lineas")
         print("Resumen (solo LINEA):", json.dumps(r["resumen"], ensure_ascii=False, default=str))
