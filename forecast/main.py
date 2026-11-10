@@ -25,6 +25,7 @@ from campanas_api import router as campanas_router
 from precision_api import router as precision_router
 from bitacora import router as bitacora_router   # Bitacora de eventos por linea
 from kpi_operacion import router as operacion_router   # KPIs semanales de operacion
+from params_edicion import router as params_edicion_router   # Edicion de parametros (Fase 2)
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
@@ -67,6 +68,7 @@ app.include_router(campanas_router)   # V6: campanas de granel
 app.include_router(precision_router)  # Precision del forecast (vintages h=1/h=2)
 app.include_router(bitacora_router)   # Bitacora de eventos por linea (evaluacion operacion)
 app.include_router(operacion_router)  # KPIs semanales de operacion por linea
+app.include_router(params_edicion_router)  # Edicion de parametros con PIN e historial
 
 app.add_middleware(
     CORSMiddleware,
@@ -597,14 +599,12 @@ def generar_plan(req: PlanRequest = None):
         import mrp as _mrp
 
         # Parámetros MRP
-        # Cargar parámetros desde PostgreSQL (fallback a Excel si BD vacía)
-        try:
-            sku_params, lineas, sku_lineas = _mrp.load_params_from_db()
-            if not sku_params:
-                raise ValueError("BD de parámetros vacía")
-        except Exception as _e_params:
-            logger.warning(f"Fallback a Excel para parámetros: {_e_params}")
-            sku_params, lineas, sku_lineas = _mrp.load_params_from_excel(MRP_EXCEL_PATH)
+        # Parámetros desde PostgreSQL: la BD manda (10-11-26). Sin respaldo Excel: si la
+        # BD falla o está vacía, el plan NO corre (antes caía al Excel en silencio y podía
+        # planificar con parámetros desactualizados).
+        sku_params, lineas, sku_lineas = _mrp.load_params_from_db()
+        if not sku_params:
+            raise HTTPException(status_code=500, detail="Parámetros MRP vacíos en la BD: el plan no se ejecuta.")
 
         if req.skus:
             sku_params = {k: v for k, v in sku_params.items() if k in req.skus}
@@ -1462,13 +1462,9 @@ def get_mrp_params():
     """Lista los SKUs con parámetros MRP cargados desde PostgreSQL (fallback Excel)."""
     import importlib, mrp as _mrp_params
     try:
-        try:
-            sku_params, lineas, _sku_lineas = _mrp_params.load_params_from_db()
-            if not sku_params:
-                raise ValueError("BD vacía")
-        except Exception as _e2:
-            logger.warning(f"Fallback Excel /plan/params: {_e2}")
-            sku_params, lineas, _sku_lineas = _mrp_params.load_params_from_excel(MRP_EXCEL_PATH)
+        sku_params, lineas, _sku_lineas = _mrp_params.load_params_from_db()   # la BD manda: sin respaldo Excel
+        if not sku_params:
+            raise HTTPException(status_code=500, detail="Parámetros MRP vacíos en la BD.")
         # factor_velocidad vive en sku_lineas (par SKU-linea). Para /plan/params
         # exponemos el factor de la LINEA PREFERIDA de cada SKU (el que aplica en
         # el grid de Detalle, que agrupa por linea preferida). Default 1.0.
@@ -1579,13 +1575,7 @@ def get_quiebres_grid():
     rp_skus = set(rp_info)
 
     # 2) params: linea_preferida (agrupacion) + descripcion / upc de respaldo
-    try:
-        sku_params, lineas, _ = _mrp_params.load_params_from_db()
-        if not sku_params:
-            raise ValueError("BD vacia")
-    except Exception as _e:
-        logger.warning(f"quiebres_grid: fallback Excel params: {_e}")
-        sku_params, lineas, _ = _mrp_params.load_params_from_excel(MRP_EXCEL_PATH)
+    sku_params, lineas, _ = _mrp_params.load_params_from_db()   # la BD manda: sin respaldo Excel
     linea_nombre = {l.codigo: l.nombre for l in lineas.values()}
 
     # 3) helper de semana de VISUALIZACION (domingo-sabado) = semana_viz_inicio,
@@ -1802,27 +1792,46 @@ def get_sku_params_endpoint():
 
 @app.put("/params/skus/{sku}")
 def put_sku_params(sku: str, campos: dict):
-    """Actualiza parámetros de un SKU específico."""
-    try:
-        return update_sku_param(sku, campos)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """DESHABILITADO (10-11-26): editaba sin validación, PIN ni historial.
+    Usar PUT /params/sku/{sku} (params_edicion.py)."""
+    raise HTTPException(status_code=410, detail="Endpoint deshabilitado: usar PUT /params/sku/{sku} "
+                                                "(validación, PIN e historial).")
+
+
+class CargaMasivaParams(BaseModel):
+    editor: str
+    pin: str
+    motivo: str
+    confirmar: bool = False
 
 
 @app.post("/params/importar-excel")
-def importar_excel_a_bd():
-    """Re-importa parámetros desde el Excel a PostgreSQL (sobrescribe la BD)."""
+def importar_excel_a_bd(body: CargaMasivaParams):
+    """Carga MASIVA controlada desde el Excel (sobrescribe la BD). La BD manda desde el
+    10-11-26: requiere PIN, nombre, motivo y confirmar=true. Antes de cargar respalda las
+    tablas de parámetros en tablas *_bkp_<timestamp> y deja un registro en el historial."""
     import subprocess
-    try:
-        result = subprocess.run(
-            ["python3", "/app/migrate_params.py", MRP_EXCEL_PATH],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            raise HTTPException(status_code=500, detail=result.stderr)
-        return {"ok": True, "output": result.stdout[-500:]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    from datetime import datetime as _dt
+    import sqlalchemy as _sa
+    import params_edicion as _pe
+    from db_mrp import engine as _eng
+    _pe._verificar_identidad(body.editor, body.motivo)
+    if not body.confirmar:
+        raise HTTPException(status_code=422, detail="Carga masiva: enviar confirmar=true. Sobrescribe los "
+                                                    "parámetros editados en la app.")
+    sufijo = _dt.now().strftime("%Y%m%d_%H%M")
+    with _eng.begin() as c:
+        _pe._verificar_pin(c, body.pin)
+        for t in ("mrp_sku_params", "mrp_sku_lineas", "mrp_lineas"):
+            c.execute(_sa.text(f"CREATE TABLE {t}_bkp_{sufijo} AS TABLE {t}"))
+    result = subprocess.run(["python3", "/app/migrate_params.py", MRP_EXCEL_PATH],
+                            capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"Falló la carga (respaldo: *_bkp_{sufijo}): {result.stderr[-800:]}")
+    with _eng.begin() as c:
+        _pe._registrar(c, "linea", None, None, "carga_masiva_excel", None, None,
+                       f"{body.motivo.strip()} (respaldo: *_bkp_{sufijo})", body.editor, origen="carga_masiva")
+    return {"ok": True, "respaldo": f"*_bkp_{sufijo}", "output": result.stdout[-500:]}
 
 
 @app.get("/faltantes", tags=["Faltantes"])

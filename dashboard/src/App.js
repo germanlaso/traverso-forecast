@@ -42,7 +42,7 @@ const BACKEND_URL = process.env.REACT_APP_API_BASE
 // gráficos conservan el tope de 1100 px: una línea de ~1900 px se lee mal y los
 // gráficos de altura fija (330 px) se achatan al estirarse.
 // Para volver al comportamiento anterior, dejar TABS_ANCHAS vacío.
-const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion','campanas','resumen30','monitor']);
+const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion','campanas','resumen30','monitor','rendimiento','informeia']);
 const MAIN_MAXW_ANCHO = 1800;
 
 // ── Modelo de navegación en dos niveles (mismos keys de tab de siempre) ──

@@ -23,7 +23,8 @@ from __future__ import annotations
 # ── Umbrales de las alertas (ajustables en un solo lugar) ────────────────────
 UMBRAL_MARGEN_DIA      = 0.90   # batch que consume >90% de la capacidad diaria -> frágil
 UMBRAL_DIAS_COBERTURA  = 30     # batch que cubre >30 días de forecast -> sobrestock
-RATIO_CAP_BODEGA_MIN   = 2.0    # cap_bodega debería ser >= 2x batch_min
+UMBRAL_HORAS_BATCH_MIN = 3.0    # batch de menos de 3 h de producción -> advertencia (10-11-26)
+FACTOR_RANGO_NORMAL    = (0.5, 1.5)   # factor de velocidad fuera de este rango -> advertencia
 CAP_BODEGA_INFINITA    = 999999 # centinela usado por los loaders para "sin límite"
 DIAS_HABILES_SEMANA    = 5      # para pasar demanda semanal -> diaria
 
@@ -125,6 +126,9 @@ def diagnosticar_sku(params_producto: dict,
 
     cap_bod_finita = cap_bod < CAP_BODEGA_INFINITA
     ratio_bodega   = _div(cap_bod, batch_min) if cap_bod_finita else None
+    # SS estimado en unidades = ss_dias × demanda diaria (forecast del plan ÷ 5 días hábiles).
+    # Es una APROXIMACIÓN para advertir; el SS canónico sigue en calendario.py::calcular_ss_diario.
+    ss_estimado_u = (ss_dias * fc_u) if (fc_u is not None and ss_dias) else None
 
     derivados = {
         "u_por_caja":        upc,
@@ -156,6 +160,8 @@ def diagnosticar_sku(params_producto: dict,
         "ratio_cap_bodega": _r(ratio_bodega, 2),
         "lead_time_sem": _f(params_producto.get("lead_time_sem"), 1),
         "ss_dias": ss_dias,
+        "ss_estimado_u": _r(ss_estimado_u, 0),
+        "batch_mas_ss_u": _r(batch_min + ss_estimado_u, 0) if ss_estimado_u is not None else None,
         "mto": mto,
     }
 
@@ -188,19 +194,31 @@ def diagnosticar_sku(params_producto: dict,
             f"Un solo batch consume el {pct_dia*100:,.1f}% de la capacidad diaria: "
             f"margen muy ajustado, cualquier cambio menor lo vuelve infactible."))
 
-    if cap_bod_finita and batch_min > 0 and ratio_bodega is not None \
-            and ratio_bodega < RATIO_CAP_BODEGA_MIN:
+    # Reglas de cap. bodega (decisión 10-11-26; reemplazan la regla de 2× batch):
+    #   error  -> cap. bodega menor al batch mínimo (no cabe ni un batch)
+    #   warn   -> cap. bodega menor a batch mínimo + SS estimado
+    if cap_bod_finita and batch_min > 0 and cap_bod < batch_min:
         alertas.append(_alerta(
-            NIVEL_ERROR, "CAP_BODEGA_INSUFICIENTE",
-            f"La capacidad de bodega ({cap_bod:,.0f} u) es menor a "
-            f"{RATIO_CAP_BODEGA_MIN:g}x el batch mínimo ({batch_min:,.0f} u): "
-            f"puede volver infactible la producción."))
+            NIVEL_ERROR, "CAP_BODEGA_MENOR_BATCH",
+            f"La capacidad de bodega ({cap_bod:,.0f} u) es menor al batch mínimo "
+            f"({batch_min:,.0f} u): no cabe ni un batch."))
+    elif cap_bod_finita and batch_min > 0 and ss_estimado_u is not None \
+            and cap_bod < batch_min + ss_estimado_u:
+        alertas.append(_alerta(
+            NIVEL_WARN, "CAP_BODEGA_SIN_SS",
+            f"La capacidad de bodega ({cap_bod:,.0f} u) es menor a batch mínimo + SS "
+            f"(stock de seguridad) estimado ({batch_min:,.0f} + {ss_estimado_u:,.0f} u): "
+            f"el solver no puede cumplir ambas restricciones a la vez."))
 
-    if batch_min > 0 and batch_mult > 1 and (batch_min % batch_mult) != 0:
+    if batch_min > 0 and horas_batch is not None and horas_batch < UMBRAL_HORAS_BATCH_MIN:
         alertas.append(_alerta(
-            NIVEL_WARN, "BATCH_NO_MULTIPLO",
-            f"El batch mínimo ({batch_min:,.0f} u) no es múltiplo del múltiplo de "
-            f"batch ({batch_mult:,.0f} u): el lote real se redondeará hacia arriba."))
+            NIVEL_WARN, "BATCH_CORTO",
+            f"El batch mínimo equivale a {horas_batch:,.1f} h de producción "
+            f"(< {UMBRAL_HORAS_BATCH_MIN:g} h): el setup pesa mucho y el plan puede "
+            f"proponer OF más cortas que las que hace la planta."))
+
+    # batch_mult_u: el optimizador lo tiene relajado y trabaja en cajas con ceil, así que
+    # un batch no múltiplo no genera restricción (verificado, backlog S9). Sin alerta.
 
     if dias_cobertura is not None and dias_cobertura > UMBRAL_DIAS_COBERTURA:
         alertas.append(_alerta(
@@ -213,6 +231,12 @@ def diagnosticar_sku(params_producto: dict,
             NIVEL_WARN, "MTO_CON_SS",
             f"SKU marcado MTO (contra pedido) pero con stock de seguridad "
             f"de {ss_dias} días: revisar coherencia."))
+
+    if factor and not (FACTOR_RANGO_NORMAL[0] <= factor <= FACTOR_RANGO_NORMAL[1]):
+        alertas.append(_alerta(
+            NIVEL_WARN, "FACTOR_FUERA_RANGO",
+            f"Factor de velocidad {factor:g} fuera del rango habitual "
+            f"({FACTOR_RANGO_NORMAL[0]:g}–{FACTOR_RANGO_NORMAL[1]:g}): confirmar el dato."))
 
     if factor and factor < 1.0:
         alertas.append(_alerta(
@@ -455,7 +479,8 @@ def construir_diagnostico(lineas: list[dict],
             "umbrales": {
                 "margen_dia": UMBRAL_MARGEN_DIA,
                 "dias_cobertura": UMBRAL_DIAS_COBERTURA,
-                "ratio_cap_bodega": RATIO_CAP_BODEGA_MIN,
+                "horas_batch_min": UMBRAL_HORAS_BATCH_MIN,
+                "factor_rango": list(FACTOR_RANGO_NORMAL),
             },
         },
     }

@@ -30,12 +30,9 @@ export default function InformesOperacion() {
   if (error) return <div style={{ padding: 16, color: '#A32D2D' }}>{error}</div>;
   if (!sel) return <div style={{ padding: 16, color: C.muted }}>Cargando informes…</div>;
 
-  // Ancho completo de la ventana aunque el contenedor de la app tenga un ancho máximo
-  // (evita el scroll lateral dentro del informe). 100vw incluye la barra de scroll: se descuentan 24 px.
-  const fullBleed = { width: 'calc(100vw - 24px)', position: 'relative', left: '50%', transform: 'translateX(-50%)' };
-
+  // Ancho: la pestaña está en TABS_ANCHAS (App.js), que ya le da el ancho completo.
   return (
-    <div style={{ ...fullBleed, padding: '12px 0' }}>
+    <div style={{ padding: '12px 16px' }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         <select value={sel.id} onChange={(e) => setSel(lista.find((x) => x.id === e.target.value))}
           style={{ padding: '6px 8px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13 }}>

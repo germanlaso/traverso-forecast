@@ -43,19 +43,17 @@ _UPC_CARGADO = False
 
 
 def _cargar_upc() -> None:
-    """Carga unidades_por_caja de todos los SKU desde parametros MRP (BD, con
-    fallback a Excel). Se cachea a nivel modulo: el upc no cambia en runtime."""
+    """Carga unidades_por_caja de todos los SKU desde parametros MRP en la BD.
+    (10-11-26) La BD manda: sin respaldo Excel. Si la BD falla, NO se marca como
+    cargado: el siguiente llamado reintenta (un reintento por llamado, no un loop) y
+    mientras tanto _upc_real usa el valor del request y lo deja en el log."""
     global _UPC_CARGADO
-    _UPC_CARGADO = True   # marcar antes: un fallo no debe reintentar en loop
     try:
         import mrp as _mrp
-        try:
-            sku_params, _, _ = _mrp.load_params_from_db()
-            if not sku_params:
-                raise ValueError("parametros de BD vacios")
-        except Exception:
-            sku_params, _, _ = _mrp.load_params_from_excel(
-                "/app/data/Traverso_Parametros_MRP.xlsx")
+        sku_params, _, _ = _mrp.load_params_from_db()
+        if not sku_params:
+            raise ValueError("parametros de BD vacios")
+        _UPC_CARGADO = True
         _UPC_CACHE.clear()
         for _k, _v in sku_params.items():
             _u = getattr(_v, "unidades_por_caja", None)
@@ -398,13 +396,13 @@ def get_pdf_orden(numero_of: str):
     orden = next((o for o in aprobadas if o.get("numero_of") == numero_of), None)
     if not orden:
         raise HTTPException(status_code=404, detail=f"Orden {numero_of} no encontrada o no aprobada")
-    # Enriquecer con u_por_caja real desde parámetros MRP
+    # Enriquecer con u_por_caja real desde parámetros MRP en la BD
+    # (10-11-26: antes leía SOLO el Excel; la BD manda).
     try:
         import sys
         sys.path.insert(0, "/app")
         import mrp as _mrp
-        MRP_EXCEL = "/app/data/Traverso_Parametros_MRP.xlsx"
-        sku_params, _, _ = _mrp.load_params_from_excel(MRP_EXCEL)
+        sku_params, _, _ = _mrp.load_params_from_db()
         sku = str(orden.get("sku", ""))
         if sku in sku_params:
             orden = dict(orden)

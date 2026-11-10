@@ -1,5 +1,5 @@
 // ParametrosDiagnostico.jsx — Diagnóstico de parámetros MRP (línea / SKU)
-// FASE 1: SOLO LECTURA. No modifica ningún parámetro.
+// FASE 2 (10-11-26): consulta libre + edición con PIN (EditorParametros.jsx). La BD manda.
 // Estructura preparada para la Fase 2 (edición): el componente <Param> centraliza
 // el render de cada valor; cuando llegue la edición, solo cambia ese componente.
 // Los indicadores y semáforos los calcula el BACKEND (params_diagnostico.py), para
@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import ProyeccionModal from "./ProyeccionModal";
+import { ModalEditarSku, ModalEditarLinea, PanelRecomendaciones } from "./EditorParametros";
 
 const API = process.env.REACT_APP_API_BASE || "";
 
@@ -30,6 +31,10 @@ const ALERTA_LABEL = {
   BATCH_NO_CABE_DIA:       "Batch no cabe en el día",
   BATCH_NO_CABE_TURNO:     "Batch no cabe en un turno",
   CAP_BODEGA_INSUFICIENTE: "Bodega insuficiente",
+  CAP_BODEGA_MENOR_BATCH:  "Bodega < batch",
+  CAP_BODEGA_SIN_SS:       "Bodega < batch + SS",
+  BATCH_CORTO:             "Batch < 3 h",
+  FACTOR_FUERA_RANGO:      "Factor fuera de rango",
   VELOCIDAD_CERO:          "Velocidad 0",
   SKU_SIN_PARAMS:          "SKU sin parámetros",
   SKU_INACTIVO:            "SKU inactivo",
@@ -129,7 +134,7 @@ function Grupo({ titulo, children }) {
   );
 }
 
-function DetalleSku({ it, onVerProyeccion }) {
+function DetalleSku({ it, onVerProyeccion, onEditar, nRecos }) {
   const d = it.derivados || {};
   const pp = it.params_producto || {};
   const pl = it.params_en_linea || {};
@@ -143,6 +148,11 @@ function DetalleSku({ it, onVerProyeccion }) {
                    border: `1px solid ${C.purple}`, background: C.purpleLt, color: C.purple,
                    fontWeight: 600 }}>
           📊 Ver proyección diaria
+        </button>
+        <button onClick={(e) => { e.stopPropagation(); onEditar(); }}
+          style={{ padding: "4px 10px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                   border: `1px solid ${C.teal}`, background: C.teal, color: "#fff", fontWeight: 700 }}>
+          ✏️ Editar parámetros{nRecos ? ` · ${nRecos} sugerencia${nRecos > 1 ? "s" : ""} IA` : ""}
         </button>
       </div>
       <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
@@ -194,9 +204,9 @@ function DetalleSku({ it, onVerProyeccion }) {
                 texto={d.dias_cobertura_batch == null ? "sin forecast"
                        : `${fmt1(d.dias_cobertura_batch)} días (${fmt1(d.semanas_cobertura_batch)} sem)`}
                 resaltar={d.dias_cobertura_batch > 30} />
-          <Dato label="Bodega / batch"
-                texto={d.ratio_cap_bodega == null ? "—" : `${fmt1(d.ratio_cap_bodega)}×`}
-                resaltar={d.ratio_cap_bodega != null && d.ratio_cap_bodega < 2} />
+          <Dato label="Batch + SS (estim.)"
+                texto={d.batch_mas_ss_u == null ? "—" : `${fmtN(d.batch_mas_ss_u)} u`}
+                resaltar={d.batch_mas_ss_u != null && d.cap_bodega_u != null && d.cap_bodega_u < d.batch_mas_ss_u} />
           <div style={{ fontSize: 9.5, color: C.textMuted, marginTop: 3 }}>
             Promedio de las próximas 4 semanas completas; diario = semanal ÷ 5.
           </div>
@@ -285,15 +295,37 @@ export default function ParametrosDiagnostico() {
   const [filtro, setFiltro]   = useState("todos");     // todos | alertas | errores
   const [busqueda, setBusqueda] = useState("");        // buscar SKU por codigo o nombre
   const [ocultos, setOcultos] = useState({});          // {codigoAlerta: true} -> chip apagado
+  const [editSku, setEditSku] = useState(null);         // {item, linea}
+  const [editLinea, setEditLinea] = useState(null);     // objeto línea del diagnóstico
+  const [recos, setRecos] = useState([]);               // recomendaciones abiertas (IA)
 
-  useEffect(() => {
-    setCargando(true);
+  const recargar = (silencioso) => {
+    if (!silencioso) setCargando(true);
     fetch(`${API}/params/diagnostico`)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then((d) => { setData(d); setErrorMsg(""); })
       .catch((e) => setErrorMsg(String(e.message || e)))
       .finally(() => setCargando(false));
-  }, []);
+    fetch(`${API}/params/recomendaciones?estado=abierta`)
+      .then((r) => (r.ok ? r.json() : { recomendaciones: [] }))
+      .then((d) => setRecos(d.recomendaciones || []))
+      .catch(() => setRecos([]));
+  };
+  useEffect(() => { recargar(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const recosPorSku = useMemo(() => recos.reduce((m, r) => {
+    if (r.entidad !== "linea") m[r.clave] = (m[r.clave] || 0) + 1; return m; }, {}), [recos]);
+
+  // abre el editor desde una recomendación: SKU en su línea (o la preferida) o la línea
+  const abrirDesdeReco = (r) => {
+    if (r.entidad === "linea") { const l = (data?.lineas || []).find((x) => x.codigo === r.clave); if (l) setEditLinea(l); return; }
+    let hit = null;
+    (data?.lineas || []).forEach((l) => (l.skus || []).forEach((it) => {
+      if (it.sku !== r.clave || it.inactivo) return;
+      if (!hit || (r.linea && l.codigo === r.linea) || (!r.linea && it.preferida && hit.linea !== r.linea)) hit = { item: it, linea: l.codigo };
+    }));
+    if (hit) setEditSku(hit);
+  };
 
   // conteo de alertas por tipo (para los chips)
   const tiposAlerta = useMemo(() => {
@@ -346,7 +378,7 @@ export default function ParametrosDiagnostico() {
       <div style={{ background: C.tealMid, color: "#fff", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>⚙️ Diagnóstico de Parámetros</div>
         <div style={{ fontSize: 11.5, opacity: .9, marginTop: 2 }}>
-          Capacidades por línea y coherencia de parámetros por SKU · solo lectura
+          Capacidades por línea y coherencia de parámetros por SKU · consulta libre, edición con PIN · los cambios aplican en la próxima corrida del plan
         </div>
       </div>
 
@@ -358,6 +390,8 @@ export default function ParametrosDiagnostico() {
         <KPI label="Advertencias" value={r.n_warnings} color={r.n_warnings ? C.amber : C.teal} />
         <KPI label="Sin línea" value={r.n_sin_linea} color={C.gray} />
       </div>
+
+      <PanelRecomendaciones recos={recos} onAbrir={abrirDesdeReco} />
 
       {/* Aviso de líneas sobrecargadas: el hallazgo que no es de parámetros sino de capacidad */}
       {sobrecargadas.length > 0 && (
@@ -489,6 +523,11 @@ export default function ParametrosDiagnostico() {
                   </span>
                 )}
                 <span style={{ fontSize: 11, color: C.textMuted }}>{l.n_skus} SKU</span>
+                <button onClick={(e) => { e.stopPropagation(); setEditLinea(l); }} title="Editar velocidad y turnos de la línea"
+                  style={{ padding: "2px 8px", fontSize: 11, borderRadius: 6, cursor: "pointer",
+                           border: `1px solid ${C.teal}`, background: "#fff", color: C.tealMid, fontWeight: 700 }}>
+                  ✏️ Editar línea
+                </button>
                 {l.n_errores > 0 && <span style={s.pill(C.redLt, "#791F1F")}>{l.n_errores} error{l.n_errores > 1 ? "es" : ""}</span>}
                 {l.n_warnings > 0 && <span style={s.pill(C.amberLt, "#854F0B")}>{l.n_warnings} advert.</span>}
                 {l.n_errores === 0 && l.n_warnings === 0 && <span style={s.pill(C.tealLt, C.tealMid)}>OK</span>}
@@ -541,6 +580,10 @@ export default function ParametrosDiagnostico() {
                                            color: C.purple, userSelect: "none" }}>
                               📈
                             </span>
+                            {recosPorSku[it.sku] > 0 && (
+                              <span title="Tiene recomendaciones abiertas del análisis IA"
+                                    style={{ ...s.pill(C.purpleLt, C.purple), marginLeft: 5 }}>IA</span>
+                            )}
                             {(it.alternativas || []).length > 0 && (
                               <div style={{ fontSize: 9.5, marginLeft: 14, marginTop: 1 }}>
                                 {it.alternativas.map((a) => (
@@ -610,7 +653,9 @@ export default function ParametrosDiagnostico() {
                           <tr>
                             <td colSpan={13} style={{ padding: 0 }}>
                               <DetalleSku it={it}
-                                onVerProyeccion={() => abrirProyeccion(items, idxSku)} />
+                                onVerProyeccion={() => abrirProyeccion(items, idxSku)}
+                                onEditar={() => setEditSku({ item: it, linea: l.codigo })}
+                                nRecos={recosPorSku[it.sku] || 0} />
                             </td>
                           </tr>
                         )}
@@ -657,9 +702,18 @@ export default function ParametrosDiagnostico() {
       <div style={{ marginTop: 14, fontSize: 11, color: C.textMuted }}>
         Umbrales: margen diario &gt; {Math.round((r.umbrales?.margen_dia ?? .9) * 100)}% ·
         cobertura &gt; {r.umbrales?.dias_cobertura ?? 30} días ·
-        bodega &lt; {r.umbrales?.ratio_cap_bodega ?? 2}× batch mínimo.
+        batch &lt; {r.umbrales?.horas_batch_min ?? 3} h de producción ·
+        bodega &lt; batch mínimo (error) o &lt; batch + SS estimado (advertencia).
         La demanda usada es el promedio de las próximas 4 semanas completas del plan vigente.
       </div>
+
+      {editSku && (
+        <ModalEditarSku item={editSku.item} linea={editSku.linea}
+                        onClose={() => setEditSku(null)} onGuardado={() => recargar(true)} />
+      )}
+      {editLinea && (
+        <ModalEditarLinea linea={editLinea} onClose={() => setEditLinea(null)} onGuardado={() => recargar(true)} />
+      )}
 
       {modal && (
         <ProyeccionModal sku={modal.sku} descripcion={modal.descripcion}
