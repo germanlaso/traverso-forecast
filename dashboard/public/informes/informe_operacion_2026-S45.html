@@ -21,7 +21,7 @@
 }
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.45}
-.wrap{max-width:1280px;margin:0 auto;padding:20px 24px 48px}
+.wrap{max-width:1600px;margin:0 auto;padding:16px 18px 40px}
 header.top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;border-bottom:3px solid var(--teal);padding-bottom:14px;margin-bottom:16px}
 .brand{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal-dk);font-weight:700}
 h1{font-size:26px;margin:4px 0 2px;letter-spacing:-.01em}
@@ -40,7 +40,8 @@ h3{font-size:15px;margin:0 0 2px}
 .lead{color:var(--soft);margin:0 0 14px;max-width:920px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}
 .cap{font-size:12px;color:var(--muted);margin:2px 0 10px}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:16px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(480px,100%),1fr));gap:16px}
+@media (max-width:1250px){table{font-size:11.5px}td.num,th.num{white-space:nowrap}}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
 .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;position:relative;overflow:hidden}
 .kpi .l{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
@@ -61,12 +62,12 @@ h3{font-size:15px;margin:0 0 2px}
 .alert .act b{color:var(--teal-dk)}
 ol.acciones{margin:6px 0 0;padding-left:20px}ol.acciones li{margin:0 0 6px}
 table{border-collapse:collapse;width:100%;font-size:12.5px}
-th{text-align:left;font-weight:700;color:var(--soft);border-bottom:1.5px solid var(--line);padding:6px 8px;white-space:nowrap;cursor:pointer;user-select:none}
+th{text-align:left;font-weight:700;color:var(--soft);border-bottom:1.5px solid var(--line);padding:6px 6px;white-space:normal;vertical-align:bottom;cursor:pointer;user-select:none}
 th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
-td{padding:5px 8px;border-bottom:1px solid var(--grid);vertical-align:top}
+td{padding:5px 6px;border-bottom:1px solid var(--grid);vertical-align:top;overflow-wrap:anywhere}
 tr:hover td{background:var(--chip)}
 .scroll{overflow-x:auto}
-.heat td.h{text-align:center;font-variant-numeric:tabular-nums;border-radius:4px;min-width:52px;font-size:12px}
+.heat td.h{text-align:center;font-variant-numeric:tabular-nums;border-radius:4px;min-width:40px;font-size:11.5px}
 .heat{border-collapse:separate;border-spacing:3px}
 .heat th{border:none;text-align:center;font-size:11.5px;line-height:1.2}
 .heat th:first-child,.heat td:first-child{text-align:left}
@@ -219,7 +220,7 @@ footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid 
     <h3>Evidencia de producción fuera del turno nominal · Sem 37–45</h3>
     <p class="cap">Días con Terminal Report en sábado, domingo o festivo, y días con más de 110% de las horas de un turno. Un día con más de 24 h-eq indica que el Terminal Report agrupó producción de varios días.</p>
     <div class="scroll"><table>
-      <tr><th>Línea</th><th class="num">Turno parametrizado</th><th class="num">Días de fin de semana o festivo con producción</th><th class="num">h-eq en esos días</th><th class="num">Días sobre 110% del turno</th><th class="num">Máximo en un día</th><th>Lectura</th></tr>
+      <tr><th>Línea</th><th class="num">Turno param.</th><th class="num">Días fin de semana / festivo</th><th class="num">h-eq esos días</th><th class="num">Días sobre 110% del turno</th><th class="num">Máximo en un día</th><th>Lectura</th></tr>
       <tr><td><b>Sachetera</b></td><td class="num">9 h</td><td class="num">6</td><td class="num">45</td><td class="num">13</td><td class="num">21,7 h</td><td>Fines de semana y extensiones de turno frecuentes.</td></tr>
       <tr><td><b>Sachetera 4P</b></td><td class="num">8 h</td><td class="num">4 (incl. festivo 01-11)</td><td class="num">18</td><td class="num">11</td><td class="num">20,2 h</td><td>Fines de semana, festivo y extensiones.</td></tr>
       <tr><td><b>Miele LV</b></td><td class="num">9 h</td><td class="num">5</td><td class="num">22</td><td class="num">9</td><td class="num">16,8 h</td><td>Fines de semana y extensiones.</td></tr>
@@ -298,7 +299,7 @@ footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid 
     <h3><span class="pri ma">Prioridad media-alta</span>4. Batch mínimo en L6Vidrio: parámetro vs realidad</h3>
     <p class="cap">La línea está al 91% de uso proyectado. El parámetro de batch mínimo (750 u = 0,75 h de línea) es muy inferior a lo que la planta realmente produce por OF, y el plan lo aprovecha: en las próximas 4 semanas propone 11 OF de menos de 1 h.</p>
     <div class="scroll"><table>
-      <tr><th>SKU</th><th>Producto</th><th class="num">Parámetro: batch mín.</th><th class="num">Real: OF en SAP Sem 37–45</th><th class="num">Real: tamaño prom. por OF</th><th class="num">Plan: tamaño prom. por OF (próx. 4 sem)</th><th class="num">Días bajo SS (de 28)</th></tr>
+      <tr><th>SKU</th><th>Producto</th><th class="num">Parámetro batch mín.</th><th class="num">Real: n° OF (Sem 37–45)</th><th class="num">Real: prom. por OF</th><th class="num">Plan: prom. por OF</th><th class="num">Días bajo SS (de 28)</th></tr>
       <tr><td>141033175</td><td>Salsa Soya Cuisine &amp; Co 12x500 vidrio</td><td class="num">0,75 h</td><td class="num">8</td><td class="num">3,9 h</td><td class="num">3,3 h</td><td class="num"><b>24</b></td></tr>
       <tr><td>113110175</td><td>Vinagre de Manzana sin Filtrar 12x500</td><td class="num">0,75 h</td><td class="num">3</td><td class="num">5,8 h</td><td class="num">4,5 h</td><td class="num"><b>20</b></td></tr>
       <tr><td>151010175</td><td>Esencia Vainilla Traverso 12x500 PET</td><td class="num">0,75 h</td><td class="num">2</td><td class="num">7,6 h</td><td class="num">3,7 h</td><td class="num"><b>24</b></td></tr>

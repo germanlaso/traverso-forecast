@@ -29,8 +29,12 @@ export default function InformesOperacion() {
   if (error) return <div style={{ padding: 16, color: '#A32D2D' }}>{error}</div>;
   if (!sel) return <div style={{ padding: 16, color: C.muted }}>Cargando informes…</div>;
 
+  // Ancho completo de la ventana aunque el contenedor de la app tenga un ancho máximo
+  // (evita el scroll lateral dentro del informe). 100vw incluye la barra de scroll: se descuentan 24 px.
+  const fullBleed = { width: 'calc(100vw - 24px)', position: 'relative', left: '50%', transform: 'translateX(-50%)' };
+
   return (
-    <div style={{ padding: '12px 16px' }}>
+    <div style={{ ...fullBleed, padding: '12px 0' }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         <select value={sel.id} onChange={(e) => setSel(lista.find((x) => x.id === e.target.value))}
           style={{ padding: '6px 8px', border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13 }}>
@@ -42,7 +46,7 @@ export default function InformesOperacion() {
         <a style={{ ...btn, background: C.teal, color: '#fff', borderColor: C.teal }} href={`${BASE}/${sel.pdf}`} download>Descargar PDF</a>
       </div>
       <iframe key={sel.id} title={sel.titulo} src={`${BASE}/${sel.html}`}
-        style={{ width: '100%', height: 'calc(100vh - 170px)', border: `1px solid ${C.border}`, borderRadius: 10, background: '#F8F7F4' }} />
+        style={{ display: 'block', width: '100%', height: 'calc(100vh - 150px)', border: `1px solid ${C.border}`, borderRadius: 10, background: '#F8F7F4' }} />
     </div>
   );
 }
