@@ -311,7 +311,7 @@ export default function ParametrosDiagnostico() {
       .then((d) => setRecos(d.recomendaciones || []))
       .catch(() => setRecos([]));
   };
-  useEffect(() => { recargar(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { recargar(); }, []);   // eslint-disable-line
 
   const recosPorSku = useMemo(() => recos.reduce((m, r) => {
     if (r.entidad !== "linea") m[r.clave] = (m[r.clave] || 0) + 1; return m; }, {}), [recos]);
