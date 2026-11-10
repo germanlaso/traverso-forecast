@@ -96,10 +96,10 @@ GROUP BY 1, 2
 """
 
 SQL_EVENTOS = """
-SELECT e.linea, t.categoria, SUM(COALESCE(e.duracion_min, 0)) AS minutos, COUNT(*) AS n
+SELECT e.linea, e.fecha, t.categoria, SUM(COALESCE(e.duracion_min, 0)) AS minutos, COUNT(*) AS n
 FROM mrp_eventos_linea e JOIN mrp_eventos_tipos t ON t.codigo = e.tipo
 WHERE NOT e.anulado AND e.fecha BETWEEN :desde AND :hasta
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 """
 
 CATEGORIA_A_CAMPO = {
@@ -262,14 +262,17 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
         por_sku[r.sku]["n_of_app"] += r.n_of
         sumar("heq_prog_app", "cj_prog_app", r.sku, lin, r.cj or 0)
 
+    paradas_dia = {cod: defaultdict(float) for cod in lineas}   # min que descuentan operación, por día
     for r in filas_ev:
         if r.linea not in acc:
             adv["evento_linea_desconocida"].add(r.linea)
             continue
         acc[r.linea]["n_eventos"] += r.n
+        paradas_dia[r.linea][r.fecha]   # registra el día aunque sea solo una observación
         campo = CATEGORIA_A_CAMPO.get(r.categoria)
         if campo:
             acc[r.linea][campo] += float(r.minutos) / 60.0
+            paradas_dia[r.linea][r.fecha] += float(r.minutos)
 
     # --- KPIs por línea ---
     res_lineas = []
@@ -284,6 +287,16 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
         heq, heq_sap, heq_app = a["heq_real"], a["heq_prog_sap"], a["heq_prog_app"]
         no_expl = max(nominal - heq - pp - pn - sp, 0.0)
         con_bitacora = a["n_eventos"] > 0
+        # Eficiencia solo sobre los días CON registro en la bitácora: un día sin registro no es un
+        # día sin paradas (la cobertura del registro es irregular).
+        h_dia = float((L.turnos_dia or 0) * (L.horas_turno or 0))
+        dias_reg = paradas_dia[cod]
+        operada_reg = sum(max((h_dia if d.weekday() < (L.dias_semana or 0) else 0.0) - m / 60.0, 0.0)
+                          for d, m in dias_reg.items())
+        heq_reg = sum(diario[cod].get(d.isoformat(), 0.0) for d in dias_reg)
+        n_lab = dias_laborables(desde, hasta, L.dias_semana)
+        dias_reg_lab = sum(1 for d in dias_reg if d.weekday() < (L.dias_semana or 0))
+        cobertura = _ratio(dias_reg_lab, n_lab)
         ocup_sap = _ratio(heq_sap, nominal)
         ocupacion_real = _ratio(heq, nominal)
 
@@ -304,6 +317,8 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
             "categoria": L.categoria,
             "con_bitacora": con_bitacora,
             "n_eventos": int(a["n_eventos"]),
+            "dias_con_bitacora": len(dias_reg),
+            "cobertura_bitacora": cobertura,
             "horas": {
                 "nominal": _r2(nominal),
                 "parada_planificada": _r2(pp),
@@ -312,6 +327,8 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
                 "disponible": _r2(disponible),
                 "capacidad_real": _r2(cap_real),
                 "operada": _r2(operada),
+                "operada_dias_bitacora": _r2(operada_reg),
+                "heq_dias_bitacora": _r2(heq_reg),
                 "heq_producidas": _r2(heq),
                 "heq_programadas_sap": _r2(heq_sap),
                 "heq_programadas_app": _r2(heq_app),
@@ -325,7 +342,7 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
             },
             "kpi": {
                 "ocupacion_real": ocupacion_real,
-                "eficiencia": _ratio(heq, operada) if con_bitacora else None,
+                "eficiencia": _ratio(heq_reg, operada_reg) if con_bitacora else None,
                 "ocupacion_programada_sap": ocup_sap,
                 "ocupacion_programada_app": _ratio(heq_app, nominal),
                 "capacidad_ociosa": round(max(1 - ocup_sap, 0), 4) if ocup_sap is not None else None,
@@ -411,7 +428,9 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
         "definiciones": {
             "unidad_horas": "horas-equivalentes a velocidad nominal: cj*u_por_caja/(velocidad_u_hr*factor_velocidad)",
             "ocupacion_real": "heq_producidas / nominal",
-            "eficiencia": "heq_producidas / operada; operada = nominal - paradas - sin programa (solo con bitácora)",
+            "eficiencia": "heq producidas / h operadas, solo en días con registro en la bitácora; "
+                          "h operadas = nominal del día - paradas - sin programa",
+            "cobertura_bitacora": "días laborables con al menos un registro / días laborables del período",
             "ocupacion_programada_sap": "heq_programadas_sap / nominal",
             "capacidad_ociosa": "1 - ocupacion_programada_sap",
             "capacidad_real_vs_teorica": "(nominal - paradas planificadas - no planificadas) / nominal (solo con bitácora)",
@@ -507,8 +526,8 @@ def _resumir(resultado, sel):
         "horas_parada_no_planificada": _r2(H("parada_no_planificada")),
         "horas_sin_programa": _r2(H("sin_programa")),
         "ocupacion_real": _ratio(H("heq_producidas"), nominal),
-        "eficiencia": _ratio(sum(x["horas"]["heq_producidas"] for x in ls if x["con_bitacora"]),
-                             sum(x["horas"]["operada"] for x in ls if x["con_bitacora"])),
+        "eficiencia": _ratio(sum(x["horas"]["heq_dias_bitacora"] for x in ls),
+                             sum(x["horas"]["operada_dias_bitacora"] for x in ls)),
         "ocupacion_programada_sap": _ratio(H("heq_programadas_sap"), nominal),
         "ocupacion_programada_app": _ratio(H("heq_programadas_app"), nominal),
         "n_lineas": len(ls),
