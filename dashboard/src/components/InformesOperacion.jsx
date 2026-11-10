@@ -14,6 +14,7 @@ export default function InformesOperacion() {
   const [lista, setLista] = useState([]);
   const [sel, setSel] = useState(null);
   const [error, setError] = useState(null);
+  const [copiado, setCopiado] = useState(false);
 
   useEffect(() => {
     fetch(`${BASE}/index.json`, { cache: 'no-store' })
@@ -42,6 +43,13 @@ export default function InformesOperacion() {
         </select>
         <span style={{ fontSize: 12, color: C.muted }}>Generado: {sel.generado}</span>
         <span style={{ flex: 1 }} />
+        <span style={btn} onClick={() => {
+          // Enlace absoluto al HTML del informe (sirve dentro de la red de Traverso)
+          const url = new URL(`${BASE}/${sel.html}`, window.location.origin).href;
+          const ok = () => { setCopiado(true); setTimeout(() => setCopiado(false), 2000); };
+          if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(url).then(ok).catch(() => window.prompt('Copia el enlace:', url));
+          else window.prompt('Copia el enlace:', url);   // http sin TLS: el navegador no permite copiar automáticamente
+        }}>{copiado ? 'Enlace copiado ✓' : 'Copiar enlace'}</span>
         <a style={btn} href={`${BASE}/${sel.html}`} target="_blank" rel="noreferrer">Abrir en pestaña nueva</a>
         <a style={{ ...btn, background: C.teal, color: '#fff', borderColor: C.teal }} href={`${BASE}/${sel.pdf}`} download>Descargar PDF</a>
       </div>
