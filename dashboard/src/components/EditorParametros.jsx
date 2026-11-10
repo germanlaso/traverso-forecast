@@ -244,7 +244,9 @@ export function ModalEditarSku({ item, linea, onClose, onGuardado }) {
   const hayCambios = Object.keys(cambios.cambios_producto).length + Object.keys(cambios.factores).length > 0;
   const cambiosDeb = useDebounced(cambios, 400);
   const vivo = useRef(true);
-  useEffect(() => () => { vivo.current = false; }, []);
+  // En modo desarrollo (React StrictMode) el efecto se monta, desmonta y vuelve a montar:
+  // hay que volver a marcar el componente como vivo en cada montaje.
+  useEffect(() => { vivo.current = true; return () => { vivo.current = false; }; }, []);
 
   useEffect(() => {
     api("GET", `/params/recomendaciones?sku=${encodeURIComponent(item.sku)}`).then((d) => setRecos(d.recomendaciones || [])).catch(() => {});
