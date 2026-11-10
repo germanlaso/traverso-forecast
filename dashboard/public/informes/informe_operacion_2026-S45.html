@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Informe de Operación · Sem 37 a 45 · Traverso</title>
+<style>
+:root{
+  --teal:#1D9E75;--teal-lt:#E1F5EE;--teal-dk:#0F6E56;--blue:#185FA5;--blue-lt:#E6F1FB;
+  --amber:#EF9F27;--amber-lt:#FAEEDA;--amber-dk:#854F0B;--red:#E24B4A;--red-lt:#FCEBEB;--red-dk:#A32D2D;
+  --purple:#534AB7;--ink:#2C2C2A;--muted:#888780;--soft:#5F5E5A;--line:#D3D1C7;--grid:#ECEAE3;
+  --bg:#F8F7F4;--card:#FFFFFF;--chip:#F1EFE8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --teal:#2DBA8C;--teal-lt:#123A2F;--teal-dk:#7FD9B8;--blue:#5B9BE0;--blue-lt:#16283D;
+    --amber:#F2B14E;--amber-lt:#3A2C14;--amber-dk:#F5C77A;--red:#F07170;--red-lt:#3D1A1A;--red-dk:#F5A3A2;
+    --purple:#8F87E8;--ink:#ECEAE3;--muted:#9C9A92;--soft:#C4C2BA;--line:#3A3936;--grid:#2C2B29;
+    --bg:#1A1A18;--card:#242422;--chip:#2E2D2A;color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.45}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 24px 48px}
+header.top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;border-bottom:3px solid var(--teal);padding-bottom:14px;margin-bottom:16px}
+.brand{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal-dk);font-weight:700}
+h1{font-size:26px;margin:4px 0 2px;letter-spacing:-.01em}
+.sub{color:var(--soft);font-size:13px}
+.meta{display:flex;gap:6px;flex-wrap:wrap}
+.chip{background:var(--chip);border-radius:12px;padding:3px 10px;font-size:11.5px;color:var(--soft);white-space:nowrap}
+nav.tabs{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 18px}
+nav.tabs button{border:1px solid var(--line);background:var(--card);color:var(--soft);padding:7px 14px;border-radius:18px;font-size:13px;cursor:pointer;font-family:inherit}
+nav.tabs button.on{background:var(--teal);border-color:var(--teal);color:#fff;font-weight:700}
+nav.tabs .sp{flex:1}
+nav.tabs .print{border-style:dashed}
+section.panel{display:none}
+section.panel.on{display:block}
+h2{font-size:19px;margin:0 0 4px}
+h3{font-size:15px;margin:0 0 2px}
+.lead{color:var(--soft);margin:0 0 14px;max-width:920px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}
+.cap{font-size:12px;color:var(--muted);margin:2px 0 10px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:16px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;position:relative;overflow:hidden}
+.kpi .l{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.kpi .v{font-size:30px;font-weight:700;margin:2px 0 0;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kpi .n{font-size:11.5px;color:var(--soft)}
+.kpi.bad{border-color:var(--red)}.kpi.bad .v{color:var(--red)}
+.kpi.warn{border-color:var(--amber)}.kpi.warn .v{color:var(--amber-dk)}
+.kpi.good .v{color:var(--teal-dk)}
+.kpi svg{display:block;margin-top:6px}
+.alerts{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px}
+.alert{border-radius:12px;padding:12px 14px 12px 16px;border-left:6px solid;background:var(--card);border-top:1px solid var(--line);border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.alert.c{border-left-color:var(--red)}.alert.h{border-left-color:var(--amber)}.alert.m{border-left-color:var(--blue)}
+.alert .sev{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.alert.c .sev{color:var(--red-dk)}.alert.h .sev{color:var(--amber-dk)}.alert.m .sev{color:var(--blue)}
+.alert .t{font-weight:700;margin:3px 0 4px;font-size:14.5px}
+.alert .d{font-size:12.5px;color:var(--soft)}
+.alert .act{font-size:12px;margin-top:6px;color:var(--ink)}
+.alert .act b{color:var(--teal-dk)}
+ol.acciones{margin:6px 0 0;padding-left:20px}ol.acciones li{margin:0 0 6px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{text-align:left;font-weight:700;color:var(--soft);border-bottom:1.5px solid var(--line);padding:6px 8px;white-space:nowrap;cursor:pointer;user-select:none}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+td{padding:5px 8px;border-bottom:1px solid var(--grid);vertical-align:top}
+tr:hover td{background:var(--chip)}
+.scroll{overflow-x:auto}
+.heat td.h{text-align:center;font-variant-numeric:tabular-nums;border-radius:4px;min-width:52px;font-size:12px}
+.heat{border-collapse:separate;border-spacing:3px}
+.heat th{border:none;text-align:center;font-size:11.5px;line-height:1.2}
+.heat th:first-child,.heat td:first-child{text-align:left}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.seg button{border:none;background:transparent;padding:5px 12px;font-size:12px;cursor:pointer;color:var(--soft);font-family:inherit}
+.seg button.on{background:var(--teal-lt);color:var(--teal-dk);font-weight:700}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.tag{display:inline-block;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700}
+.tag.Capacidad{background:var(--red-lt);color:var(--red-dk)}.tag.Inmediato{background:var(--amber-lt);color:var(--amber-dk)}.tag.MTO{background:var(--chip);color:var(--soft)}.tag.Menor{background:var(--blue-lt);color:var(--blue)}
+.pri{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:10px}
+.pri.a{background:var(--red-lt);color:var(--red-dk)}.pri.ma{background:var(--amber-lt);color:var(--amber-dk)}.pri.m{background:var(--blue-lt);color:var(--blue)}.pri.k{background:var(--chip);color:var(--soft)}
+.rec h3{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.rec ul{margin:8px 0 0;padding-left:18px}.rec li{margin-bottom:4px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--soft);margin:4px 0 6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+svg text{font-family:Arial,Helvetica,sans-serif}
+.tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12px;padding:6px 9px;border-radius:6px;max-width:300px;z-index:50;display:none;line-height:1.35}
+footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid var(--line);padding-top:10px}
+.only-print{display:none}
+@media print{
+  :root{--bg:#fff;--card:#fff;--ink:#2C2C2A;--muted:#888780;--soft:#5F5E5A;--line:#D3D1C7;--grid:#ECEAE3;--chip:#F1EFE8;
+        --teal:#1D9E75;--teal-lt:#E1F5EE;--teal-dk:#0F6E56;--blue:#185FA5;--blue-lt:#E6F1FB;--amber:#EF9F27;--amber-lt:#FAEEDA;--amber-dk:#854F0B;--red:#E24B4A;--red-lt:#FCEBEB;--red-dk:#A32D2D;color-scheme:light}
+  html,body{font-size:11.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .wrap{max-width:none;padding:0}
+  nav.tabs{display:none}
+  section.panel{display:block !important;break-before:page}
+  section.panel:first-of-type{break-before:auto}
+  .kpi,.alert,tr,svg,.card.small{break-inside:avoid}
+  .card{break-inside:auto}
+  .card:has(svg),.grid2{break-inside:avoid}
+  #p-resumen .grid2{break-before:page}
+  h2,h3{break-after:avoid}
+  .grid2{grid-template-columns:1fr 1fr}
+  .only-print{display:block}
+  .no-print{display:none !important}
+  .kpi .v{font-size:24px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <div>
+    <div class="brand">Traverso · Planificación de Producción</div>
+    <h1>Informe de Operación</h1>
+    <div class="sub" id="periodo"></div>
+  </div>
+  <div class="meta" id="meta"></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-t="resumen" class="on">Resumen ejecutivo</button>
+  <button data-t="quiebre">Riesgo de quiebre</button>
+  <button data-t="cumpl">Cumplimiento</button>
+  <button data-t="ocup">Ocupación</button>
+  <button data-t="param">Parámetros</button>
+  <button data-t="notas">Datos y definiciones</button>
+  <span class="sp"></span>
+  <button class="print" onclick="window.print()">Imprimir / PDF</button>
+</nav>
+
+<!-- ===================== RESUMEN ===================== -->
+<section class="panel on" id="p-resumen">
+  <h2>Resumen ejecutivo</h2>
+  <p class="lead" id="lead"></p>
+  <div class="kpis" id="kpis"></div>
+  <h3 style="margin:4px 0 10px">Alertas principales</h3>
+  <div class="alerts" id="alerts"></div>
+  <div class="card">
+    <h3>Cuatro acciones con mayor efecto en evitar quiebres</h3>
+    <ol class="acciones">
+      <li><b>Verificar el régimen real de turnos de Sachetera 4P, Sachetera, Doypack y Sachetera 1P.</b> Llegan a 130% o más de su capacidad nominal, lo más probable por extensiones de turno y producción en fines de semana o festivos. El sistema las planifica a 1 turno de lunes a viernes y proyecta quiebres en ellas (Mayonesa 300x8, 30-11).</li>
+      <li><b>Analizar bajar el batch mínimo de Doypack 1–4 y Sachetera al mínimo técnico.</b> Hoy equivale a un día completo de línea: cada SKU bloquea el día entero, y en casi la mitad de las semanas las órdenes reales fueron menores a ese mínimo.</li>
+      <li><b>Analizar subir la cap. bodega de 6 SKU</b> donde no alcanza para batch mínimo + stock de seguridad. Tres tienen quiebre proyectado.</li>
+      <li><b>Analizar alinear el batch mínimo de L6Vidrio con la producción real.</b> El parámetro permite batches de 0,75 h, pero las OF reales fueron de 3,6 a 7,6 h. La línea está al 91% de uso, con 5 quiebres y 14 SKU bajo SS (stock de seguridad).</li>
+    </ol>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Programado SAP vs producido, por semana</h3>
+      <p class="cap">Cajas (barras) y cumplimiento real ÷ SAP (línea). La Sem 42 cayó por programa, no por ejecución.</p>
+      <div id="ch-semanas"></div>
+    </div>
+    <div class="card">
+      <h3>Uso de línea proyectado, próximas 4 semanas</h3>
+      <p class="cap"><b>Qué muestra:</b> las horas de producción que el plan vigente asignó a cada línea en los días hábiles del 10-11 al 07-12, como % de su capacidad nominal (turnos × horas × velocidad parametrizados). <b>Rojo ≥85%:</b> saturada, sin margen para absorber atrasos o pedidos nuevos. <b>Ámbar 70–85%</b> y <b>verde &lt;70%</b>. La <b>marca negra</b> es la ocupación real de las Sem 37–45, para comparar la carga que viene con la que hubo.</p>
+      <div id="ch-uso"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== QUIEBRE ===================== -->
+<section class="panel" id="p-quiebre">
+  <h2>Riesgo de quiebre · próximas 4 semanas</h2>
+  <p class="lead">Los quiebres que importan son los que aparecen <b>después de la primera semana en líneas saturadas</b>: ahí el plan ya incluye las OF tentativas del solver y aun así no alcanza. Los de los primeros días responden a pedidos comprometidos sobre el stock actual o a recepciones pendientes.</p>
+  <div class="card">
+    <h3>Mapa de quiebres proyectados</h3>
+    <p class="cap">Cada círculo es un SKU: posición = día del primer quiebre; tamaño = demanda no cubierta máxima (cj); fila = línea, ordenada por uso proyectado.</p>
+    <div class="legend"><span><i style="background:var(--red)"></i>Capacidad (desde semana 2)</span><span><i style="background:var(--amber)"></i>Inmediato (pedidos sobre stock)</span><span><i style="background:var(--blue)"></i>Menor (&lt; 20 cj)</span><span><i style="background:var(--muted)"></i>MTO (fabricación a pedido)</span></div>
+    <div id="ch-quiebres"></div>
+  </div>
+  <div class="card">
+    <div class="row"><h3>Detalle de SKU con quiebre proyectado</h3><span class="cap no-print">Clic en un encabezado para ordenar</span></div>
+    <div class="scroll"><table id="t-quiebres"></table></div>
+    <p class="cap" style="margin-top:8px">⚑ = el plan advierte un Terminal Report pendiente del 09-11: parte del quiebre de los primeros días puede no ser real. Faltante hoy = informe Faltantes del 09-11. MTO = fabricación a pedido: se gestiona por la orden del cliente, no por parámetros.</p>
+  </div>
+</section>
+
+<!-- ===================== CUMPLIMIENTO ===================== -->
+<section class="panel" id="p-cumpl">
+  <h2>Cumplimiento semanal por línea</h2>
+  <p class="lead">El cumplimiento del período es <b id="c-tot"></b> y <b>se deteriora en las líneas de salsas</b>, las mismas que el plan proyecta saturadas. La tendencia se lee en la columna de 4 semanas: cuando la producción se corre de semana aparece como 26% una semana y 164% la siguiente.</p>
+  <div class="card">
+    <div class="row">
+      <h3 id="heat-title">Cumplimiento real ÷ SAP</h3>
+      <div class="seg no-print" id="seg-heat"><button data-k="cumpl" class="on">Cumplimiento</button><button data-k="ocup">Ocupación real</button></div>
+    </div>
+    <p class="cap" id="heat-cap">Cajas reales (Terminal Report) ÷ cajas programadas en SAP. "–" = sin programa SAP esa semana.</p>
+    <div class="scroll"><table class="heat" id="t-heat"></table></div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Evolución: Sem 37–40 vs Sem 42–45</h3>
+      <p class="cap">Cumplimiento por línea en ambos tramos. Rojo = empeora más de 10 puntos; verde = mejora más de 10 puntos.</p>
+      <div id="ch-evol"></div>
+    </div>
+    <div class="card">
+      <h3>Desviaciones explicadas vs por explicar</h3>
+      <p class="cap">Solo L1Pet LV tiene bitácora (registro en el 58% de los días). En las otras 17 líneas toda desviación queda por explicar.</p>
+      <table>
+        <tr><th>Semana</th><th>L1Pet LV</th><th>Lectura</th></tr>
+        <tr><td>Sem 40 · 28/09</td><td class="num">56%</td><td><span class="tag Menor">Explicada</span> Registro completo: 205 min de fallas mecánicas y 271 min de setup.</td></tr>
+        <tr><td>Sem 43 · 19/10</td><td class="num">103%</td><td><span class="tag MTO">Sin registro</span> Cumplió lo programado; la ocupación de 21% fue por menos programa.</td></tr>
+        <tr><td>Sem 45 · 02/11</td><td class="num">101%</td><td><span class="tag Menor">Explicada</span> 17 h de detención registradas (setup 564 min, aseo 332 min).</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Mayores desvíos por SKU · Sem 37–45</h3>
+    <p class="cap">Programado en SAP vs producido real (Terminal Report), ordenado por cajas no producidas.</p>
+    <div class="scroll"><table id="t-desvios"></table></div>
+  </div>
+</section>
+
+<!-- ===================== OCUPACIÓN ===================== -->
+<section class="panel" id="p-ocup">
+  <h2>Ocupación por línea</h2>
+  <p class="lead">La ocupación real del período es <b id="o-tot"></b> de las horas nominales, pero el promedio esconde dos grupos: <b>líneas de salsas al límite o sobre su capacidad parametrizada</b> y líneas de líquidos con mucha holgura. Esas líneas producen más que su capacidad nominal (1 turno, lunes a viernes) lo más probable por <b>extensiones de turno y producción en fines de semana o festivos</b>. En Doypack y Sachetera se suma una segunda causa: su batch mínimo equivale a un día completo de línea.</p>
+  <div class="card">
+    <h3>Evidencia de producción fuera del turno nominal · Sem 37–45</h3>
+    <p class="cap">Días con Terminal Report en sábado, domingo o festivo, y días con más de 110% de las horas de un turno. Un día con más de 24 h-eq indica que el Terminal Report agrupó producción de varios días.</p>
+    <div class="scroll"><table>
+      <tr><th>Línea</th><th class="num">Turno parametrizado</th><th class="num">Días de fin de semana o festivo con producción</th><th class="num">h-eq en esos días</th><th class="num">Días sobre 110% del turno</th><th class="num">Máximo en un día</th><th>Lectura</th></tr>
+      <tr><td><b>Sachetera</b></td><td class="num">9 h</td><td class="num">6</td><td class="num">45</td><td class="num">13</td><td class="num">21,7 h</td><td>Fines de semana y extensiones de turno frecuentes.</td></tr>
+      <tr><td><b>Sachetera 4P</b></td><td class="num">8 h</td><td class="num">4 (incl. festivo 01-11)</td><td class="num">18</td><td class="num">11</td><td class="num">20,2 h</td><td>Fines de semana, festivo y extensiones.</td></tr>
+      <tr><td><b>Miele LV</b></td><td class="num">9 h</td><td class="num">5</td><td class="num">22</td><td class="num">9</td><td class="num">16,8 h</td><td>Fines de semana y extensiones.</td></tr>
+      <tr><td><b>Sachetera 1P</b></td><td class="num">8 h</td><td class="num">0</td><td class="num">0</td><td class="num">7</td><td class="num">26,0 h</td><td>Extensiones o registro agrupado de varios días.</td></tr>
+      <tr><td><b>Doypack</b></td><td class="num">8 h</td><td class="num">1</td><td class="num">6</td><td class="num">15</td><td class="num">28,1 h</td><td>Pocos fines de semana; extensiones o registro agrupado.</td></tr>
+      <tr><td><b>Doypack 2</b></td><td class="num">8 h</td><td class="num">1</td><td class="num">7</td><td class="num">7</td><td class="num">17,5 h</td><td>Extensiones de turno.</td></tr>
+      <tr><td><b>L2Pet LV</b></td><td class="num">9 h</td><td class="num">1</td><td class="num">1</td><td class="num">8</td><td class="num">22,8 h</td><td>Extensiones o registro agrupado.</td></tr>
+    </table></div>
+    <p style="font-size:12.5px;margin:8px 0 0">Para separar extensiones reales de registros agrupados, conviene registrar en la bitácora los turnos adicionales y los días de fin de semana trabajados.</p>
+  </div>
+  <div class="card">
+    <h3>Capacidad demostrada vs capacidad parametrizada</h3>
+    <p class="cap"><b>Qué muestra:</b> cuánto produjo cada línea en sus mejores semanas, medido contra la capacidad con que la planifica el sistema. <b>100%</b> = turnos × horas × velocidad parametrizados (la capacidad nominal). La <b>barra</b> es el promedio de sus 3 mejores semanas y el <b>círculo</b>, su mejor semana. <b>Sobre 100% (ámbar):</b> la línea produjo más de lo que el sistema cree posible, en general por extensiones de turno o trabajo en fin de semana o festivo. Si eso es habitual, el sistema está planificando con menos capacidad de la real.</p>
+    <div class="legend"><span><i style="background:var(--teal)"></i>Promedio 3 mejores semanas (≤105%)</span><span><i style="background:var(--amber)"></i>Promedio 3 mejores semanas (&gt;105%)</span><span><i style="background:var(--card);border:2px solid var(--teal-dk);border-radius:50%"></i>Mejor semana</span><span><i style="background:var(--red);width:2px"></i>100% = capacidad nominal</span></div>
+    <div id="ch-demo"></div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Saturadas vs holgadas</h3>
+      <p class="cap">Cada punto es una línea. <b>Eje horizontal:</b> ocupación real de las Sem 37–45 (lo que pasó). <b>Eje vertical:</b> uso que proyecta el plan para las próximas 4 semanas (lo que viene). <b>Zona roja</b> (arriba a la derecha): líneas que vienen saturadas y seguirán saturadas. <b>Zona verde</b> (abajo a la izquierda): holgadas en ambos períodos. Arriba a la izquierda quedan las líneas que tenían holgura y a las que el plan les sube la carga (Doypack 3, Doypack 2, L1Pet).</p>
+      <div id="ch-scatter"></div>
+    </div>
+    <div class="card">
+      <h3>L1Pet LV con bitácora</h3>
+      <p class="cap">Única línea con registro de detenciones (informe EV-RG-SGI-54 + carga en la app).</p>
+      <div id="ch-l1"></div>
+      <p style="font-size:12.5px;margin:8px 0 0">Corriendo, la línea rinde el <b>85%</b> de su velocidad nominal; la velocidad no es el problema. Con ≈2,7 h diarias de detención sobre un turno de 9 h, la capacidad efectiva ronda 6,3 h/día: eso explica la mayor parte de la distancia entre 47% y 85%.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== PARÁMETROS ===================== -->
+<section class="panel" id="p-param">
+  <h2>Parámetros a analizar</h2>
+  <p class="lead">Ordenados por efecto en evitar quiebres. Son <b>propuestas para analizar con Producción</b>, no cambios a aplicar: ninguna se recomienda si sube el riesgo de quiebre de otro SKU. El batch de 4 h es solo una referencia.</p>
+
+  <div class="card rec">
+    <h3><span class="pri a">Prioridad alta</span>1. Capacidad nominal de las líneas de salsas</h3>
+    <p class="cap">Todas parametrizadas a 1 turno, 5 días. El plan ve menos capacidad de la que demuestran.</p>
+    <div class="scroll"><table id="t-capnom"></table></div>
+    <ul>
+      <li><b>Lectura:</b> lo más probable es que la sobre-capacidad venga de extensiones de turno y de producción en fines de semana o festivos (ver Ocupación). En Sachetera 4P, la producción real fue 182% y 143% de su capacidad nominal en las Sem 44 y 45, con 4 días de fin de semana trabajados, incluido el festivo del 01-11.</li>
+      <li><b>Analizar:</b> si las extensiones y los fines de semana son habituales, reflejarlos en <code>turnos_dia</code> o <code>dias_semana</code>; si son puntuales, mantener el parámetro y registrarlos en la bitácora. Confirmar también la velocidad (<code>velocidad_u_hr</code>).</li>
+      <li><b>Efecto esperado:</b> con la capacidad real, el solver adelanta las OF y el quiebre de Mayonesa 300x8 debería salir del plan.</li>
+      <li><b>Cuidado:</b> usar la capacidad que la línea sostiene en forma estable (promedio de las mejores semanas), no el máximo de una semana.</li>
+    </ul>
+  </div>
+
+  <div class="card rec">
+    <h3><span class="pri a">Prioridad alta</span>2. Batch mínimo en Doypack 1–4 y Sachetera</h3>
+    <p class="cap">El batch mínimo equivale a un día completo de línea: cada SKU bloquea el día entero. Con más SKU que días hábiles por semana, la línea no alcanza a rotar aunque tenga horas libres. Y las órdenes reales son, en muchos casos, menores a ese mínimo.</p>
+    <div class="scroll"><table>
+      <tr><th>Línea</th><th class="num">SKU en la línea</th><th class="num">Batch mínimo</th><th class="num">Turno</th><th class="num">Uso proyectado</th><th>Quiebres proyectados</th></tr>
+      <tr><td><b>Doypack</b></td><td class="num">10</td><td class="num">4,6–7,4 h</td><td class="num">8 h</td><td class="num">89%</td><td>2 · BBQ Vintage 24x250; Mostaza Tottus (MTO)</td></tr>
+      <tr><td><b>Doypack 2</b></td><td class="num">6</td><td class="num">7,9 h</td><td class="num">8 h</td><td class="num">80%</td><td>2 · Mostaza Cuisine &amp; Co 12x500; Mostaza Traverso 12x500</td></tr>
+      <tr><td><b>Doypack 3</b></td><td class="num">9</td><td class="num">7,7–7,9 h</td><td class="num">8 h</td><td class="num">85%</td><td>1 · Mostaza Suave Vintage 10x450</td></tr>
+      <tr><td><b>Doypack 4</b></td><td class="num">3</td><td class="num">9,0 h</td><td class="num">9 h</td><td class="num">70%</td><td>–</td></tr>
+      <tr><td><b>Sachetera</b></td><td class="num">3</td><td class="num">9,0 h</td><td class="num">9 h</td><td class="num">95%</td><td>1 · Ketchup 10x1000 bolsa</td></tr>
+    </table></div>
+    <ul>
+      <li><b>Órdenes reales:</b> en las Sem 37–45, en 39 de 80 semanas-SKU con producción, lo producido por OF fue menor al batch mínimo. En Doypack 3 la mediana fue el 79% del mínimo; en Doypack 4, el 90%.</li>
+      <li><b>Analizar:</b> bajar <code>batch_min_u</code> al mínimo técnico de cada SKU, a definir con Producción.</li>
+      <li>Es la dirección opuesta a la referencia de 4 h: aquí el batch es demasiado grande para la cantidad de SKU que comparte cada línea.</li>
+      <li><b>Revisar junto con el punto 1:</b> si Doypack o Sachetera trabajan dos turnos, un batch de "un día" en la app equivale a medio día real.</li>
+    </ul>
+  </div>
+
+  <div class="card rec">
+    <h3><span class="pri a">Prioridad alta</span>3. Cap. bodega menor que batch mínimo + stock de seguridad</h3>
+    <p class="cap">El solver no puede cumplir las dos restricciones a la vez. Barra = cap. bodega actual; marca = lo que necesita (batch mín. + SS), en unidades.</p>
+    <div id="ch-capb"></div>
+    <ul><li><b>Analizar:</b> subir <code>cap_bodega_u</code> al menos a batch mínimo + SS, con margen, o revisar el <code>ss_dias</code>. SS calculado con la demanda proyectada de las próximas 4 semanas.</li></ul>
+  </div>
+
+  <div class="card rec">
+    <h3><span class="pri ma">Prioridad media-alta</span>4. Batch mínimo en L6Vidrio: parámetro vs realidad</h3>
+    <p class="cap">La línea está al 91% de uso proyectado. El parámetro de batch mínimo (750 u = 0,75 h de línea) es muy inferior a lo que la planta realmente produce por OF, y el plan lo aprovecha: en las próximas 4 semanas propone 11 OF de menos de 1 h.</p>
+    <div class="scroll"><table>
+      <tr><th>SKU</th><th>Producto</th><th class="num">Parámetro: batch mín.</th><th class="num">Real: OF en SAP Sem 37–45</th><th class="num">Real: tamaño prom. por OF</th><th class="num">Plan: tamaño prom. por OF (próx. 4 sem)</th><th class="num">Días bajo SS (de 28)</th></tr>
+      <tr><td>141033175</td><td>Salsa Soya Cuisine &amp; Co 12x500 vidrio</td><td class="num">0,75 h</td><td class="num">8</td><td class="num">3,9 h</td><td class="num">3,3 h</td><td class="num"><b>24</b></td></tr>
+      <tr><td>113110175</td><td>Vinagre de Manzana sin Filtrar 12x500</td><td class="num">0,75 h</td><td class="num">3</td><td class="num">5,8 h</td><td class="num">4,5 h</td><td class="num"><b>20</b></td></tr>
+      <tr><td>151010175</td><td>Esencia Vainilla Traverso 12x500 PET</td><td class="num">0,75 h</td><td class="num">2</td><td class="num">7,6 h</td><td class="num">3,7 h</td><td class="num"><b>24</b></td></tr>
+      <tr><td>115014175</td><td>Aceto Balsámico Imperatore 12x500</td><td class="num">0,75 h</td><td class="num">7</td><td class="num">3,8 h</td><td class="num">2,4 h</td><td class="num"><b>24</b></td></tr>
+      <tr><td>115014150</td><td>Aceto Balsámico Real Imperatore 12x250</td><td class="num">0,75 h</td><td class="num">3</td><td class="num">6,6 h</td><td class="num">2,0 h</td><td class="num"><b>25</b></td></tr>
+      <tr><td>141010176</td><td>Salsa Soya Traverso 12x500 PET</td><td class="num">0,75 h</td><td class="num">6</td><td class="num">6,1 h</td><td class="num">4,1 h</td><td class="num">–</td></tr>
+      <tr><td>115014340</td><td>Aceto Balsámico Imperatore 6x500</td><td class="num">0,90 h</td><td class="num">6</td><td class="num">3,6 h</td><td class="num">4,1 h</td><td class="num">–</td></tr>
+    </table></div>
+    <ul>
+      <li><b>Realidad:</b> las OF de SAP de estos SKU en las Sem 37–45 fueron de 3,6 a 7,6 h de línea. La planta no fabrica batches de 0,75 h.</li>
+      <li><b>Parámetro y plan:</b> el batch mínimo de 0,75 h le permite al sistema planificar OF más cortas que las reales (promedio de 2,0 a 4,5 h, con 11 OF de menos de 1 h). Cada OF corta suma un cambio de SKU que la línea, al 91%, no tiene margen para absorber.</li>
+      <li><b>Analizar:</b> subir el batch mínimo a un valor cercano a lo que la planta ya hace (≈3–4 h, unas 3.000–4.000 u). El plan quedaría más realista sin cambiar la práctica de la planta. En todos estos SKU, un batch de 4 h cabe en la cap. bodega actual, salvo Soya 12x500 y Aceto 6x500, que primero requieren el punto 3.</li>
+      <li><b>No cambiar</b> los SKU de baja rotación de L6Vidrio (ajíes extracto, condimento balsámico, vinagre de arroz): un batch de 4 h cubriría de 54 a más de 1.000 días de demanda.</li>
+    </ul>
+  </div>
+
+  <div class="card rec">
+    <h3><span class="pri m">Prioridad media</span>5. Velocidad y setup de L1Pet LV</h3>
+    <p class="cap">L1Pet LV tiene holgura (50% proyectado): estos ajustes no cambian el riesgo de quiebre, acercan el plan a lo que la línea logra.</p>
+    <div id="ch-l1vel"></div>
+    <ul>
+      <li><b>Velocidad:</b> el factor hoy depende solo del cc (1,0 / 0,8). Analizar <code>factor_velocidad</code> por formato de caja según el informe de Control de Procesos.</li>
+      <li><b>Setup:</b> <code>t_cambio_hrs</code> = 0,5 h en los 242 SKU activos. En L1Pet LV el cambio de producto toma 15–45 min según la pinta y el de botella 150–200 min.</li>
+      <li><b>Detenciones fijas:</b> arranque 27 min + film 30 min + margen no programadas 29 min ≈ 86 min/día. Analizar descontarlos de <code>horas_turno</code> (9 h → ≈7,6 h).</li>
+    </ul>
+  </div>
+
+  <div class="card rec">
+    <h3><span class="pri k">Mantener</span>6. Batches cortos en líneas holgadas</h3>
+    <p style="margin:6px 0 0;font-size:13px">L1Pet LV (0,9 h por OF), L4Pet (0,7 h) y L1Pet (1,4 h) tienen batches cortos, pero les sobra capacidad (36–60% proyectado). Ahí un batch corto da flexibilidad y protege contra quiebres: <b>no se recomienda cambiarlos</b>. Si se corrige el setup de L1Pet LV (punto 5), el solver consolidará las corridas.</p>
+  </div>
+</section>
+
+<!-- ===================== NOTAS ===================== -->
+<section class="panel" id="p-notas">
+  <h2>Datos y definiciones</h2>
+  <div class="card">
+    <h3>Calidad de datos y alcance</h3>
+    <table>
+      <tr><th>Tema</th><th>Situación</th><th>Efecto en este informe</th></tr>
+      <tr><td>Bitácora</td><td>Solo L1Pet LV, con registro en el 58% de los días; el 67% de sus registros no indica máquina.</td><td>En las otras 17 líneas, toda desviación queda por explicar.</td></tr>
+      <tr><td>Feriados</td><td>Las horas nominales cuentan como hábiles el viernes 18-09 (Fiestas Patrias, Sem 38) y el lunes 12-10 (Encuentro de Dos Mundos, Sem 42). Los festivos del 19-09, 31-10 y 01-11 cayeron en fin de semana.</td><td>Sem 38 y 42 tienen 4 días hábiles y no 5: su ocupación aparece unos 20 puntos más baja de lo que fue.</td></tr>
+      <tr><td>Setup</td><td><code>t_cambio_hrs</code> = 0,5 h en todos los SKU activos.</td><td>El plan no distingue un cambio de producto de un cambio de formato.</td></tr>
+      <tr><td>Graneles</td><td><code>mrp_graneles</code> no registra el tamaño de estanque.</td><td>Toda propuesta de batch en SKU con granel debe validarse contra el estanque.</td></tr>
+      <tr><td>Terminal Report</td><td>15 SKU con recepción pendiente del 09-11.</td><td>Parte de los quiebres de los primeros días puede no ser real.</td></tr>
+    </table>
+    <p class="cap" style="margin-top:10px">Los KPIs consideran solo SKU del catálogo de planificación. Importados con etiquetado (Kikkoman, Melitta), maquila (mayonesas salvo la 300x8) y armado se informan aparte. Semanas ISO (lunes a domingo).</p>
+  </div>
+  <div class="card">
+    <h3>Definiciones</h3>
+    <table>
+      <tr><th>Indicador</th><th>Cálculo</th></tr>
+      <tr><td>Cumplimiento</td><td>Cajas reales (Terminal Report) ÷ cajas programadas en SAP. Cada OF se asigna a la semana del centro de su tramo planificado.</td></tr>
+      <tr><td>Ocupación real</td><td>Horas-equivalentes producidas ÷ horas nominales. Horas-equivalentes = unidades ÷ (velocidad u/h × factor de velocidad del SKU).</td></tr>
+      <tr><td>Ocupación programada</td><td>Horas-equivalentes programadas en SAP ÷ horas nominales.</td></tr>
+      <tr><td>Eficiencia</td><td>Horas-equivalentes producidas ÷ horas de funcionamiento, solo en días con registro en la bitácora.</td></tr>
+      <tr><td>Uso proyectado</td><td>Uso diario de línea del plan vigente, promedio de los días hábiles del 10-11 al 07-12.</td></tr>
+      <tr><td>Adopción app</td><td>Cajas SAP de SKU que también tienen OF aprobada en la app ÷ cajas programadas en SAP.</td></tr>
+    </table>
+    <p class="cap" style="margin-top:10px">Fuentes: plan vigente 331 (10-11-2026), <code>mrp_of_sap</code> (SAP, Terminal Report), bitácora de eventos por línea, parámetros de la app de planificación e informe <i>Análisis de detenciones de Línea 1 · 2026</i> (Control de Procesos, registro EV-RG-SGI-54, 06-11-2026).</p>
+  </div>
+</section>
+
+<footer>Informe generado el 10-11-2026 por el módulo de evaluación de la operación · Sistema de Planificación de Producción · Traverso S.A. Las cifras provienen del motor de KPIs y del plan vigente; el análisis y las recomendaciones son asistidos por IA y deben validarse con Producción.</footer>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+const D = {"meta": {"periodo": "Sem 37 a 45 · 07-09 al 08-11-2026", "generado": "10-11-2026", "plan": "Plan vigente 331 · 10-11-2026 07:07", "horizonte": "10-11 al 07-12-2026"}, "semanas": [{"sem": 37, "ini": "07/09", "app": 35594.0, "sap": 63532.0, "real": 54889.0, "cumpl": 0.8639583202165838, "ocR": 0.6434358974358975, "ocP": 0.7685}, {"sem": 38, "ini": "14/09", "app": 25102.0, "sap": 35629.0, "real": 26968.0, "cumpl": 0.7569115046731595, "ocR": 0.4908717948717949, "ocP": 0.6047564102564102}, {"sem": 39, "ini": "21/09", "app": 55871.0, "sap": 54165.0, "real": 54566.0, "cumpl": 1.0074033047170683, "ocR": 0.6586025641025641, "ocP": 0.6634102564102564}, {"sem": 40, "ini": "28/09", "app": 59070.0, "sap": 68110.0, "real": 51401.0, "cumpl": 0.7546762589928058, "ocR": 0.6291794871794871, "ocP": 0.7451923076923077}, {"sem": 41, "ini": "05/10", "app": 47810.0, "sap": 50521.0, "real": 50405.0, "cumpl": 0.9977039251004532, "ocR": 0.5427307692307692, "ocP": 0.5775128205128205}, {"sem": 42, "ini": "12/10", "app": 17610.0, "sap": 27400.0, "real": 25285.0, "cumpl": 0.9228102189781022, "ocR": 0.21262820512820513, "ocP": 0.22457692307692306}, {"sem": 43, "ini": "19/10", "app": 32900.0, "sap": 36189.0, "real": 31543.0, "cumpl": 0.871618447594573, "ocR": 0.3619102564102564, "ocP": 0.44046153846153846}, {"sem": 44, "ini": "26/10", "app": 37351.0, "sap": 41846.0, "real": 39231.0, "cumpl": 0.9375089614300053, "ocR": 0.4363076923076923, "ocP": 0.5319871794871794}, {"sem": 45, "ini": "02/11", "app": 55460.0, "sap": 52703.0, "real": 46705.0, "cumpl": 0.8861924368631767, "ocR": 0.46744871794871795, "ocP": 0.5649102564102564}], "kpi": {"sap": 430095.0, "real": 380993.0, "app": 366768.0, "cumpl": 0.8858, "adop": 0.9815, "ocR": 0.4937, "ocP": 0.569, "quiebres": 23, "bajo_ss": 134, "lineas_sat": 3, "faltantes_hoy": 5, "faltantes_cj": 110.0}, "lineas": [{"linea": "Sachetera", "cat": "SALSAS", "cumpl_sem": [0.7980634077776042, 0.806254029658285, 0.9688834655277608, 0.9502255857953719, 1.0171612046058458, 0.8207461328480437, 0.8376816995900112, 0.849004424778761, 1.0716023635731664], "oc_sem": [1.0758, 0.5265, 1.0029, 1.3745, 1.9341, 0.1899, 0.9463, 0.6463, 1.2981], "ocR": 0.9993333333333334, "ocP": 1.0797777777777777, "cumpl": 0.9255632582322357, "cumpl4": 0.9240922008209662, "cumpl_ini": 0.8878035034988024, "fut": 0.95, "d95": 19, "q": 1, "ss": 3, "max_oc": 1.9341, "top3": 1.5355666666666667, "param": "1×9 h×5 d · 1.056 u/h"}, {"linea": "L6Vidrio", "cat": "LÍQUIDOS", "cumpl_sem": [0.9986608637428859, 0.621978021978022, 1.2102759276879163, 0.895405669599218, 0.275, 0.9717925386715196, 1.0262669962917181, 0.6590257879656161, 0.7219524661385126], "oc_sem": [0.7155, 0.3019, 0.7079, 0.7888, 0.1085, 0.2848, 0.7477, 0.5107, 0.7533], "ocR": 0.5465679012345679, "ocP": 0.6521975308641975, "cumpl": 0.8411207006504825, "cumpl4": 0.8201086956521739, "cumpl_ini": 0.9383692391600763, "fut": 0.9096000000000001, "d95": 17, "q": 5, "ss": 14, "max_oc": 0.7888, "top3": 0.7632666666666666, "param": "1×9 h×5 d · 1.000 u/h"}, {"linea": "Doypack", "cat": "SALSAS", "cumpl_sem": [0.7595262615859938, 1.035446829755367, 0.9510516252390058, 0.6889864617636298, 1.5997045790251108, null, 1.0, 0.25643564356435644, 1.6444444444444444], "oc_sem": [0.8726, 1.4807, 1.7989, 1.3948, 1.5822, 0, 0.0769, 0.1602, 0.3067], "ocR": 0.8525555555555554, "ocP": 0.944888888888889, "cumpl": 0.9058132804101546, "cumpl4": 0.6009681881051175, "cumpl_ini": 0.8521467771440869, "fut": 0.8892, "d95": 12, "q": 2, "ss": 10, "max_oc": 1.7989, "top3": 1.6205999999999998, "param": "1×8 h×5 d · 810 u/h"}, {"linea": "Doypack 3", "cat": "SALSAS", "cumpl_sem": [0.8293577981651377, 1.0, 1.0, 0.9990034877927254, 0.2850678733031674, null, 1.099304865938431, 1.0, null], "oc_sem": [0.6139, 0.2013, 0.2899, 0.6715, 0.1958, 0.3639, 0.3571, 0.2, 0], "ocR": 0.3214444444444444, "ocP": 0.3422777777777778, "cumpl": 0.938654282319905, "cumpl4": 1.7547633681622619, "cumpl_ini": 0.9337231968810916, "fut": 0.8469, "d95": 17, "q": 1, "ss": 7, "max_oc": 0.6715, "top3": 0.5497666666666666, "param": "1×8 h×5 d · 775 u/h"}, {"linea": "Sachetera 1P", "cat": "SALSAS", "cumpl_sem": [0.0, 0.908, 0.9715099715099715, 1.245, null, null, 1.0, 0.23666666666666666, 1.323943661971831], "oc_sem": [0, 1.5764, 1.184, 0.6576, 0, 0, 0.7167, 0.2465, 0.3264], "ocR": 0.5231111111111111, "ocP": 0.6359722222222222, "cumpl": 0.8322615219721329, "cumpl4": 0.7118881118881119, "cumpl_ini": 0.9070373588184187, "fut": 0.8020499999999999, "d95": 12, "q": 0, "ss": 2, "max_oc": 1.5764, "top3": 1.1590333333333334, "param": "1×8 h×5 d · 3.600 u/h"}, {"linea": "Sachetera 4P", "cat": "SALSAS", "cumpl_sem": [0.9760765550239234, 0.8604166666666667, 0.821882951653944, 0.7682857142857142, 0.9965957446808511, 0.3282997762863535, 0.3311408482649127, 1.4569748797434527, 0.5872474057891862], "oc_sem": [0.952, 0.6883, 0.969, 0.8963, 0.7807, 0.1957, 0.4867, 1.8173, 1.4337], "ocR": 0.9133055555555556, "ocP": 1.1842777777777778, "cumpl": 0.7711721290968226, "cumpl4": 0.6835428372820483, "cumpl_ini": 0.85068349106204, "fut": 0.79955, "d95": 16, "q": 1, "ss": 4, "max_oc": 1.8173, "top3": 1.4066666666666665, "param": "1×8 h×5 d · 22.500 u/h"}, {"linea": "Doypack 2", "cat": "SALSAS", "cumpl_sem": [0.8463317911434236, 0.7270375161707633, 1.0, 0.9651162790697675, 1.0, null, 0.9090909090909091, 1.0, 1.0], "oc_sem": [1.1382, 0.4996, 0.3084, 0.7378, 0.4373, 0, 0.3289, 0.3667, 0.2782], "ocR": 0.4550277777777778, "ocP": 0.5054444444444445, "cumpl": 0.9002442598925257, "cumpl4": 0.9673289183222958, "cumpl_ini": 0.8644431720584025, "fut": 0.79675, "d95": 16, "q": 2, "ss": 4, "max_oc": 1.1382, "top3": 0.7918666666666666, "param": "1×8 h×5 d · 675 u/h"}, {"linea": "Miele LV", "cat": "ENCURTIDOS", "cumpl_sem": [0.5878674171357098, 0.9260377358490566, 0.9007317073170732, 0.6428571428571429, 1.0202294685990339, 1.446524064171123, 0.8584415584415584, 0.7284845650140318, 0.7215538847117795], "oc_sem": [0.7451, 0.6875, 1.0554, 0.6315, 1.1127, 0.7301, 0.7834, 0.9378, 0.7453], "ocR": 0.8254074074074075, "ocP": 1.0115061728395063, "cumpl": 0.8204618443187032, "cumpl4": 0.8582868582868582, "cumpl_ini": 0.743131778917971, "fut": 0.7707999999999999, "d95": 12, "q": 3, "ss": 11, "max_oc": 1.1127, "top3": 1.0353, "param": "1×9 h×5 d · 1.333 u/h"}, {"linea": "Doypack 4", "cat": "SALSAS", "cumpl_sem": [0.7217555288873649, 0.7308143628256278, 1.2962494732406238, 0.8975555555555556, 0.72875, null, null, 1.3944444444444444, 0.6178184845961698], "oc_sem": [0.9356, 0.692, 0.6836, 0.8976, 0.1296, 0, 0, 0.2789, 0.4947], "ocR": 0.4568641975308642, "ocP": 0.5498765432098766, "cumpl": 0.8308486753480018, "cumpl4": 0.773040195425272, "cumpl_ini": 0.8510048918488832, "fut": 0.69735, "d95": 14, "q": 0, "ss": 3, "max_oc": 0.9356, "top3": 0.8417333333333333, "param": "1×9 h×5 d · 1.200 u/h"}, {"linea": "L1Pet", "cat": "LÍQUIDOS", "cumpl_sem": [0.7544444444444445, null, 0.8333333333333334, 0.8022831050228311, null, 0.6415384615384615, 2.6209476309226933, 1.0, 0.7665706051873199], "oc_sem": [0.1006, 0, 0.1135, 0.1729, 0, 0.1749, 0.0883, 0.127, 0.1897], "ocR": 0.1074320987654321, "ocP": 0.12271604938271606, "cumpl": 0.8413064361191163, "cumpl4": 0.8707070707070707, "cumpl_ini": 0.8022371364653244, "fut": 0.5959, "d95": 3, "q": 0, "ss": 4, "max_oc": 0.1897, "top3": 0.17916666666666667, "param": "1×9 h×5 d · 3.000 u/h"}, {"linea": "L1Pet LV", "cat": "LÍQUIDOS", "cumpl_sem": [0.9289201608271108, 0.918, 0.9960588235294118, 0.5554330775427142, 1.330073897141151, 0.8989405052974735, 1.0269419862340217, 1.1738670055061415, 1.0104950495049505], "oc_sem": [0.5394, 0.0125, 0.6036, 0.6614, 0.7421, 0.4882, 0.2134, 0.4271, 0.5511], "ocR": 0.47096296296296297, "ocP": 0.5101234567901235, "cumpl": 0.941906280352594, "cumpl4": 1.0201856490349197, "cumpl_ini": 0.7894392438425883, "fut": 0.4975, "d95": 0, "q": 0, "ss": 22, "max_oc": 0.7421, "top3": 0.6690333333333333, "param": "1×9 h×5 d · 12.222 u/h"}, {"linea": "L2Pet", "cat": "LÍQUIDOS", "cumpl_sem": [2.2153284671532845, 0.97625, 0.9868972746331237, 0.9656666666666667, 0.9901719901719902, 0.9833333333333333, 0.9879319802523313, 0.5776655776655777, 1.626111111111111], "oc_sem": [0.3646, 0.1564, 0.377, 0.58, 0.4034, 0.3544, 0.3606, 0.3894, 0.586], "ocR": 0.39686419753086416, "ocP": 0.386074074074074, "cumpl": 1.027945836934601, "cumpl4": 0.960523321956769, "cumpl_ini": 1.1304747320061255, "fut": 0.4964, "d95": 3, "q": 3, "ss": 12, "max_oc": 0.586, "top3": 0.5231333333333333, "param": "1×9 h×5 d · 444 u/h"}, {"linea": "L4Pet", "cat": "LÍQUIDOS", "cumpl_sem": [1.0, 0.3606112054329372, 1.0423076923076924, 0.9010526315789473, 0.9179907739620707, 0.8713105076741441, 0.8617482951022939, 0.9119537275064268, 0.7960027567195038], "oc_sem": [0.1756, 0.1517, 0.1448, 0.1589, 0.2916, 0.4492, 0.2257, 0.4512, 0.3046], "ocR": 0.2614567901234568, "ocP": 0.32812345679012345, "cumpl": 0.8150026566198135, "cumpl4": 0.8615774469433006, "cumpl_ini": 0.686152841280209, "fut": 0.36024999999999996, "d95": 1, "q": 0, "ss": 11, "max_oc": 0.4512, "top3": 0.40166666666666667, "param": "1×9 h×5 d · 3.733 u/h"}, {"linea": "C3Porrones", "cat": "SALSAS", "cumpl_sem": [0.9374883720930233, 0.6013274336283185, 1.0408455750627015, 0.8486842105263158, 0.7868217054263565, 1.0, 0.7340764331210191, 0.49731182795698925, 0.8223214285714285], "oc_sem": [1.1855, 0.6394, 0.6834, 0.8498, 0.5731, 0.0028, 0.3254, 0.1306, 0.2167], "ocR": 0.5118518518518519, "ocP": 0.6318271604938271, "cumpl": 0.8101365328920149, "cumpl4": 0.6948209099709584, "cumpl_ini": 0.8425215440916066, "fut": 0.30475, "d95": 4, "q": 4, "ss": 6, "max_oc": 1.1855, "top3": 0.9062333333333333, "param": "1×9 h×5 d · 2.267 u/h"}, {"linea": "Cramsa", "cat": "SALSAS", "cumpl_sem": [1.9072847682119205, 0.9033333333333333, 1.0, 1.0, 1.0, null, null, 1.0, 0.52], "oc_sem": [0.384, 0.1807, 0.3767, 0.202, 0.204, 0, 0, 0.2, 0.104], "ocR": 0.1835, "ocP": 0.176, "cumpl": 1.0425084175084176, "cumpl4": 0.76, "cumpl_ini": 1.1666666666666667, "fut": 0.3, "d95": 6, "q": 0, "ss": 3, "max_oc": 0.384, "top3": 0.32156666666666667, "param": "1×8 h×5 d · 4.050 u/h"}, {"linea": "L2Pet LV", "cat": "LÍQUIDOS", "cumpl_sem": [1.030968247745982, 0.849942726231386, 1.0445, 1.0991044776119403, 1.094507669470559, 0.9500185116623473, 0.8398967075532602, 0.9123121776183001, 1.0334386519220642], "oc_sem": [1.0531, 0.5942, 0.8364, 0.7371, 0.8857, 0.5137, 0.5209, 0.8144, 0.7858], "ocR": 0.7490617283950617, "ocP": 0.7572345679012346, "cumpl": 0.9891604488572939, "cumpl4": 0.936326124075128, "cumpl_ini": 1.0090316106372303, "fut": 0.2566, "d95": 0, "q": 1, "ss": 7, "max_oc": 1.0531, "top3": 0.9250666666666666, "param": "1×9 h×5 d · 444 u/h"}, {"linea": "L3Pet", "cat": "LÍQUIDOS", "cumpl_sem": [0.706081081081081, 0.0, null, 0.0, 0.305052063247204, null, 1.1932432432432432, 0.9684684684684685, null], "oc_sem": [0.1858, 0, 0.1941, 0, 0.1406, 0, 0.314, 0.1911, 0], "ocR": 0.1139753086419753, "ocP": 0.15355555555555556, "cumpl": 0.7420890146642655, "cumpl4": 1.0969111969111969, "cumpl_ini": 0.8247780779621767, "fut": 0.21994999999999998, "d95": 0, "q": 0, "ss": 9, "max_oc": 0.314, "top3": 0.23306666666666667, "param": "1×9 h×5 d · 1.500 u/h"}, {"linea": "Sachetera LV", "cat": "SALSAS", "cumpl_sem": [0.6175555555555555, 1.0363219895287958, 0.855945945945946, 0.0, 0.6711111111111111, null, null, null, null], "oc_sem": [0.5559, 0.6335, 0.6335, 0, 0.2416, 0, 0, 0, 0], "ocR": 0.22938271604938273, "ocP": 0.31237037037037035, "cumpl": 0.7342771770062607, "cumpl4": null, "cumpl_ini": 0.7435541775456919, "fut": 0.20984999999999998, "d95": 0, "q": 0, "ss": 2, "max_oc": 0.6335, "top3": 0.6076333333333332, "param": "1×9 h×5 d · 1.111 u/h"}], "quiebres": [{"sku": "260033175", "desc": "MOSTAZA CUISINE &CO 12x500 DOYPACK", "linea": "Doypack 2", "fut": 0.79675, "fecha": "2026-11-10", "dia": 0, "dias": 11, "def_cj": 1843, "disp_cj": -1428, "dem_cj": 24.5, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "210038250", "desc": "AJI CREMA NUESTRA COCINA 24x240 PET", "linea": "C3Porrones", "fut": 0.30475, "fecha": "2026-11-10", "dia": 0, "dias": 10, "def_cj": 1469, "disp_cj": -801, "dem_cj": 0.0, "mto": true, "rp": false, "falt": null, "tipo": "MTO"}, {"sku": "312010235", "desc": "ACEITUNA HUASCO TRAVERSO 24x200 BOTTOMBAG", "linea": "Miele LV", "fut": 0.7707999999999999, "fecha": "2026-11-10", "dia": 0, "dias": 8, "def_cj": 1372, "disp_cj": -1315, "dem_cj": 14.5, "mto": false, "rp": true, "falt": 2.0, "tipo": "Inmediato"}, {"sku": "260010265", "desc": "MOSTAZA TRAVERSO 24x350 PET", "linea": "C3Porrones", "fut": 0.30475, "fecha": "2026-11-10", "dia": 0, "dias": 3, "def_cj": 145, "disp_cj": 3, "dem_cj": 45.8, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "260033250", "desc": "MOSTAZA CUISINE &CO 24x240 PET", "linea": "C3Porrones", "fut": 0.30475, "fecha": "2026-11-10", "dia": 0, "dias": 7, "def_cj": 139, "disp_cj": 7, "dem_cj": 11.4, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "141010176", "desc": "SALSA SOYA TRAVERSO 12x500 PET", "linea": "L6Vidrio", "fut": 0.9096000000000001, "fecha": "2026-11-10", "dia": 0, "dias": 2, "def_cj": 134, "disp_cj": 29, "dem_cj": 65.2, "mto": false, "rp": true, "falt": null, "tipo": "Inmediato"}, {"sku": "260030255", "desc": "MOSTAZA TOTTUS 24x250 DOYPACK", "linea": "Doypack", "fut": 0.8892, "fecha": "2026-11-11", "dia": 1, "dias": 1, "def_cj": 104, "disp_cj": 0, "dem_cj": 0.0, "mto": true, "rp": false, "falt": null, "tipo": "MTO"}, {"sku": "341030235", "desc": "PEPINILLOS EXTRA TOTTUS 24x200 BOLSA", "linea": "Miele LV", "fut": 0.7707999999999999, "fecha": "2026-11-11", "dia": 1, "dias": 9, "def_cj": 97, "disp_cj": 0, "dem_cj": 0.0, "mto": true, "rp": false, "falt": null, "tipo": "MTO"}, {"sku": "311030235", "desc": "ACEITUNA AZAPA TOTTUS 24x200 BOLSA", "linea": "Miele LV", "fut": 0.7707999999999999, "fecha": "2026-11-11", "dia": 1, "dias": 7, "def_cj": 81, "disp_cj": 0, "dem_cj": 0.0, "mto": true, "rp": false, "falt": null, "tipo": "MTO"}, {"sku": "141010600", "desc": "SALSA SOYA TRAVERSO 4x3000 PET", "linea": "L2Pet", "fut": 0.4964, "fecha": "2026-11-11", "dia": 1, "dias": 2, "def_cj": 5, "disp_cj": 9, "dem_cj": 5.1, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "141033230", "desc": "SALSA SOYA CUISINE &CO 24x187,5 VIDRIO", "linea": "L6Vidrio", "fut": 0.9096000000000001, "fecha": "2026-11-11", "dia": 1, "dias": 1, "def_cj": 1, "disp_cj": 29, "dem_cj": 8.4, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "114010600", "desc": "VINAGRE INCOLORO TRAVERSO 4x3000 PET", "linea": "L2Pet", "fut": 0.4964, "fecha": "2026-11-12", "dia": 2, "dias": 1, "def_cj": 166, "disp_cj": 599, "dem_cj": 121.2, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "115014340", "desc": "ACETO BALSAMICO IMPERATORE 6x500 VIDRIO", "linea": "L6Vidrio", "fut": 0.9096000000000001, "fecha": "2026-11-12", "dia": 2, "dias": 1, "def_cj": 61, "disp_cj": 246, "dem_cj": 74.2, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "115014175", "desc": "ACETO BALSAMICO IMPERATORE 12x500 VIDRIO", "linea": "L6Vidrio", "fut": 0.9096000000000001, "fecha": "2026-11-12", "dia": 2, "dias": 1, "def_cj": 13, "disp_cj": 133, "dem_cj": 34.6, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "141010320", "desc": "SALSA SOYA TRAVERSO 4x5000 PET", "linea": "L2Pet", "fut": 0.4964, "fecha": "2026-11-13", "dia": 3, "dias": 1, "def_cj": 19, "disp_cj": 246, "dem_cj": 57.8, "mto": false, "rp": false, "falt": null, "tipo": "Inmediato"}, {"sku": "261010110", "desc": "MOSTAZA SUAVE VINTAGE TRAVERSO 10x450 PET", "linea": "Doypack 3", "fut": 0.8469, "fecha": "2026-11-16", "dia": 6, "dias": 2, "def_cj": 145, "disp_cj": 543, "dem_cj": 86.9, "mto": false, "rp": false, "falt": null, "tipo": "Capacidad"}, {"sku": "130613320", "desc": "VINAGRE MANZANA HIGUERAS 4x5000 PET", "linea": "L2Pet LV", "fut": 0.2566, "fecha": "2026-11-16", "dia": 6, "dias": 1, "def_cj": 4, "disp_cj": 60, "dem_cj": 11.2, "mto": false, "rp": true, "falt": null, "tipo": "Capacidad"}, {"sku": "250033250", "desc": "KETCHUP CUISINE &CO 24x240 PET", "linea": "C3Porrones", "fut": 0.30475, "fecha": "2026-11-17", "dia": 7, "dias": 7, "def_cj": 34, "disp_cj": 60, "dem_cj": 5.8, "mto": false, "rp": false, "falt": null, "tipo": "Capacidad"}, {"sku": "119510595", "desc": "VINAGRE DE ARROZ TRAVERSO 12X300 PET", "linea": "L6Vidrio", "fut": 0.9096000000000001, "fecha": "2026-11-17", "dia": 7, "dias": 1, "def_cj": 0, "disp_cj": 5, "dem_cj": 0.3, "mto": false, "rp": false, "falt": null, "tipo": "Capacidad"}, {"sku": "270010495", "desc": "MAYONESA TRAVERSO 300x8 SACHET", "linea": "Sachetera 4P", "fut": 0.79955, "fecha": "2026-11-30", "dia": 20, "dias": 5, "def_cj": 314, "disp_cj": 701, "dem_cj": 208.7, "mto": false, "rp": false, "falt": null, "tipo": "Capacidad"}, {"sku": "260010175", "desc": "MOSTAZA TRAVERSO 12x500 DOYPACK", "linea": "Doypack 2", "fut": 0.79675, "fecha": "2026-11-30", "dia": 20, "dias": 1, "def_cj": 75, "disp_cj": 1296, "dem_cj": 63.2, "mto": false, "rp": false, "falt": null, "tipo": "Capacidad"}, {"sku": "251010255", "desc": "SALSA BARBECUE VINTAGE TRAVERSO 24X250 DOYPACK", "linea": "Doypack", "fut": 0.8892, "fecha": "2026-12-04", "dia": 24, "dias": 4, "def_cj": 130, "disp_cj": 324, "dem_cj": 51.5, "mto": false, "rp": false, "falt": 4.0, "tipo": "Capacidad"}, {"sku": "250010105", "desc": "KETCHUP TRAVERSO 10x1000 BOLSA", "linea": "Sachetera", "fut": 0.95, "fecha": "2026-12-07", "dia": 27, "dias": 1, "def_cj": 399, "disp_cj": 1941, "dem_cj": 321.1, "mto": false, "rp": true, "falt": null, "tipo": "Capacidad"}], "faltantes": [{"sku": "250033175", "desc": "KETCHUP CUISINE &CO 12x500 DOYPACK", "cj": 76.0, "linea": "Doypack 2"}, {"sku": "250010100", "desc": "KETCHUP TRAVERSO 108x100 SACHET", "cj": 21.0, "linea": "Cramsa"}, {"sku": "260010100", "desc": "MOSTAZA TRAVERSO 108x100 SACHET", "cj": 7.0, "linea": "Cramsa"}, {"sku": "251010255", "desc": "SALSA BARBECUE VINTAGE TRAVERSO 24X250 DOYPACK", "cj": 4.0, "linea": "Doypack"}, {"sku": "312010235", "desc": "ACEITUNA HUASCO TRAVERSO 24x200 BOTTOMBAG", "cj": 2.0, "linea": "Miele LV"}], "desvios": [{"sku": "210010105", "desc": "AJI CREMA TRAVERSO 10x1000 BOLSA", "linea": "Sachetera LV", "app": 11900.0, "sap": 12956.0, "real": 8911.0, "cumpl": 0.6877894411855511, "wb": 3, "w": 5}, {"sku": "121010290", "desc": "JUGO LIMON TRAVERSO 30x500 PET", "linea": "L1Pet LV", "app": 9300.0, "sap": 15750.0, "real": 11785.0, "cumpl": 0.7482539682539683, "wb": 2, "w": 6}, {"sku": "141010255", "desc": "SALSA SOYA TRAVERSO 24x250 PET", "linea": "L4Pet", "app": 5450.0, "sap": 6650.0, "real": 3965.0, "cumpl": 0.5962406015037593, "wb": 2, "w": 5}, {"sku": "112010290", "desc": "VINAGRE ROSADO TRAVERSO 30x500 PET", "linea": "L1Pet LV", "app": 5000.0, "sap": 6771.0, "real": 4367.0, "cumpl": 0.6449564318416777, "wb": 1, "w": 4}, {"sku": "360010255", "desc": "SALSA AMERICANA TRAVERSO 24x200 BOTTOMBAG", "linea": "Miele LV", "app": 3850.0, "sap": 4950.0, "real": 2610.0, "cumpl": 0.5272727272727272, "wb": 4, "w": 8}, {"sku": "260010495", "desc": "MOSTAZA TRAVERSO 300x8 SACHET", "linea": "Sachetera 4P", "app": 5400.0, "sap": 7800.0, "real": 5576.0, "cumpl": 0.7148717948717949, "wb": 3, "w": 7}, {"sku": "270010495", "desc": "MAYONESA TRAVERSO 300x8 SACHET", "linea": "Sachetera 4P", "app": 5500.0, "sap": 8640.0, "real": 6539.0, "cumpl": 0.7568287037037037, "wb": 2, "w": 7}, {"sku": "260010105", "desc": "MOSTAZA TRAVERSO 10x1000 BOLSA", "linea": "Sachetera", "app": 31100.0, "sap": 26580.0, "real": 24634.0, "cumpl": 0.9267870579382995, "wb": 2, "w": 6}, {"sku": "250010495", "desc": "KETCHUP TRAVERSO 300x8 SACHET", "linea": "Sachetera 4P", "app": 6600.0, "sap": 8655.0, "real": 6883.0, "cumpl": 0.79526285384171, "wb": 2, "w": 6}, {"sku": "250010115", "desc": "KETCHUP TRAVERSO 12x1000 DOYPACK", "linea": "Doypack 4", "app": 6200.0, "sap": 6836.0, "real": 5097.0, "cumpl": 0.7456114686951434, "wb": 2, "w": 6}, {"sku": "112010115", "desc": "VINAGRE ROSADO TRAVERSO 12x1000 PET", "linea": "L1Pet LV", "app": 3800.0, "sap": 3800.0, "real": 2420.0, "cumpl": 0.6368421052631579, "wb": 1, "w": 3}, {"sku": "250010105", "desc": "KETCHUP TRAVERSO 10x1000 BOLSA", "linea": "Sachetera", "app": 12400.0, "sap": 16060.0, "real": 14764.0, "cumpl": 0.9193026151930261, "wb": 2, "w": 6}, {"sku": "330010325", "desc": "CHUCRUT TRAVERSO 6x1000 BOLSA", "linea": "Miele LV", "app": 3550.0, "sap": 4850.0, "real": 3557.0, "cumpl": 0.7334020618556701, "wb": 2, "w": 6}, {"sku": "260010265", "desc": "MOSTAZA TRAVERSO 24x350 PET", "linea": "C3Porrones", "app": 6050.0, "sap": 5584.0, "real": 4295.0, "cumpl": 0.7691618911174785, "wb": 1, "w": 4}, {"sku": "210010495", "desc": "AJI CREMA TRAVERSO 300x8 SACHET", "linea": "Sachetera 4P", "app": 4520.0, "sap": 6881.0, "real": 5661.0, "cumpl": 0.8227001889260281, "wb": 2, "w": 5}], "cap_bodega": [{"sku": "261010110", "desc": "MOSTAZA SUAVE VINTAGE TRAVERSO 10x450 PET", "linea": "Doypack 3", "cap": 18000, "need": 19190, "bmin": 6150, "ss": 13040, "q": true, "exb": 13}, {"sku": "115014340", "desc": "ACETO BALSAMICO IMPERATORE 6x500 VIDRIO", "linea": "L6Vidrio", "cap": 7200, "need": 7575, "bmin": 900, "ss": 6675, "q": true, "exb": 47}, {"sku": "141010176", "desc": "SALSA SOYA TRAVERSO 12x500 PET", "linea": "L6Vidrio", "cap": 12000, "need": 12477, "bmin": 750, "ss": 11727, "q": true, "exb": 32}, {"sku": "330010235", "desc": "CHUCRUT TRAVERSO 24x200 BOTTOMBAG", "linea": "Miele LV", "cap": 16008, "need": 19045, "bmin": 5200, "ss": 13845, "q": false, "exb": 0}, {"sku": "360010255", "desc": "SALSA AMERICANA TRAVERSO 24x200 BOTTOMBAG", "linea": "Miele LV", "cap": 16008, "need": 18276, "bmin": 5200, "ss": 13076, "q": false, "exb": 24}, {"sku": "250010110", "desc": "KETCHUP VINTAGE TRAVERSO 10x450 PET", "linea": "Doypack 3", "cap": 12400, "need": 13598, "bmin": 6150, "ss": 7448, "q": false, "exb": 18}], "batch_l6": [{"sku": "141033175", "desc": "SALSA SOYA CUISINE &CO 12x500 VIDRIO", "dem": 488, "bmin": 750, "bh": 0.75, "cob": 1.53576129881527, "u4": 4008.0, "cob4": 8.207108380868803, "ssn": 24}, {"sku": "113110175", "desc": "VINAGRE DE MANZANA SIN FILTRAR TRAVERSO 12x500", "dem": 474, "bmin": 750, "bh": 0.75, "cob": 1.5807301467820851, "u4": 4008.0, "cob4": 8.447421904403463, "ssn": 20}, {"sku": "151010175", "desc": "ESENCIA VAINILLA TRAVERSO 12x500 PET", "dem": 418, "bmin": 750, "bh": 0.75, "cob": 1.792726651869558, "u4": 4008.0, "cob4": 9.580331227590918, "ssn": 24}, {"sku": "115014175", "desc": "ACETO BALSAMICO IMPERATORE 12x500 VIDRIO", "dem": 415, "bmin": 750, "bh": 0.75, "cob": 1.80816256242466, "u4": 4008.0, "cob4": 9.662820733597382, "ssn": 24}, {"sku": "115014150", "desc": "ACETO BALSAMICO REAL IMPERATORE 12x250 VIDRIO", "dem": 382, "bmin": 750, "bh": 0.75, "cob": 1.9639016178808566, "u4": 4008.0, "cob4": 10.495090245955296, "ssn": 25}, {"sku": "141033230", "desc": "SALSA SOYA CUISINE &CO 24x187,5 VIDRIO", "dem": 201, "bmin": 450, "bh": 0.45, "cob": 2.2364217252396164, "u4": 4008.0, "cob4": 19.91906283280085, "ssn": 25}], "l1_vel": [{"fmt": "30x500", "vol": 0.68, "app": 12222, "real": 13400, "f": 1.1}, {"fmt": "12x500", "vol": 0.12, "app": 12222, "real": 9400, "f": 0.77}, {"fmt": "12x1000", "vol": 0.11, "app": 9778, "real": 9400, "f": 0.77}, {"fmt": "20x1000", "vol": 0.09, "app": 9778, "real": 10000, "f": 0.82}], "l1": {"ocR": 0.47, "efic": 0.85, "cob": 0.58, "det_h": 2.7}};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const NS = 'http://www.w3.org/2000/svg';
+const pct = (v, d=0) => v==null ? '–' : (v*100).toFixed(d).replace('.', ',') + '%';
+const num = v => v==null ? '–' : Math.round(v).toLocaleString('es-CL');
+const tip = document.getElementById('tip');
+function showTip(e, html){ tip.innerHTML = html; tip.style.display='block'; const x=Math.min(e.clientX+14, innerWidth-310); tip.style.left=x+'px'; tip.style.top=(e.clientY+14)+'px'; }
+function hideTip(){ tip.style.display='none'; }
+function el(tag, attrs={}, parent){ const n=document.createElementNS(NS, tag); for(const k in attrs) n.setAttribute(k, attrs[k]); if(parent) parent.appendChild(n); return n; }
+function svg(w, h, host){ const s=el('svg',{viewBox:`0 0 ${w} ${h}`, width:'100%', role:'img'}); document.getElementById(host).innerHTML=''; document.getElementById(host).appendChild(s); return s; }
+function text(s, x, y, t, o={}){ const n=el('text',{x,y,'font-size':o.size||11,fill:o.fill||css('--muted'),'text-anchor':o.anchor||'start','font-weight':o.bold?700:400,'dominant-baseline':o.base||'auto'}, s); n.textContent=t; return n; }
+function hover(n, html){ n.addEventListener('mousemove', e=>showTip(e, html)); n.addEventListener('mouseleave', hideTip); n.style.cursor='default'; }
+
+// ---------- cabecera ----------
+document.getElementById('periodo').textContent = D.meta.periodo;
+document.getElementById('meta').innerHTML = [D.meta.plan, 'Horizonte de riesgo: '+D.meta.horizonte, 'Generado: '+D.meta.generado].map(t=>`<span class="chip">${t}</span>`).join('');
+const K = D.kpi;
+const sat = D.lineas.filter(l=>l.fut>=0.845).map(l=>l.linea);
+document.getElementById('lead').innerHTML = `El plan vigente proyecta <b>${K.quiebres} SKU con quiebre</b> y <b>${K.bajo_ss} SKU bajo stock de seguridad</b> en las próximas 4 semanas, concentrados en líneas de salsas y L6Vidrio. El cumplimiento del período es <b>${pct(K.cumpl,1)}</b> y la app ya cubre el <b>${pct(K.adop,1)}</b> del programa SAP: el problema no es de adopción sino de <b>capacidad mal parametrizada en las líneas más cargadas</b>.`;
+document.getElementById('c-tot').textContent = pct(K.cumpl,1);
+document.getElementById('o-tot').textContent = pct(K.ocR,1);
+
+// ---------- tabs ----------
+document.querySelectorAll('#tabs button[data-t]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#tabs button[data-t]').forEach(x=>x.classList.toggle('on', x===b));
+  document.querySelectorAll('section.panel').forEach(p=>p.classList.toggle('on', p.id==='p-'+b.dataset.t));
+  history.replaceState(null,'','#'+b.dataset.t); window.scrollTo({top:0});
+});
+const h0 = location.hash.slice(1); if(h0){ const b=document.querySelector(`#tabs button[data-t="${h0}"]`); if(b) b.click(); }
+
+// ---------- KPIs ----------
+function spark(vals, color){
+  const w=150,h=28, mn=Math.min(...vals), mx=Math.max(...vals), r=(mx-mn)||1;
+  const pts=vals.map((v,i)=>`${(i/(vals.length-1)*w).toFixed(1)},${(h-3-(v-mn)/r*(h-6)).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.8"/></svg>`;
+}
+const S = D.semanas;
+const kpis = [
+  {l:'Cumplimiento', v:pct(K.cumpl,1), n:'real ÷ programado SAP · Sem 37–45', sp:S.map(s=>s.cumpl), c:'--blue', cls:''},
+  {l:'Adopción app', v:pct(K.adop,1), n:'del programa SAP con OF de la app', cls:'good'},
+  {l:'Ocupación real', v:pct(K.ocR,1), n:`programada: ${pct(K.ocP,1)}`, sp:S.map(s=>s.ocR), c:'--teal', cls:''},
+  {l:'SKU con quiebre', v:K.quiebres, n:'proyectados próx. 4 semanas (4 son MTO, fabricación a pedido)', cls:'bad'},
+  {l:'SKU bajo SS', v:K.bajo_ss, n:'bajo su SS (stock de seguridad), próx. 4 semanas', cls:'warn'},
+  {l:'Líneas ≥85% uso', v:sat.length, n:sat.join(' · '), cls:'warn'},
+  {l:'Faltantes hoy', v:K.faltantes_hoy, n:`SKU · ${num(K.faltantes_cj)} cj (corte 09-11)`, cls:'bad'},
+];
+document.getElementById('kpis').innerHTML = kpis.map(k=>`<div class="kpi ${k.cls}"><div class="l">${k.l}</div><div class="v">${k.v}</div><div class="n">${k.n}</div>${k.sp?spark(k.sp, css(k.c)):''}</div>`).join('');
+
+// ---------- alertas ----------
+const AL = [
+  {s:'c', sev:'Crítica', t:'Sachetera 4P: el plan ve menos capacidad de la real → quiebre de Mayonesa 300x8', d:'Produjo 182% y 143% de su capacidad nominal en las Sem 44 y 45, con producción en 4 días de fin de semana (incluido el festivo del 01-11). El plan, que la considera de 1 turno de lunes a viernes, proyecta quiebre el 30-11: 314 cj durante 5 días.', a:'Confirmar con Producción el régimen real de turnos (extensiones, fines de semana).'},
+  {s:'c', sev:'Crítica', t:'Pedidos comprometidos superan el stock en 2 SKU', d:'Mostaza Cuisine & Co 12x500 doypack (−1.428 cj, Doypack 2) y Aceituna Huasco 24x200 (−1.315 cj, Miele LV). Ketchup Cuisine & Co doypack ya tiene 76 cj de faltante hoy.', a:'Priorizar producción esta semana.'},
+  {s:'h', sev:'Alta', t:'L6Vidrio: 91% de uso y un batch mínimo muy por debajo de lo real', d:'5 de los 23 quiebres y 14 SKU bajo SS (stock de seguridad). El parámetro permite batches de 0,75 h, pero las OF reales fueron de 3,6 a 7,6 h. El plan propone 11 OF de menos de 1 h que la planta no hace.', a:'Analizar alinear el batch mínimo a lo que la planta ya produce (≈4 h).'},
+  {s:'h', sev:'Alta', t:'Doypack 1–4 y Sachetera: batch mínimo de un día de línea', d:'El batch mínimo usa 4,6 a 9 h de un turno de 8–9 h: cada SKU bloquea el día. Con 10 SKU en Doypack y 9 en Doypack 3 para 5 días, la línea no rota. 6 quiebres proyectados en estas líneas.', a:'Analizar bajar al mínimo técnico, junto con la capacidad real.'},
+  {s:'h', sev:'Alta', t:'Cap. bodega no alcanza para batch + SS (stock de seguridad) en 6 SKU', d:'Soya 12x500, Aceto 6x500 y Mostaza Suave Vintage tienen además quiebre proyectado. El solver no puede cumplir ambas restricciones.', a:'Analizar subir cap. bodega o revisar ss_dias.'},
+  {s:'m', sev:'Media', t:'Cumplimiento cae en salsas', d:'Últimas 4 semanas vs primeras 4: Doypack 85% → 60%, Sachetera 4P 85% → 68%, C3Porrones 84% → 69%. Coincide con su saturación proyectada.', a:'Se resuelve con la acción 1 (capacidad real).'},
+];
+document.getElementById('alerts').innerHTML = AL.map(a=>`<div class="alert ${a.s}"><div class="sev">${a.sev}</div><div class="t">${a.t}</div><div class="d">${a.d}</div><div class="act"><b>→</b> ${a.a}</div></div>`).join('');
+
+// ---------- chart: semanas ----------
+(function(){
+  const W=560,H=250,m={l:44,r:44,t:14,b:44}, iw=W-m.l-m.r, ih=H-m.t-m.b;
+  const s=svg(W,H,'ch-semanas'); const n=S.length, bw=iw/n;
+  const mx=Math.ceil(Math.max(...S.map(x=>Math.max(x.sap,x.real)))/10000)*10000;
+  for(let v=0; v<=mx; v+=20000){ const y=m.t+ih-v/mx*ih; el('line',{x1:m.l,x2:W-m.r,y1:y,y2:y,stroke:css('--grid')},s); text(s,m.l-6,y+3,(v/1000)+'k',{anchor:'end',size:10}); }
+  [0.5,0.75,1].forEach(v=>{ const y=m.t+ih-v/1.2*ih; text(s,W-m.r+6,y+3,pct(v),{size:10}); });
+  S.forEach((x,i)=>{
+    const x0=m.l+i*bw+bw*0.14, w=bw*0.34;
+    const hs=x.sap/mx*ih, hr=x.real/mx*ih;
+    const r1=el('rect',{x:x0,y:m.t+ih-hs,width:w,height:hs,fill:css('--blue'),rx:2},s);
+    const r2=el('rect',{x:x0+w+2,y:m.t+ih-hr,width:w,height:hr,fill:css('--teal'),rx:2},s);
+    const tt=`<b>Sem ${x.sem} · ${x.ini}</b><br>SAP: ${num(x.sap)} cj<br>Real: ${num(x.real)} cj<br>Cumplimiento: ${pct(x.cumpl,1)}`;
+    hover(r1,tt); hover(r2,tt);
+    text(s,m.l+i*bw+bw/2,H-m.b+15,'Sem '+x.sem,{anchor:'middle',size:10.5,fill:css('--ink')});
+    text(s,m.l+i*bw+bw/2,H-m.b+28,x.ini,{anchor:'middle',size:9.5});
+  });
+  const pts=S.map((x,i)=>[m.l+i*bw+bw/2, m.t+ih-x.cumpl/1.2*ih]);
+  el('polyline',{points:pts.map(p=>p.join(',')).join(' '),fill:'none',stroke:css('--amber'),'stroke-width':2.2},s);
+  pts.forEach((p,i)=>{ const c=el('circle',{cx:p[0],cy:p[1],r:3.5,fill:css('--card'),stroke:css('--amber'),'stroke-width':2},s); hover(c,`Sem ${S[i].sem}: ${pct(S[i].cumpl,1)}`); text(s,p[0],p[1]-8,pct(S[i].cumpl),{anchor:'middle',size:9.5,fill:css('--amber-dk'),bold:true}); });
+  const lg=el('g',{},s); [['SAP','--blue'],['Real','--teal'],['Cumplimiento','--amber']].forEach((q,i)=>{ el('rect',{x:m.l+i*95,y:H-10,width:10,height:10,fill:css(q[1]),rx:2},lg); text(lg,m.l+14+i*95,H-1,q[0],{size:10.5,fill:css('--soft')}); });
+})();
+
+// ---------- chart: uso proyectado ----------
+(function(){
+  const L=D.lineas, W=560, rh=17, m={l:96,r:46,t:20,b:8}, H=m.t+L.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-uso'); const X=v=>m.l+Math.min(v,1.25)/1.25*iw;
+  [0,0.4,0.85,1].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:v===0.85?css('--red'):css('--grid'),'stroke-dasharray':v===0.85?'4 3':''},s); text(s,X(v),m.t-9,pct(v),{anchor:'middle',size:9.5,fill:v===0.85?css('--red-dk'):css('--muted')}); });
+  L.forEach((l,i)=>{
+    const y=m.t+i*rh; const col=l.fut>=0.845?css('--red'):l.fut>=0.7?css('--amber'):css('--teal');
+    text(s,m.l-6,y+rh/2+3,l.linea,{anchor:'end',size:10.5,fill:css('--ink')});
+    const r=el('rect',{x:m.l,y:y+3,width:X(l.fut)-m.l,height:rh-6,fill:col,rx:2,opacity:.9},s);
+    const mk=el('rect',{x:X(l.ocR)-1.5,y:y+1,width:3,height:rh-2,fill:css('--ink')},s);
+    text(s,X(l.fut)+4,y+rh/2+3,pct(l.fut),{size:9.5,fill:css('--soft')});
+    const tt=`<b>${l.linea}</b> (${l.cat})<br>Uso proyectado: ${pct(l.fut)} · ${l.d95} de 20 días ≥95%<br>Ocupación real del período: ${pct(l.ocR)}<br>Quiebres: ${l.q} · Bajo SS: ${l.ss}`;
+    hover(r,tt); hover(mk,tt);
+  });
+})();
+
+// ---------- chart: mapa de quiebres ----------
+(function(){
+  const Q=D.quiebres.map(q=>({...q, cls: q.mto?'MTO':(q.def_cj<20?'Menor':q.tipo)}));
+  const lines=[...new Set(Q.map(q=>q.linea))].sort((a,b)=>(D.lineas.find(l=>l.linea===b).fut)-(D.lineas.find(l=>l.linea===a).fut));
+  const W=1180, rh=44, m={l:150,r:20,t:28,b:30}, H=m.t+lines.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-quiebres'); const X=d=>m.l+(d+1.5)/30*iw;
+  for(let d=0; d<=27; d++){ const dt=new Date(2026,10,10+d); if(dt.getDay()===1 || d===0){ el('line',{x1:X(d),x2:X(d),y1:m.t-4,y2:H-m.b,stroke:css('--grid')},s); text(s,X(d),m.t-10,`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`,{anchor:'middle',size:10}); } }
+  el('rect',{x:X(-1.5),y:m.t-4,width:X(5.5)-X(-1.5),height:H-m.b-m.t+4,fill:css('--amber-lt'),opacity:.55},s);
+  text(s,X(2.75),H-m.b+16,'Semana 1: pedidos y recepciones',{anchor:'middle',size:10,fill:css('--amber-dk')});
+  text(s,X(16),H-m.b+16,'Semanas 2 a 4: capacidad',{anchor:'middle',size:10,fill:css('--red-dk')});
+  const colors={Capacidad:css('--red'),Inmediato:css('--amber'),Menor:css('--blue'),MTO:css('--muted')};
+  lines.forEach((ln,i)=>{
+    const y=m.t+i*rh+rh/2; const L=D.lineas.find(l=>l.linea===ln);
+    el('line',{x1:m.l,x2:W-m.r,y1:y,y2:y,stroke:css('--grid'),'stroke-dasharray':'2 3'},s);
+    text(s,m.l-8,y-1,ln,{anchor:'end',size:11.5,fill:css('--ink'),bold:true});
+    text(s,m.l-8,y+12,'uso '+pct(L.fut),{anchor:'end',size:9.5,fill:L.fut>=0.845?css('--red-dk'):css('--muted')});
+    const qs=Q.filter(q=>q.linea===ln);
+    qs.forEach((q,j)=>{
+      const r=Math.min(19, Math.max(4, Math.sqrt(q.def_cj)*0.7));
+      const same=qs.filter(z=>z.dia===q.dia); const k=same.indexOf(q); const off=(k-(same.length-1)/2)*Math.min(14, r*1.1);
+      const c=el('circle',{cx:X(q.dia),cy:y+off,r:r,fill:colors[q.cls],'fill-opacity':.72,stroke:css('--card'),'stroke-width':1.2},s);
+      hover(c,`<b>${q.sku}</b> · ${q.desc}<br>${q.linea} · primer quiebre ${q.fecha.slice(8,10)}/${q.fecha.slice(5,7)}<br>Demanda no cubierta máx.: ${num(q.def_cj)} cj · ${q.dias} día(s)<br>Disponible hoy: ${num(q.disp_cj)} cj${q.rp?'<br>⚑ Terminal Report pendiente':''}`);
+      if(q.def_cj>=120){ const right=q.dia>20; text(s,X(q.dia)+(right?-(r+4):(r+4)),y+off+3,(q.desc||'').split(' ').slice(0,3).join(' '),{size:9.5,fill:css('--soft'),anchor:right?'end':'start'}); }
+    });
+  });
+})();
+
+// ---------- tablas ordenables ----------
+function table(id, cols, rows){
+  const t=document.getElementById(id); let sortK=null, asc=true;
+  function draw(){
+    let r=[...rows]; if(sortK!=null){ const c=cols[sortK]; r.sort((a,b)=>{ const x=c.sv?c.sv(a):a[c.k], y=c.sv?c.sv(b):b[c.k]; return (x>y?1:x<y?-1:0)*(asc?1:-1); }); }
+    t.innerHTML = '<tr>'+cols.map((c,i)=>`<th class="${c.num?'num':''}" data-i="${i}">${c.h}${sortK===i?(asc?' ▲':' ▼'):''}</th>`).join('')+'</tr>' +
+      r.map(x=>'<tr>'+cols.map(c=>`<td class="${c.num?'num':''}">${c.f?c.f(x):(x[c.k]??'')}</td>`).join('')+'</tr>').join('');
+    t.querySelectorAll('th').forEach(th=>th.onclick=()=>{ const i=+th.dataset.i; asc = sortK===i ? !asc : true; sortK=i; draw(); });
+  }
+  draw();
+}
+table('t-quiebres', [
+  {h:'SKU',k:'sku'},{h:'Producto',k:'desc',f:x=>(x.desc||'')+(x.rp?' ⚑':'')},{h:'Línea',k:'linea'},
+  {h:'Uso línea',k:'fut',num:1,f:x=>pct(x.fut)},{h:'Primer quiebre',k:'fecha',f:x=>x.fecha.slice(8,10)+'/'+x.fecha.slice(5,7)},
+  {h:'Días',k:'dias',num:1},{h:'Demanda no cubierta máx. (cj)',k:'def_cj',num:1,f:x=>num(x.def_cj)},{h:'Disponible hoy (cj)',k:'disp_cj',num:1,f:x=>num(x.disp_cj)},
+  {h:'Faltante hoy (cj)',k:'falt',num:1,f:x=>x.falt?num(x.falt):''},
+  {h:'Tipo',k:'tipo',f:x=>{const c=x.mto?'MTO':(x.def_cj<20?'Menor':x.tipo); return `<span class="tag ${c}">${c}</span>`;}},
+], D.quiebres);
+table('t-desvios', [
+  {h:'SKU',k:'sku'},{h:'Producto',k:'desc'},{h:'Línea',k:'linea'},{h:'SAP cj',k:'sap',num:1,f:x=>num(x.sap)},
+  {h:'Real cj',k:'real',num:1,f:x=>num(x.real)},{h:'No producido cj',k:'gap',num:1,sv:x=>x.sap-x.real,f:x=>num(x.sap-x.real)},
+  {h:'Cumpl.',k:'cumpl',num:1,f:x=>pct(x.cumpl)},{h:'Semanas bajo 70%',k:'wb',num:1,f:x=>`${x.wb} de ${x.w}`},
+], D.desvios.slice(0,10));
+
+// ---------- heatmap ----------
+function heatColor(v, mode){
+  if(v==null) return `background:transparent;color:${css('--muted')}`;
+  if(mode==='cumpl'){
+    if(v<0.7) return `background:${css('--red-lt')};color:${css('--red-dk')};font-weight:700`;
+    if(v>1.3) return `background:${css('--amber-lt')};color:${css('--amber-dk')};font-weight:700`;
+    const a=(0.15+Math.min(v,1)*0.55).toFixed(2); return `background:rgba(29,158,117,${a});color:${v>0.85?'#fff':css('--ink')}`;
+  }
+  if(v>1.05) return `background:${css('--amber-lt')};color:${css('--amber-dk')};font-weight:700`;
+  const a=(0.06+Math.min(v,1)*0.8).toFixed(2); return `background:rgba(29,158,117,${a});color:${v>0.55?'#fff':css('--ink')}`;
+}
+function drawHeat(mode){
+  const t=document.getElementById('t-heat'); const L=[...D.lineas].sort((a,b)=>a.cat.localeCompare(b.cat)||a.linea.localeCompare(b.linea));
+  const key = mode==='cumpl'?'cumpl_sem':'oc_sem';
+  const extraH = mode==='cumpl'?['Sem 42–45','Período']:['Período','Próx. 4 sem'];
+  let h='<tr><th>Línea</th>'+S.map(s=>`<th>Sem ${s.sem}<br><span style="font-weight:400;color:${css('--muted')}">${s.ini}</span></th>`).join('')+extraH.map(x=>`<th>${x}</th>`).join('')+'</tr>';
+  L.forEach(l=>{
+    const cells=l[key].map((v,i)=>`<td class="h" style="${heatColor(v,mode)}" title="${l.linea} · Sem ${S[i].sem}: ${pct(v)}">${pct(v)}</td>`).join('');
+    const ex = mode==='cumpl' ? [l.cumpl4,l.cumpl] : [l.ocR,l.fut];
+    h+=`<tr><td><b>${l.linea}</b> <span style="color:${css('--muted')};font-size:11px">${l.cat}</span></td>${cells}${ex.map(v=>`<td class="h" style="${heatColor(v,mode)};outline:1.5px solid ${css('--line')}">${pct(v)}</td>`).join('')}</tr>`;
+  });
+  const tot = mode==='cumpl' ? S.map(s=>s.cumpl) : S.map(s=>s.ocR);
+  h+='<tr><td><b>Total</b></td>'+tot.map(v=>`<td class="h" style="${heatColor(v,mode)};font-weight:700">${pct(v)}</td>`).join('')+`<td class="h"></td><td class="h"></td></tr>`;
+  t.innerHTML=h;
+  document.getElementById('heat-title').textContent = mode==='cumpl'?'Cumplimiento real ÷ SAP':'Ocupación real (h-eq producidas ÷ h nominales)';
+  document.getElementById('heat-cap').textContent = mode==='cumpl'?'Cajas reales (Terminal Report) ÷ cajas programadas en SAP. "–" = sin programa SAP esa semana. Rojo < 70%, ámbar > 130%.':'Ámbar = sobre 105% de la capacidad nominal: producción mayor a lo parametrizado. Horas nominales sin descontar los feriados del 18-09 (Sem 38) y 12-10 (Sem 42).';
+}
+drawHeat('cumpl');
+document.querySelectorAll('#seg-heat button').forEach(b=>b.onclick=()=>{ document.querySelectorAll('#seg-heat button').forEach(x=>x.classList.toggle('on',x===b)); drawHeat(b.dataset.k); });
+
+// ---------- chart: evolución (dumbbell) ----------
+(function(){
+  const L=D.lineas.filter(l=>l.cumpl_ini!=null && l.cumpl4!=null).sort((a,b)=>(a.cumpl4-a.cumpl_ini)-(b.cumpl4-b.cumpl_ini));
+  const W=560, rh=19, m={l:96,r:30,t:20,b:10}, H=m.t+L.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-evol'); const X=v=>m.l+Math.min(v,1.5)/1.5*iw;
+  [0.5,0.75,1,1.25].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:v===1?css('--line'):css('--grid')},s); text(s,X(v),m.t-9,pct(v),{anchor:'middle',size:9.5}); });
+  L.forEach((l,i)=>{
+    const y=m.t+i*rh+rh/2, d=l.cumpl4-l.cumpl_ini, col=d<-0.1?css('--red'):d>0.1?css('--teal'):css('--muted');
+    text(s,m.l-6,y+3,l.linea,{anchor:'end',size:10.5,fill:css('--ink')});
+    el('line',{x1:X(l.cumpl_ini),x2:X(l.cumpl4),y1:y,y2:y,stroke:col,'stroke-width':2.5},s);
+    el('circle',{cx:X(l.cumpl_ini),cy:y,r:3.5,fill:css('--card'),stroke:css('--muted'),'stroke-width':1.5},s);
+    const c=el('circle',{cx:X(l.cumpl4),cy:y,r:4.5,fill:col},s);
+    hover(c,`<b>${l.linea}</b><br>Sem 37–40: ${pct(l.cumpl_ini)}<br>Sem 42–45: ${pct(l.cumpl4)}`);
+  });
+})();
+
+// ---------- chart: capacidad demostrada ----------
+(function(){
+  const L=[...D.lineas].sort((a,b)=>b.top3-a.top3);
+  const W=1180, rh=20, m={l:110,r:150,t:22,b:8}, H=m.t+L.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-demo'); const X=v=>m.l+Math.min(v,2)/2*iw;
+  [0,0.5,1,1.5,2].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:v===1?css('--red'):css('--grid'),'stroke-dasharray':v===1?'4 3':''},s); text(s,X(v),m.t-10,pct(v),{anchor:'middle',size:9.5,fill:v===1?css('--red-dk'):css('--muted')}); });
+  L.forEach((l,i)=>{
+    const y=m.t+i*rh; const over=l.top3>1.05;
+    text(s,m.l-6,y+rh/2+3,l.linea,{anchor:'end',size:10.5,fill:css('--ink'),bold:over});
+    const r=el('rect',{x:m.l,y:y+4,width:X(l.top3)-m.l,height:rh-8,fill:over?css('--amber'):css('--teal'),rx:2,opacity:.85},s);
+    const c=el('circle',{cx:X(l.max_oc),cy:y+rh/2,r:4,fill:css('--card'),stroke:over?css('--red'):css('--teal-dk'),'stroke-width':2},s);
+    text(s,X(Math.max(l.max_oc,l.top3))+8,y+rh/2+3,`${pct(l.top3)} · máx ${pct(l.max_oc)}`,{size:9.5,fill:over?css('--amber-dk'):css('--muted'),bold:over});
+    const tt=`<b>${l.linea}</b><br>Promedio 3 mejores semanas: ${pct(l.top3)}<br>Máximo semanal: ${pct(l.max_oc)}<br>Parámetro: ${l.param}`; hover(r,tt); hover(c,tt);
+  });
+  const lg=el('g',{},s);
+})();
+
+// ---------- chart: scatter saturación ----------
+(function(){
+  const L=D.lineas, W=560, H=330, m={l:58,r:16,t:14,b:40}, iw=W-m.l-m.r, ih=H-m.t-m.b;
+  const s=svg(W,H,'ch-scatter'); const X=v=>m.l+Math.min(v,1.1)/1.1*iw, Y=v=>m.t+ih-Math.min(v,1.1)/1.1*ih;
+  el('rect',{x:X(0.85),y:Y(1.1),width:X(1.1)-X(0.85),height:Y(0.85)-Y(1.1),fill:css('--red-lt'),opacity:.7},s);
+  el('rect',{x:X(0),y:Y(0.4),width:X(0.4)-X(0),height:Y(0)-Y(0.4),fill:css('--teal-lt'),opacity:.7},s);
+  [0,0.25,0.5,0.75,1].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t,y2:m.t+ih,stroke:css('--grid')},s); el('line',{x1:m.l,x2:m.l+iw,y1:Y(v),y2:Y(v),stroke:css('--grid')},s); text(s,X(v),H-m.b+14,pct(v),{anchor:'middle',size:9.5}); text(s,m.l-6,Y(v)+3,pct(v),{anchor:'end',size:9.5}); });
+  text(s,m.l+iw/2,H-6,'Ocupación real Sem 37–45 (lo que pasó)',{anchor:'middle',size:10.5,fill:css('--soft')});
+  const yt=text(s,12,m.t+ih/2,'Uso proyectado próx. 4 semanas (lo que viene)',{anchor:'middle',size:10.5,fill:css('--soft')}); yt.setAttribute('transform',`rotate(-90 12 ${m.t+ih/2})`);
+  text(s,X(1.08),Y(1.06),'saturadas',{anchor:'end',size:10,fill:css('--red-dk'),bold:true});
+  text(s,X(0.02),Y(0.03),'holgadas',{size:10,fill:css('--teal-dk'),bold:true});
+  L.forEach(l=>{
+    const col=l.fut>=0.845||l.ocR>=0.85?css('--red'):l.fut<0.4&&l.ocR<0.4?css('--teal'):css('--amber');
+    const c=el('circle',{cx:X(l.ocR),cy:Y(l.fut),r:6,fill:col,'fill-opacity':.8,stroke:css('--card'),'stroke-width':1.5},s);
+    hover(c,`<b>${l.linea}</b><br>Ocupación real: ${pct(l.ocR)}<br>Uso proyectado: ${pct(l.fut)}`);
+    text(s,X(l.ocR)+8,Y(l.fut)+3,l.linea,{size:9.5,fill:css('--soft')});
+  });
+})();
+
+// ---------- chart: L1 ----------
+(function(){
+  const v=[['Ocupación real',D.l1.ocR,'--teal'],['Eficiencia (días con registro)',D.l1.efic,'--blue'],['Cobertura bitácora',D.l1.cob,'--muted']];
+  const W=560,rh=34,m={l:190,r:50,t:6,b:6},H=m.t+v.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-l1');
+  v.forEach((x,i)=>{ const y=m.t+i*rh; text(s,m.l-8,y+rh/2+4,x[0],{anchor:'end',size:11.5,fill:css('--ink')});
+    el('rect',{x:m.l,y:y+7,width:iw,height:rh-14,fill:css('--chip'),rx:3},s);
+    el('rect',{x:m.l,y:y+7,width:iw*x[1],height:rh-14,fill:css(x[2]),rx:3},s);
+    text(s,m.l+iw*x[1]+6,y+rh/2+4,pct(x[1]),{size:12,fill:css('--ink'),bold:true}); });
+})();
+
+// ---------- tabla capacidad nominal ----------
+table('t-capnom', [
+  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Parámetro actual',k:'param'},
+  {h:'Máx. ocupación real',k:'max_oc',num:1,f:x=>pct(x.max_oc)},{h:'Prom. 3 mejores sem.',k:'top3',num:1,f:x=>pct(x.top3)},
+  {h:'Uso proyectado',k:'fut',num:1,f:x=>pct(x.fut)},{h:'Quiebres proyectados',k:'q',num:1},
+], D.lineas.filter(l=>['Sachetera 4P','Doypack','Sachetera','Sachetera 1P'].includes(l.linea)).sort((a,b)=>b.top3-a.top3));
+
+// ---------- chart: cap bodega ----------
+(function(){
+  const C=D.cap_bodega, W=1180, rh=30, m={l:330,r:150,t:8,b:8}, H=m.t+C.length*rh+m.b, iw=W-m.l-m.r;
+  const mx=Math.max(...C.map(c=>Math.max(c.cap,c.need)))*1.05; const X=v=>m.l+v/mx*iw;
+  const s=svg(W,H,'ch-capb');
+  C.forEach((c,i)=>{
+    const y=m.t+i*rh;
+    text(s,m.l-8,y+rh/2-1,`${c.sku} · ${(c.desc||'').slice(0,34)}`,{anchor:'end',size:10.5,fill:css('--ink'),bold:c.q});
+    text(s,m.l-8,y+rh/2+11,`${c.linea}${c.q?' · con quiebre proyectado':''}`,{anchor:'end',size:9.5,fill:c.q?css('--red-dk'):css('--muted')});
+    const r=el('rect',{x:m.l,y:y+7,width:X(c.cap)-m.l,height:rh-14,fill:css('--blue'),opacity:.75,rx:2},s);
+    el('rect',{x:X(c.cap),y:y+7,width:X(c.need)-X(c.cap),height:rh-14,fill:css('--red'),opacity:.85,rx:2},s);
+    el('line',{x1:X(c.need),x2:X(c.need),y1:y+3,y2:y+rh-3,stroke:css('--red-dk'),'stroke-width':2},s);
+    text(s,X(c.need)+8,y+rh/2+4,`faltan ${num(c.need-c.cap)} u (${pct(c.need/c.cap-1)})`,{size:10,fill:css('--red-dk'),bold:true});
+    hover(r,`<b>${c.sku}</b> · ${c.desc}<br>Cap. bodega: ${num(c.cap)} u<br>Batch mín.: ${num(c.bmin)} u + SS: ${num(c.ss)} u = ${num(c.need)} u<br>Alertas exceso bodega: ${c.exb}`);
+  });
+})();
+
+
+
+// ---------- chart: L1 velocidad ----------
+(function(){
+  const V=D.l1_vel, W=1180, rh=34, m={l:170,r:380,t:20,b:26}, H=m.t+V.length*rh+m.b, iw=W-m.l-m.r;
+  const mx=14000; const X=v=>m.l+v/mx*iw; const s=svg(W,H,'ch-l1vel');
+  [0,5000,10000,14000].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:css('--grid')},s); text(s,X(v),m.t-9,num(v),{anchor:'middle',size:9.5}); });
+  V.forEach((v,i)=>{
+    const y=m.t+i*rh;
+    text(s,m.l-8,y+rh/2-1,'Formato '+v.fmt,{anchor:'end',size:11,fill:css('--ink'),bold:true});
+    text(s,m.l-8,y+rh/2+11,pct(v.vol)+' del volumen',{anchor:'end',size:9.5});
+    el('rect',{x:m.l,y:y+6,width:X(v.app)-m.l,height:9,fill:css('--muted'),rx:2},s);
+    el('rect',{x:m.l,y:y+17,width:X(v.real)-m.l,height:9,fill:css('--teal'),rx:2},s);
+    const dlt=v.real/v.app-1;
+    text(s,W-m.r+10,y+rh/2+4,`app ${num(v.app)} → vigente ${num(v.real)} u/h (${dlt>0?'+':''}${pct(dlt)}) · factor ${v.f.toFixed(2).replace('.',',')}`,{size:10.5,fill:Math.abs(dlt)>0.1?css('--amber-dk'):css('--soft'),bold:Math.abs(dlt)>0.1});
+  });
+  const lg=el('g',{},s); const ly=H-10; el('rect',{x:m.l,y:ly-8,width:10,height:8,fill:css('--muted')},lg); text(lg,m.l+14,ly,'Velocidad en la app',{size:10}); el('rect',{x:m.l+140,y:ly-8,width:10,height:8,fill:css('--teal')},lg); text(lg,m.l+154,ly,'Velocidad vigente (Control de Procesos)',{size:10});
+})();
+</script>
+</body>
+</html>

@@ -347,7 +347,9 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
                 "ocupacion_programada_app": _ratio(heq_app, nominal),
                 "capacidad_ociosa": round(max(1 - ocup_sap, 0), 4) if ocup_sap is not None else None,
                 "capacidad_real_vs_teorica": _ratio(cap_real, nominal) if con_bitacora else None,
-                "cumplimiento_vs_sap": _ratio(heq, heq_sap),
+                # En CAJAS (definición acordada: producido ÷ solicitado), igual que el total y la
+                # conciliación por SKU. La lectura de capacidad en h-eq la dan las ocupaciones.
+                "cumplimiento_vs_sap": _ratio(a["cj_real"], a["cj_prog_sap"]),
             },
             "brecha_nominal_pct": {
                 "sin_programa": _ratio(sp, nominal),
@@ -436,6 +438,7 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
             "capacidad_real_vs_teorica": "(nominal - paradas planificadas - no planificadas) / nominal (solo con bitácora)",
             "semana_sap": "OF SAP asignada a la semana del centro de su tramo planificado",
             "semana_real": "fecha_tr del recibo",
+            "cumplimiento_vs_sap": "cajas reales (TR) / cajas programadas en SAP (por línea y total)",
             "totales_resumen": "solo SKU clase LINEA; el resto va en resumen.fuera_de_lineas",
         },
     }
