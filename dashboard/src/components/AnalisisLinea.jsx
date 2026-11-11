@@ -65,15 +65,32 @@ function Caso({ caso, onCerrar, onDecidido }) {
   const r = caso.recomendacion || {}, dg = caso.diagnostico || {}, pal = caso.escenarios || [];
   const [editor, setEditor] = useState(() => { try { return localStorage.getItem(KEY_EDITOR) || ""; } catch { return ""; } });
   const [pin, setPin] = useState(""), [motivo, setMotivo] = useState(""), [msg, setMsg] = useState(null), [enviando, setEnviando] = useState(false);
+  // acciones marcadas para aceptar (por defecto todas)
+  const [marcadas, setMarcadas] = useState(() => new Set((r.acciones || []).map((a) => a.orden)));
+  const [comentarios, setComentarios] = useState({});
+  const nAcc = (r.acciones || []).length;
   const decidir = async (decision) => {
     setMsg(null); setEnviando(true);
     try {
-      const d = await api("POST", `/analisis/casos/${caso.id}/decision`, { decision, motivo, editor, pin, enviar_al_panel: true });
+      const d = await api("POST", `/analisis/casos/${caso.id}/decision`,
+        { decision, motivo, editor, pin, enviar_al_panel: true, acciones_aceptadas: decision === "parcial" ? [...marcadas] : null });
       try { localStorage.setItem(KEY_EDITOR, editor.trim()); } catch { /* sin storage */ }
-      setMsg({ ok: true, t: `Decisión registrada (${decision}). ${d.recomendaciones_creadas ? `${d.recomendaciones_creadas} cambio(s) de parámetros enviados al panel de Parámetros.` : ""}` });
+      setMsg({ ok: true, t: `Decisión registrada (${d.decision}): ${d.acciones_aceptadas} acción(es) aceptada(s).` +
+        (d.recomendaciones_creadas ? ` ${d.recomendaciones_creadas} cambio(s) de parámetros enviados a Herramientas → Parámetros.` : "") });
       onDecidido && onDecidido();
     } catch (e) { setMsg({ ok: false, t: e.message }); } finally { setEnviando(false); }
   };
+  const resolver = async (accion, estado) => {
+    setMsg(null);
+    try {
+      await api("POST", `/analisis/acciones/${accion.id}/estado`, { estado, comentario: comentarios[accion.id] || "", editor, pin });
+      try { localStorage.setItem(KEY_EDITOR, editor.trim()); } catch { /* sin storage */ }
+      onDecidido && onDecidido();
+    } catch (e) { setMsg({ ok: false, t: e.message }); }
+  };
+  const accDe = (orden) => (caso.acciones || []).find((x) => x.orden === orden);
+  const ESTADO_ACC = { aceptada: [C.amberLt, C.amberDk, "Pendiente"], hecha: [C.tealLt, C.tealMid, "Hecha"],
+                       rechazada: [C.grayLt, C.gray, "No aceptada"], descartada: [C.grayLt, C.gray, "Descartada"] };
   const decidido = !!caso.decision;
   return (
     <div style={{ ...st.card, borderColor: C.purple, borderWidth: 2 }}>
@@ -92,8 +109,12 @@ function Caso({ caso, onCerrar, onDecidido }) {
       )}
 
       <div style={st.sec}>Acciones recomendadas (en orden de esfuerzo)</div>
-      {(r.acciones || []).map((a) => (
-        <div key={a.orden} style={{ display: "flex", gap: 10, padding: "8px 10px", border: `1px solid ${C.grayLt}`, borderRadius: 8, marginBottom: 6 }}>
+      {(r.acciones || []).map((a) => { const ac = accDe(a.orden); return (
+        <div key={a.orden} style={{ display: "flex", gap: 10, padding: "8px 10px", border: `1px solid ${C.grayLt}`, borderRadius: 8, marginBottom: 6,
+                                    opacity: ac && ac.estado === "rechazada" ? .55 : 1 }}>
+          {!caso.decision && (
+            <input type="checkbox" style={{ marginTop: 4 }} checked={marcadas.has(a.orden)} title="Marcar para aceptar"
+                   onChange={(e) => { const n = new Set(marcadas); e.target.checked ? n.add(a.orden) : n.delete(a.orden); setMarcadas(n); }} />)}
           <div style={{ fontSize: 18, fontWeight: 700, color: C.purple, minWidth: 18 }}>{a.orden}</div>
           <div style={{ flex: 1, fontSize: 12.5 }}>
             <span style={st.pill(C.purpleLt, C.purple)}>{PALANCA[a.palanca] || a.palanca}</span>
@@ -102,9 +123,22 @@ function Caso({ caso, onCerrar, onDecidido }) {
             {(a.cambios_parametros || []).length > 0 && (
               <div style={{ color: C.muted, marginTop: 3 }}>Cambios propuestos: {a.cambios_parametros.map((c) => `${c.sku} ${c.campo}=${c.valor}`).join(" · ")}</div>
             )}
+            {ac && (
+              <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={st.pill(...ESTADO_ACC[ac.estado])}>{ESTADO_ACC[ac.estado][2]}</span>
+                {ac.comentario && <span style={{ color: C.gray }}>{ac.comentario}{ac.resuelto_por ? ` · ${ac.resuelto_por}` : ""}</span>}
+                {ac.estado === "aceptada" && ac.recomendaciones > 0 && (
+                  <span style={{ color: C.amberDk }}>Aplicar en Herramientas → Parámetros (recomendación "Análisis de línea #{caso.id}")</span>)}
+                {ac.estado === "aceptada" && !ac.recomendaciones && (<>
+                  <input style={{ ...st.input, width: 280, padding: "4px 6px", fontSize: 12 }} placeholder="Qué se hizo / por qué se descarta"
+                         value={comentarios[ac.id] || ""} onChange={(e) => setComentarios({ ...comentarios, [ac.id]: e.target.value })} />
+                  <button style={{ ...st.btn, padding: "3px 9px", fontSize: 11.5 }} onClick={() => resolver(ac, "hecha")}>Marcar hecha</button>
+                  <button style={{ ...st.btn, padding: "3px 9px", fontSize: 11.5 }} onClick={() => resolver(ac, "descartada")}>Descartar</button>
+                </>)}
+              </div>)}
           </div>
         </div>
-      ))}
+      ); })}
       {r.pregunta_para_produccion && <div style={{ fontSize: 12.5, background: C.blueLt, color: C.blue, borderRadius: 8, padding: "8px 10px", marginTop: 6 }}><b>Para Producción:</b> {r.pregunta_para_produccion}</div>}
 
       <details style={{ marginTop: 10 }}>
@@ -126,9 +160,16 @@ function Caso({ caso, onCerrar, onDecidido }) {
       </details>
 
       <div style={st.sec}>Tu decisión</div>
-      {decidido ? (
-        <div style={{ fontSize: 12.5 }}><b>{caso.decision}</b> por {caso.decision_por}: {caso.decision_motivo}</div>
-      ) : (
+      {decidido ? (<>
+        <div style={{ fontSize: 12.5 }}><b>{caso.decision}</b> por {caso.decision_por}: {caso.decision_motivo}
+          <span style={{ marginLeft: 8, ...st.pill(caso.estado === "cerrado" ? C.tealLt : C.amberLt, caso.estado === "cerrado" ? C.tealMid : C.amberDk) }}>
+            {caso.estado === "en_seguimiento" ? "en seguimiento" : caso.estado}</span></div>
+        {(caso.acciones || []).some((x) => x.estado === "aceptada" && !x.recomendaciones) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 8, marginTop: 8, maxWidth: 420 }}>
+            <input style={st.input} placeholder="Tu nombre" value={editor} onChange={(e) => setEditor(e.target.value)} />
+            <input style={st.input} placeholder="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} />
+          </div>)}
+      </>) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 2fr", gap: 8 }}>
             <input style={st.input} placeholder="Tu nombre" value={editor} onChange={(e) => setEditor(e.target.value)} />
@@ -136,11 +177,16 @@ function Caso({ caso, onCerrar, onDecidido }) {
             <input style={st.input} placeholder="Motivo (también si descartas: el sistema aprende de eso)" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <button style={st.btnPri} disabled={enviando} onClick={() => decidir("aceptada")}>Aceptar</button>
-            <button style={st.btn} disabled={enviando} onClick={() => decidir("parcial")}>Aceptar en parte</button>
+            <button style={st.btnPri} disabled={enviando} onClick={() => decidir("aceptada")}>Aceptar todo</button>
+            <button style={st.btn} disabled={enviando || marcadas.size === 0 || marcadas.size === nAcc}
+                    title="Acepta solo las acciones marcadas" onClick={() => decidir("parcial")}>
+              Aceptar marcadas ({marcadas.size} de {nAcc})</button>
             <button style={{ ...st.btn, color: C.redDk }} disabled={enviando} onClick={() => decidir("descartada")}>Descartar</button>
           </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Aceptar no aplica cambios: los de parámetros quedan como recomendaciones en Herramientas → Parámetros.</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+            Nada se aplica solo. Las acciones aceptadas con cambios de parámetros quedan como recomendaciones en Herramientas → Parámetros;
+            las demás (turnos, línea alternativa, forecast) quedan pendientes en este caso hasta marcarlas hechas o descartadas.
+            Cada acción aceptada se registra para evaluar después su efecto.</div>
         </>
       )}
       {msg && <div style={{ marginTop: 8, fontSize: 12.5, color: msg.ok ? C.tealMid : C.redDk }}>{msg.t}</div>}
@@ -183,7 +229,7 @@ export default function AnalisisLinea() {
       </p>
       {error && <div style={{ ...st.card, background: C.redLt, color: C.redDk }}>{error}</div>}
       {analizando && <div style={{ ...st.card, background: C.purpleLt, color: C.purple }}>Analizando <b>{analizando}</b>: diagnóstico, palancas y recomendación IA (≈1 minuto)…</div>}
-      {caso && <Caso caso={caso} onCerrar={() => setCaso(null)} onDecidido={() => abrirCaso(caso.id)} />}
+      {caso && <Caso key={caso.id} caso={caso} onCerrar={() => setCaso(null)} onDecidido={() => abrirCaso(caso.id)} />}
 
       {!data ? <div style={st.card}>Calculando carga por línea…</div> : (
         <div style={st.card}>
@@ -205,7 +251,9 @@ export default function AnalisisLinea() {
                   {casosDe(l.linea).length > 0 && (
                     <button style={{ ...st.btn, marginLeft: 6 }} onClick={() => setAbiertas({ ...abiertas, [l.linea]: !abiertas[l.linea] })}
                             title="Ver los análisis anteriores de esta línea">
-                      {abiertas[l.linea] ? "▲" : "▼"} Análisis ({casosDe(l.linea).length})
+                      {abiertas[l.linea] ? "▲" : "▼"} Análisis ({casosDe(l.linea).length}
+                      {casosDe(l.linea).filter((c) => !c.decision && c.estado === "listo").length > 0 &&
+                        <b style={{ color: C.purple }}> · {casosDe(l.linea).filter((c) => !c.decision && c.estado === "listo").length} por decidir</b>})
                     </button>)}
                 </td>
               </tr>
@@ -217,6 +265,9 @@ export default function AnalisisLinea() {
                       <b style={{ minWidth: 34 }}>#{c.id}</b>
                       <span style={{ minWidth: 92, color: C.gray }}>{new Date(c.creado_en).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })}</span>
                       <span style={{ minWidth: 80 }}>{c.decision || "pendiente"}</span>
+                      <span style={{ minWidth: 76 }}>{c.origen === "automatico"
+                        ? <span style={st.pill(C.blueLt, C.blue)} title="Abierto por el sistema después del plan diario">automático</span>
+                        : <span style={st.pill(C.grayLt, C.gray)}>manual</span>}</span>
                       <span style={{ color: C.gray, flex: 1 }}>{(c.resumen || c.estado || "").slice(0, 200)}{(c.resumen || "").length > 200 ? "…" : ""}</span>
                     </div>))}
                 </td></tr>)}

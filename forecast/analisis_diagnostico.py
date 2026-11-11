@@ -340,19 +340,26 @@ class Decision(BaseModel):
     editor: str
     pin: str
     enviar_al_panel: bool = True
+    acciones_aceptadas: list[int] | None = None   # "orden" de las acciones aceptadas (parcial)
 
 
 @router.post("/lineas/{linea}/analizar")
 def analizar_linea(linea: str, body: SolicitudAnalisis):
     if not body.solicitado_por or len(body.solicitado_por.strip()) < 3:
         raise HTTPException(422, "Indica quién solicita el análisis.")
+    return ejecutar_analisis(linea, body.solicitado_por.strip(), body.con_ia, "manual")
+
+
+def ejecutar_analisis(linea: str, solicitado_por: str, con_ia: bool = True, origen: str = "manual",
+                      sintomas_extra: Optional[dict] = None) -> dict:
+    """Análisis completo de una línea (lo usan el botón 'Analizar' y el disparo automático)."""
     with _engine.begin() as c:
         plan, piezas, lineas, sku_lineas, params = _datos(c)
         if linea not in lineas:
             raise HTTPException(404, f"Línea no encontrada: {linea}")
         cid = c.execute(sa.text("""INSERT INTO mrp_analisis_casos (linea, origen, solicitado_por, plan_id, estado)
-                                   VALUES (:l, 'manual', :p, :pl, 'ejecutando') RETURNING id"""),
-                        {"l": linea, "p": body.solicitado_por.strip(), "pl": plan.id}).scalar()
+                                   VALUES (:l, :o, :p, :pl, 'ejecutando') RETURNING id"""),
+                        {"l": linea, "o": origen, "p": solicitado_por, "pl": plan.id}).scalar()
     try:
         try:
             demo = _al.capacidad_demostrada(date.today())
@@ -374,7 +381,9 @@ def analizar_linea(linea: str, body: SolicitudAnalisis):
                             {k: v for k, v in senales.items() if not k.startswith("_")})
         with _engine.connect() as c:
             apr = _aprendizaje(c, linea)
-        rec = recomendar_ia(diag, apr) if body.con_ia else {"disponible": False, "motivo": "Solicitado sin IA."}
+        rec = recomendar_ia(diag, apr) if con_ia else {"disponible": False, "motivo": "Solicitado sin IA."}
+        if sintomas_extra:
+            diag["sintomas"]["disparo"] = sintomas_extra
         with _engine.begin() as c:
             c.execute(sa.text("""UPDATE mrp_analisis_casos SET estado = 'listo', sintomas = CAST(:s AS JSONB),
                                  diagnostico = CAST(:d AS JSONB), escenarios = CAST(:e AS JSONB),
@@ -408,9 +417,44 @@ def listar_casos(linea: Optional[str] = None, limit: int = 30):
 def obtener_caso(cid: int):
     with _engine.connect() as c:
         r = c.execute(sa.text("SELECT * FROM mrp_analisis_casos WHERE id = :i"), {"i": cid}).first()
-    if r is None:
-        raise HTTPException(404, "Caso no encontrado.")
-    return dict(r._mapping)
+        if r is None:
+            raise HTTPException(404, "Caso no encontrado.")
+        caso = dict(r._mapping)
+        try:
+            caso["acciones"] = [dict(a._mapping) for a in c.execute(sa.text(
+                "SELECT * FROM mrp_analisis_acciones WHERE caso_id = :i ORDER BY orden"), {"i": cid})]
+        except Exception:
+            caso["acciones"] = []
+    return caso
+
+
+# ── Decisión del caso (11-11-2026) ────────────────────────────────────────────
+#   aceptada   = todas las acciones · parcial = solo las marcadas · descartada = ninguna
+#   Por cada acción ACEPTADA:
+#     · se crea una intervención 'pendiente' (aprendizaje: se evalúa después a 7/14 días)
+#     · si trae cambios de parámetros -> recomendación en el panel, enlazada a la intervención
+#     · si no (turnos, línea alternativa, forecast...) -> queda como PENDIENTE del caso,
+#       hasta marcarla hecha o descartada
+#   El caso pasa a 'en_seguimiento' mientras haya acciones aceptadas sin resolver.
+_PALANCA_INTERV = {"turnos": "turnos", "linea_alternativa": "linea_alternativa", "ampliacion": "ampliacion",
+                   "forecast": "forecast"}
+
+
+def _palanca_intervencion(a: dict) -> str:
+    campos = {cp.get("campo") for cp in (a.get("cambios_parametros") or [])}
+    if "batch_min_u" in campos:
+        return "param_batch"
+    if "cap_bodega_u" in campos:
+        return "param_cap_bodega"
+    return _PALANCA_INTERV.get(a.get("palanca"), "otro")
+
+
+def _actualizar_estado_caso(c, cid: int):
+    pend = c.execute(sa.text("SELECT count(*) FROM mrp_analisis_acciones WHERE caso_id = :i AND estado = 'aceptada'"),
+                     {"i": cid}).scalar()
+    c.execute(sa.text("""UPDATE mrp_analisis_casos SET estado = CASE
+                            WHEN decision = 'descartada' THEN 'descartado'
+                            WHEN :p > 0 THEN 'en_seguimiento' ELSE 'cerrado' END WHERE id = :i"""), {"p": pend, "i": cid})
 
 
 @router.post("/casos/{cid}/decision")
@@ -419,27 +463,113 @@ def decidir(cid: int, body: Decision):
     if body.decision not in ("aceptada", "parcial", "descartada"):
         raise HTTPException(422, "Decisión inválida.")
     _pe._verificar_identidad(body.editor, body.motivo)
-    creadas = 0
+    creadas, n_acept = 0, 0
     with _engine.begin() as c:
         _pe._verificar_pin(c, body.pin)
         caso = c.execute(sa.text("SELECT * FROM mrp_analisis_casos WHERE id = :i FOR UPDATE"), {"i": cid}).first()
         if caso is None:
             raise HTTPException(404, "Caso no encontrado.")
-        if body.decision != "descartada" and body.enviar_al_panel:
-            for a in (caso.recomendacion or {}).get("acciones", []) or []:
-                for cp in a.get("cambios_parametros") or []:
-                    if cp.get("campo") not in ("batch_min_u", "cap_bodega_u") or not cp.get("sku"):
-                        continue
-                    creadas += c.execute(sa.text("""
-                        INSERT INTO mrp_params_recomendaciones (entidad, clave, linea, campo, valor_actual, valor_sugerido,
-                                                                rango, motivo, prioridad, fuente)
-                        SELECT 'sku', :s, '', :c,
-                               CASE :c WHEN 'batch_min_u' THEN p.batch_min_u ELSE p.cap_bodega_u END, :v, NULL, :m, 'alta', :f
-                        FROM mrp_sku_params p WHERE p.sku = :s
-                        ON CONFLICT ON CONSTRAINT uq_params_reco DO NOTHING"""),
-                        {"s": cp["sku"], "c": cp["campo"], "v": cp.get("valor"), "m": a.get("accion", "")[:900],
-                         "f": f"Análisis de línea #{cid} ({caso.linea})"}).rowcount
+        if caso.decision:
+            raise HTTPException(409, f"El caso ya tiene decisión ({caso.decision}).")
+        acciones = (caso.recomendacion or {}).get("acciones", []) or []
+        ordenes = [int(a.get("orden") or i + 1) for i, a in enumerate(acciones)]
+        if body.decision == "aceptada":
+            aceptadas = set(ordenes)
+        elif body.decision == "parcial":
+            aceptadas = set(int(x) for x in (body.acciones_aceptadas or []))
+            if not aceptadas or not aceptadas <= set(ordenes):
+                raise HTTPException(422, "Para aceptar en parte, marca al menos una acción.")
+            if aceptadas == set(ordenes):
+                body.decision = "aceptada"
+        else:
+            aceptadas = set()
+        sint = caso.sintomas or {}
+        diagn = caso.diagnostico or {}
+        contexto = {"caso_id": cid, "linea": caso.linea, "plan_id": caso.plan_id,
+                    "carga_3sem": sint.get("max_carga_requerida_3sem"),
+                    "capacidad_demostrada": (sint.get("capacidad_demostrada") or {}).get("top3"),
+                    "causas": [x.get("codigo") for x in diagn.get("causas", [])],
+                    "causa_principal": (caso.recomendacion or {}).get("causa_principal")}
+        for i, a in enumerate(acciones):
+            orden = ordenes[i]
+            acept = orden in aceptadas
+            interv_id, n_rec = None, 0
+            if acept:
+                n_acept += 1
+                interv_id = c.execute(sa.text("""
+                    INSERT INTO mrp_intervenciones (caso_id, palanca, linea, skus, contexto, hipotesis, efecto_esperado, veredicto)
+                    VALUES (:c, :p, :l, :s, CAST(:ctx AS JSONB), :h, CAST(:e AS JSONB), 'pendiente')
+                    ON CONFLICT ON CONSTRAINT uq_intervencion_semilla DO NOTHING RETURNING id"""),
+                    {"c": cid, "p": _palanca_intervencion(a), "l": caso.linea,
+                     "s": sorted({cp.get("sku") for cp in (a.get("cambios_parametros") or []) if cp.get("sku")}) or None,
+                     "ctx": json.dumps(contexto, default=str), "h": f"Caso #{cid}, acción {orden}: {a.get('accion', '')}"[:2000],
+                     "e": json.dumps({"texto": a.get("efecto_esperado"), "costo_o_riesgo": a.get("costo_o_riesgo")})}).scalar()
+                if body.enviar_al_panel:
+                    for cp in a.get("cambios_parametros") or []:
+                        if cp.get("campo") not in ("batch_min_u", "cap_bodega_u") or not cp.get("sku"):
+                            continue
+                        n_rec += c.execute(sa.text("""
+                            INSERT INTO mrp_params_recomendaciones (entidad, clave, linea, campo, valor_actual, valor_sugerido,
+                                                                    rango, motivo, prioridad, fuente, caso_id, intervencion_id)
+                            SELECT 'sku', :s, '', :c,
+                                   CASE :c WHEN 'batch_min_u' THEN p.batch_min_u ELSE p.cap_bodega_u END, :v, NULL, :m, 'alta', :f, :cid, :iv
+                            FROM mrp_sku_params p WHERE p.sku = :s
+                            ON CONFLICT ON CONSTRAINT uq_params_reco DO NOTHING"""),
+                            {"s": cp["sku"], "c": cp["campo"], "v": cp.get("valor"), "m": a.get("accion", "")[:900],
+                             "f": f"Análisis de línea #{cid} ({caso.linea})", "cid": cid, "iv": interv_id}).rowcount
+                creadas += n_rec
+            # aceptada = pendiente: las de parámetros pasan a 'hecha' cuando se APLICAN en el panel
+            # (params_edicion las cierra); las demás se cierran a mano (hecha / descartada).
+            estado = "aceptada" if acept else "rechazada"
+            c.execute(sa.text("""
+                INSERT INTO mrp_analisis_acciones (caso_id, orden, palanca, accion, efecto_esperado, costo_o_riesgo,
+                                                   cambios_parametros, estado, intervencion_id, recomendaciones,
+                                                   resuelto_por, resuelto_en, comentario)
+                VALUES (:c, :o, :p, :a, :e, :r, CAST(:cp AS JSONB), :st, :iv, :nr,
+                        CASE WHEN :st = 'rechazada' THEN :ed END,
+                        CASE WHEN :st = 'rechazada' THEN now() END,
+                        CASE WHEN :nr > 0 THEN 'Enviada al panel de parámetros: se cierra al aplicar los cambios' END)
+                ON CONFLICT ON CONSTRAINT uq_accion_caso DO NOTHING"""),
+                {"c": cid, "o": orden, "p": a.get("palanca"), "a": a.get("accion", ""), "e": a.get("efecto_esperado"),
+                 "r": a.get("costo_o_riesgo"), "cp": json.dumps(a.get("cambios_parametros") or []), "st": estado,
+                 "iv": interv_id, "nr": n_rec, "ed": body.editor.strip()})
         c.execute(sa.text("""UPDATE mrp_analisis_casos SET decision = :d, decision_por = :p, decision_motivo = :m,
-                             decision_en = now(), estado = CASE WHEN :d = 'descartada' THEN 'descartado' ELSE 'en_decision' END
-                             WHERE id = :i"""), {"d": body.decision, "p": body.editor.strip(), "m": body.motivo.strip(), "i": cid})
-    return {"id": cid, "decision": body.decision, "recomendaciones_creadas": creadas}
+                             decision_en = now() WHERE id = :i"""),
+                  {"d": body.decision, "p": body.editor.strip(), "m": body.motivo.strip(), "i": cid})
+        _actualizar_estado_caso(c, cid)
+    return {"id": cid, "decision": body.decision, "acciones_aceptadas": n_acept, "recomendaciones_creadas": creadas}
+
+
+class EstadoAccion(BaseModel):
+    estado: str              # hecha | descartada
+    comentario: str
+    editor: str
+    pin: str
+
+
+@router.post("/acciones/{aid}/estado")
+def resolver_accion(aid: int, body: EstadoAccion):
+    """Cierra una acción pendiente (turnos, línea alternativa, forecast...): hecha o descartada."""
+    import params_edicion as _pe
+    if body.estado not in ("hecha", "descartada"):
+        raise HTTPException(422, "Estado inválido: usar 'hecha' o 'descartada'.")
+    _pe._verificar_identidad(body.editor, body.comentario)
+    with _engine.begin() as c:
+        _pe._verificar_pin(c, body.pin)
+        a = c.execute(sa.text("SELECT * FROM mrp_analisis_acciones WHERE id = :i FOR UPDATE"), {"i": aid}).first()
+        if a is None:
+            raise HTTPException(404, "Acción no encontrada.")
+        if a.estado != "aceptada":
+            raise HTTPException(409, f"La acción ya está resuelta ({a.estado}).")
+        c.execute(sa.text("""UPDATE mrp_analisis_acciones SET estado = :e, comentario = :m, resuelto_por = :p, resuelto_en = now()
+                             WHERE id = :i"""), {"e": body.estado, "m": body.comentario.strip(), "p": body.editor.strip(), "i": aid})
+        if a.intervencion_id:
+            if body.estado == "hecha":
+                c.execute(sa.text("UPDATE mrp_intervenciones SET aplicado_en = COALESCE(aplicado_en, now()) WHERE id = :i"),
+                          {"i": a.intervencion_id})
+            else:
+                c.execute(sa.text("""UPDATE mrp_intervenciones SET veredicto = 'no_concluyente', evaluado_en = now(),
+                                     evaluado_por = :p, aprendizaje = :m WHERE id = :i AND veredicto = 'pendiente'"""),
+                          {"p": body.editor.strip(), "m": f"No se ejecutó: {body.comentario.strip()}", "i": a.intervencion_id})
+        _actualizar_estado_caso(c, a.caso_id)
+    return {"id": aid, "estado": body.estado}

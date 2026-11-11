@@ -260,8 +260,9 @@ def _aplicar_sku(c, sku, cambios_prod, factores, motivo, editor, origen="panel",
                 continue
             c.execute(sa.text(f"UPDATE mrp_sku_params SET {campo} = :v, updated_at = now() WHERE sku = :s"),
                       {"v": val, "s": sku})
-            hid = _registrar(c, "sku", sku, None, campo, actual.get(campo), val, motivo, editor, origen,
-                             _reco_para(c, "sku", sku, None, campo, reco_ids), revierte_id)
+            _rid = _reco_para(c, "sku", sku, None, campo, reco_ids)
+            hid = _registrar(c, "sku", sku, None, campo, actual.get(campo), val, motivo, editor, origen, _rid, revierte_id)
+            _vincular_intervencion(c, _rid, hid)
             hechos.append({"historial_id": hid, "campo": campo, "anterior": actual.get(campo), "nuevo": val})
     for lin, val in (factores or {}).items():
         ant = c.execute(sa.text("SELECT factor_velocidad FROM mrp_sku_lineas WHERE sku = :s AND linea = :l FOR UPDATE"),
@@ -270,8 +271,9 @@ def _aplicar_sku(c, sku, cambios_prod, factores, motivo, editor, origen="panel",
             continue
         c.execute(sa.text("UPDATE mrp_sku_lineas SET factor_velocidad = :v WHERE sku = :s AND linea = :l"),
                   {"v": val, "s": sku, "l": lin})
-        hid = _registrar(c, "sku_linea", sku, lin, "factor_velocidad", ant, val, motivo, editor, origen,
-                         _reco_para(c, "sku_linea", sku, lin, "factor_velocidad", reco_ids), revierte_id)
+        _rid = _reco_para(c, "sku_linea", sku, lin, "factor_velocidad", reco_ids)
+        hid = _registrar(c, "sku_linea", sku, lin, "factor_velocidad", ant, val, motivo, editor, origen, _rid, revierte_id)
+        _vincular_intervencion(c, _rid, hid)
         hechos.append({"historial_id": hid, "campo": "factor_velocidad", "linea": lin, "anterior": ant, "nuevo": val})
     _marcar_recos(c, reco_ids, editor)
     return hechos
@@ -321,6 +323,43 @@ def _marcar_recos(c, reco_ids, editor):
         c.execute(sa.text("""UPDATE mrp_params_recomendaciones SET estado = 'aplicada', estado_por = :ed,
                              estado_en = now() WHERE id = ANY(:ids) AND estado = 'abierta'"""),
                   {"ids": list(reco_ids), "ed": editor.strip()})
+        _cerrar_acciones_de_caso(c, reco_ids, editor)
+
+
+def _vincular_intervencion(c, reco_id, hid):
+    """(11-11-2026) Si la recomendación vino de un caso de Análisis de Línea, el cambio aplicado
+    queda en la intervención (historial_ids + aplicado_en): es lo que se evaluará a 7/14 días."""
+    if not reco_id or not hid:
+        return
+    try:
+      with c.begin_nested():   # savepoint: un error aquí no aborta la edición
+        iv = c.execute(sa.text("SELECT intervencion_id FROM mrp_params_recomendaciones WHERE id = :r"), {"r": reco_id}).scalar()
+        if iv:
+            c.execute(sa.text("""UPDATE mrp_intervenciones
+                                 SET historial_ids = array_append(COALESCE(historial_ids, '{}'::bigint[]), CAST(:h AS BIGINT)),
+                                     aplicado_en = COALESCE(aplicado_en, now()) WHERE id = :i"""), {"h": hid, "i": iv})
+    except Exception:
+        pass
+
+
+def _cerrar_acciones_de_caso(c, reco_ids, editor):
+    """Acción de un caso cuyas recomendaciones ya se aplicaron todas -> 'hecha'; caso sin
+    pendientes -> 'cerrado'."""
+    try:
+      with c.begin_nested():   # savepoint: un error aquí no aborta la edición
+        c.execute(sa.text("""
+            UPDATE mrp_analisis_acciones a SET estado = 'hecha', resuelto_por = :ed, resuelto_en = now(),
+                   comentario = 'Cambios aplicados en el panel de parámetros'
+            WHERE a.estado = 'aceptada' AND a.intervencion_id IS NOT NULL
+              AND EXISTS (SELECT 1 FROM mrp_params_recomendaciones r WHERE r.intervencion_id = a.intervencion_id AND r.id = ANY(:ids))
+              AND NOT EXISTS (SELECT 1 FROM mrp_params_recomendaciones r WHERE r.intervencion_id = a.intervencion_id AND r.estado = 'abierta')"""),
+            {"ids": [int(i) for i in reco_ids], "ed": editor.strip()})
+        c.execute(sa.text("""
+            UPDATE mrp_analisis_casos k SET estado = 'cerrado'
+            WHERE k.estado = 'en_seguimiento'
+              AND NOT EXISTS (SELECT 1 FROM mrp_analisis_acciones a WHERE a.caso_id = k.id AND a.estado = 'aceptada')"""))
+    except Exception:
+        pass
 
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
