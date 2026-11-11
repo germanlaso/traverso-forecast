@@ -56,7 +56,7 @@ function Termino({ t, texto, onTermino }) {
 }
 
 export function ImagenSoporte({ archivo, alt }) {
-  const [url, setUrl] = useState(null), [err, setErr] = useState(false);
+  const [url, setUrl] = useState(null), [err, setErr] = useState(false), [zoom, setZoom] = useState(false);
   useEffect(() => {
     let vivo = true, obj = null;
     fetch(`${API}/soporte/img/${encodeURIComponent(archivo)}`)
@@ -69,8 +69,16 @@ export function ImagenSoporte({ archivo, alt }) {
   if (!url) return <div style={{ height: 120, background: CS.grayLt, borderRadius: 6 }} />;
   return (
     <figure style={{ margin: "12px 0" }}>
-      <img src={url} alt={alt} style={{ maxWidth: "100%", border: `1px solid ${CS.border}`, borderRadius: 6 }} />
-      {alt && <figcaption style={{ fontSize: 12, color: CS.muted, marginTop: 4 }}>{alt}</figcaption>}
+      <img src={url} alt={alt} onClick={() => setZoom(true)} title="Clic para ampliar"
+        style={{ maxWidth: "100%", border: `1px solid ${CS.border}`, borderRadius: 6, cursor: "zoom-in" }} />
+      {alt && <figcaption style={{ fontSize: 12, color: CS.muted, marginTop: 4 }}>{alt} · clic para ampliar</figcaption>}
+      {zoom && (
+        <div onClick={() => setZoom(false)} role="dialog" aria-label={alt || "Imagen ampliada"}
+          style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(20,20,20,.75)", display: "flex",
+            alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}>
+          <img src={url} alt={alt} style={{ maxWidth: "96vw", maxHeight: "94vh", borderRadius: 6, background: "#fff" }} />
+        </div>
+      )}
     </figure>
   );
 }

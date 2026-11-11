@@ -130,8 +130,8 @@ def academia_rutas():
                 u = _contenido(sc.leer_unidad, uid)
                 unidades.append({k: u[k] for k in ("id", "titulo", "objetivo", "minutos", "puntos")}
                                 | {"tiene_desafio": bool(u["desafio"]), "n_preguntas": len(u["preguntas"])})
-            modulos.append({**{k: m.get(k) for k in ("id", "titulo", "insignia")}, "unidades": unidades})
-        salida.append({**{k: r.get(k) for k in ("id", "titulo", "publico", "orden")}, "modulos": modulos})
+            modulos.append({**{k: m.get(k) for k in ("id", "titulo", "insignia", "descripcion")}, "unidades": unidades})
+        salida.append({**{k: r.get(k) for k in ("id", "titulo", "publico", "orden", "descripcion")}, "modulos": modulos})
     return {"version": data.get("version", 1), "rutas": salida}
 
 

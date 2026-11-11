@@ -24,6 +24,7 @@ import PrecisionForecast from './components/PrecisionForecast';
 import Ayuda from './components/Ayuda';                 // Soporte > Ayuda
 import PanelAyuda from './components/PanelAyuda';       // Ayuda contextual "?"
 import MostacinFlotante, { MostacinChat } from './components/Mostacin';   // Chat de ayuda
+import Academia from './components/Academia';           // Soporte > Academia
 
 const API = process.env.REACT_APP_API_BASE || '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -57,7 +58,7 @@ const NAV = [
   { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
   { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake'],['bitacora','Bitácora'],['rendimiento','Rendimiento'],['informeia','Informe IA'],['analisislinea','Análisis de Línea'],['aprendido','Lo aprendido']] },
   { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
-  { key:'soporte', label:'🛟 Soporte', tabs:[['ayuda','Ayuda'],['mostacin','Mostacín']] },
+  { key:'soporte', label:'🛟 Soporte', tabs:[['ayuda','Ayuda'],['academia','Academia'],['mostacin','Mostacín']] },
 ];
 
 const C = {
@@ -1367,6 +1368,7 @@ function AppInner() {
         {activeTab === 'precision' && <PrecisionForecast />}
         {activeTab === 'ayuda' && <Ayuda destino={ayudaDestino} onIrPantalla={irAPantalla}
           pantallasNavegables={new Set(NAV.flatMap(n => n.tab ? [n.tab] : n.tabs.map(([t]) => t)))} />}
+        {activeTab === 'academia' && <Academia onAbrirEnAyuda={abrirEnAyuda} />}
         {activeTab === 'mostacin' && <div style={{height:'calc(100vh - 190px)',minHeight:420,border:`1px solid ${C.border}`,borderRadius:12,overflow:'hidden'}}>
           <MostacinChat pantalla="mostacin" ancho onIrPantalla={irAPantalla} onAbrirEnAyuda={abrirEnAyuda} /></div>}
       </div>

@@ -1,9 +1,21 @@
 {
   "version": 1,
   "rutas": [
-    {"id": "fundamentos",    "titulo": "Fundamentos",    "publico": "Todos",                            "orden": 1, "modulos": []},
-    {"id": "planificador",   "titulo": "Planificador",   "publico": "Planificadores",                   "orden": 2, "modulos": []},
-    {"id": "produccion",     "titulo": "Producción",     "publico": "Producción (bitácora, casos)",     "orden": 3, "modulos": []},
-    {"id": "administracion", "titulo": "Administración", "publico": "Administración (parámetros, PIN)", "orden": 4, "modulos": []}
+    {"id": "fundamentos", "titulo": "Fundamentos", "publico": "Todos", "orden": 1,
+     "descripcion": "Cómo funciona el sistema, cómo moverse por la app y cómo leer el estado del plan. Recomendada para empezar.",
+     "modulos": [
+       {"id": "fund-sistema", "titulo": "Cómo funciona el sistema", "insignia": "🧭",
+        "descripcion": "El ciclo diario, la navegación y los conceptos que usa toda la app.",
+        "unidades": ["fund-ciclo", "fund-navegar", "fund-conceptos"]},
+       {"id": "fund-estado", "titulo": "Leer el estado del plan", "insignia": "🔎",
+        "descripcion": "Dónde ver qué productos quiebran y cómo evoluciona su stock día a día.",
+        "unidades": ["fund-inicio-quiebres", "fund-stockdiario"]}
+     ]},
+    {"id": "planificador", "titulo": "Planificador", "publico": "Planificadores", "orden": 2,
+     "descripcion": "Demanda, revisión y aprobación de órdenes, programa diario y control.", "modulos": []},
+    {"id": "produccion", "titulo": "Producción", "publico": "Producción (bitácora, casos)", "orden": 3,
+     "descripcion": "Registrar lo que pasa en las líneas y leer los indicadores de desempeño.", "modulos": []},
+    {"id": "administracion", "titulo": "Administración", "publico": "Administración (parámetros, PIN)", "orden": 4,
+     "descripcion": "Parámetros, capacidad, decisiones de casos y aprendizaje del sistema.", "modulos": []}
   ]
 }

@@ -1,0 +1,181 @@
+{
+ "base_url": "http://180.1.1.18:3000",
+ "viewport": [
+  1440,
+  900
+ ],
+ "escala": 1,
+ "variables": {
+  "SKU_EJEMPLO": "261010255"
+ },
+ "difuminar_palabras": [],
+ "capturas": [
+  {
+   "archivo": "fund__navegar.png",
+   "titulo": "Menú, ayuda y Mostacín",
+   "seccion": "🏠 Inicio",
+   "esperar_texto": "Panel de control",
+   "mostrar_flotantes": true,
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "🏭 Planificación",
+     "exacto": true,
+     "pos": "arriba"
+    },
+    {
+     "n": 2,
+     "selector": "button[aria-label='Ayuda de esta pantalla']"
+    },
+    {
+     "n": 3,
+     "texto": "🛟 Soporte",
+     "exacto": true,
+     "pos": "arriba"
+    },
+    {
+     "n": 4,
+     "selector": "button[aria-label='Pregúntale a Mostacín']"
+    }
+   ]
+  },
+  {
+   "archivo": "fund__inicio.png",
+   "titulo": "Panel de inicio",
+   "seccion": "🏠 Inicio",
+   "esperar_texto": "SKU en quiebre",
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "SKU en quiebre",
+     "exacto": true,
+     "subir": 1
+    },
+    {
+     "n": 2,
+     "texto": "SKU en riesgo",
+     "exacto": true,
+     "subir": 1,
+     "pos": "arriba"
+    },
+    {
+     "n": 3,
+     "texto": "SKU bajo SS",
+     "exacto": true,
+     "subir": 1,
+     "pos": "arriba"
+    },
+    {
+     "n": 4,
+     "texto": "Ver Mapa de Quiebres"
+    }
+   ]
+  },
+  {
+   "archivo": "fund__quiebres.png",
+   "titulo": "Mapa de Quiebres",
+   "seccion": "📊 Control",
+   "pestana": "Mapa de Quiebres",
+   "esperar_texto": "Clic en celda",
+   "pasos": [
+    {
+     "accion": "click",
+     "texto": "Solo quiebre",
+     "exacto": true
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Solo quiebre",
+     "exacto": true,
+     "pos": "arriba"
+    },
+    {
+     "n": 2,
+     "texto": "SKU con quiebre",
+     "indice": 1
+    },
+    {
+     "n": 3,
+     "texto": "recepción pend.",
+     "indice": 1,
+     "opcional": true
+    }
+   ]
+  },
+  {
+   "archivo": "fund__stockdiario.png",
+   "titulo": "Stock Diario de un SKU",
+   "seccion": "🏭 Planificación",
+   "pestana": "Stock Diario",
+   "esperar_texto": "Apertura diaria",
+   "pasos": [
+    {
+     "accion": "escribir",
+     "selector": "input[placeholder^='Buscar por código']",
+     "valor": "{SKU_EJEMPLO}"
+    },
+    {
+     "accion": "esperar",
+     "ms": 800
+    },
+    {
+     "accion": "click",
+     "texto": "{SKU_EJEMPLO}"
+    },
+    {
+     "accion": "esperar_texto",
+     "texto": "{SKU_EJEMPLO} —"
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "selector": "input[placeholder^='Buscar por código']"
+    },
+    {
+     "n": 2,
+     "texto": "SS (días hábiles)",
+     "exacto": true,
+     "subir": 1
+    },
+    {
+     "n": 3,
+     "texto": "OFT propuesta",
+     "exacto": true,
+     "subir": 1
+    },
+    {
+     "n": 4,
+     "texto": "Estado",
+     "exacto": true,
+     "opcional": true,
+     "pos": "arriba"
+    }
+   ]
+  },
+  {
+   "archivo": "fund__plan_ordenes.png",
+   "titulo": "Órdenes sugeridas y aprobadas",
+   "seccion": "🏭 Planificación",
+   "pestana": "Plan de Producción",
+   "esperar_texto": "SKUs planificados",
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "OFT-2026"
+    },
+    {
+     "n": 2,
+     "texto": "OF-2026"
+    },
+    {
+     "n": 3,
+     "texto": "OFM-0",
+     "opcional": true
+    }
+   ]
+  }
+ ]
+}

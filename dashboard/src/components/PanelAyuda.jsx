@@ -6,7 +6,7 @@ import MarkdownSoporte, { CS } from "./MarkdownSoporte";
 
 const API = process.env.REACT_APP_API_BASE || "";
 // Pantallas sin artículo propio → artículo que se muestra
-const EQUIVALENTE = { ayuda: "faq" };
+const EQUIVALENTE = { ayuda: "faq", academia: "faq", mostacin: "faq" };
 
 export default function PanelAyuda({ pantalla, onClose, onAbrirEnAyuda }) {
   const id = EQUIVALENTE[pantalla] || pantalla;

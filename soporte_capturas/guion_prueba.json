@@ -1,0 +1,33 @@
+{
+  "base_url": "http://180.1.1.18:3000",
+  "viewport": [1440, 900],
+  "escala": 1,
+  "variables": {"SKU_EJEMPLO": "COMPLETAR"},
+  "capturas": [
+    {"archivo": "prueba__home.png", "titulo": "Inicio: estado del plan",
+     "seccion": "🏠 Inicio", "esperar_texto": "Panel de control",
+     "anotaciones": [{"n": 1, "texto": "SKU en quiebre"}, {"n": 2, "texto": "Ver Mapa de Quiebres"},
+                     {"n": 3, "selector": "button[aria-label='Ayuda de esta pantalla']"}]},
+    {"archivo": "prueba__quiebres.png", "titulo": "Mapa de Quiebres",
+     "seccion": "📊 Control", "pestana": "Mapa de Quiebres", "esperar_texto": "Clic en celda",
+     "anotaciones": [{"n": 1, "texto": "Solo quiebre", "exacto": true}]},
+    {"archivo": "prueba__stockdiario.png", "titulo": "Stock Diario de un SKU",
+     "seccion": "🏭 Planificación", "pestana": "Stock Diario", "esperar_texto": "Apertura diaria",
+     "pasos": [{"accion": "escribir", "selector": "input[placeholder^='Buscar por código']", "valor": "{SKU_EJEMPLO}"},
+               {"accion": "esperar", "ms": 800},
+               {"accion": "click", "texto": "{SKU_EJEMPLO}"},
+               {"accion": "esperar", "ms": 2500}],
+     "anotaciones": [{"n": 1, "texto": "Stock seguridad", "exacto": true}]},
+    {"archivo": "prueba__plan.png", "titulo": "Plan de Producción",
+     "seccion": "🏭 Planificación", "pestana": "Plan de Producción", "esperar_texto": "SKUs planificados",
+     "anotaciones": [{"n": 1, "texto": "Órdenes sugeridas", "exacto": true}]},
+    {"archivo": "prueba__faltantes.png", "titulo": "Faltantes con clientes difuminados",
+     "seccion": "📊 Control", "pestana": "Faltantes", "esperar_texto": "Faltante diario",
+     "espera_ms": 2500,
+     "difuminar": [{"selector": "table td"}],
+     "pagina_completa": true},
+    {"archivo": "prueba__mostacin.png", "titulo": "Botón de Mostacín",
+     "seccion": "🏠 Inicio", "esperar_texto": "Panel de control", "mostrar_flotantes": true,
+     "anotaciones": [{"n": 1, "selector": "button[aria-label='Pregúntale a Mostacín']"}]}
+  ]
+}

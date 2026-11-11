@@ -21,6 +21,8 @@ Formato de un .md:
     ---
     Cuerpo en Markdown. Términos del glosario: [[g:ss]]. Imágenes: ![texto](plan__1.png)
 
+Cabecera de una unidad: titulo, objetivo, minutos, puntos, version, aprobacion (0-1), desafio (texto),
+por_que (lo que dice Mostacín), ayuda (ids de artículos relacionados, separados por coma).
 Cuestionario de una unidad (dentro del .md):
     ```cuestionario
     [{"id": "p1", "pregunta": "...", "opciones": ["A", "B", "C"], "correcta": 1, "explicacion": "..."}]
@@ -192,7 +194,8 @@ def _leer_unidad_completa(unidad_id: str) -> dict:
     return {"id": unidad_id, "titulo": m.get("titulo", unidad_id), "objetivo": m.get("objetivo", ""),
             "minutos": _entero(m.get("minutos"), None), "puntos": _entero(m.get("puntos"), PUNTOS_DEFECTO),
             "version": _entero(m.get("version"), 1), "aprobacion": aprobacion,
-            "desafio": m.get("desafio", ""), "cuerpo": cuerpo, "preguntas": preguntas}
+            "desafio": m.get("desafio", ""), "por_que": m.get("por_que", ""), "ayuda": m.get("ayuda", ""),
+            "cuerpo": cuerpo, "preguntas": preguntas}
 
 
 def leer_unidad(unidad_id: str) -> dict:
@@ -363,6 +366,11 @@ def validar() -> list:
             prob.append(f"unidad {uid}: no está en ninguna ruta de rutas.json")
         if not u["objetivo"]:
             prob.append(f"unidad {uid}: falta 'objetivo'")
+        for art in [x.strip() for x in u["ayuda"].split(",") if x.strip()]:
+            try:
+                leer_articulo(art)
+            except ContenidoError:
+                prob.append(f"unidad {uid}: 'ayuda' apunta a un artículo inexistente ({art})")
         n = len(u["preguntas"])
         if n and not 3 <= n <= 5:
             prob.append(f"unidad {uid}: el cuestionario tiene {n} preguntas (se esperan 3 a 5)")
