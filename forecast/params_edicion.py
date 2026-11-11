@@ -20,6 +20,7 @@ PIN: se define una vez dentro del contenedor:
 """
 import argparse
 import getpass
+import json
 import hashlib
 import hmac
 import secrets
@@ -99,6 +100,60 @@ def _cargar(c):
     return lineas, prods, pares
 
 
+DIAS = ["L", "M", "X", "J", "V", "S", "D"]
+
+
+def _validar_turnos(v) -> list:
+    """(11-11-2026) Valida turnos_config: 1 a 3 turnos, 7 horas cada uno (0-12 h por turno),
+    a lo sumo 24 h por día sumando turnos. Devuelve la lista normalizada."""
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except Exception:
+            raise HTTPException(422, "Turnos: formato inválido.")
+    if not isinstance(v, list) or not 1 <= len(v) <= 3:
+        raise HTTPException(422, "Debe haber entre 1 y 3 turnos.")
+    out = []
+    for i, t in enumerate(v):
+        h = (t or {}).get("horas") if isinstance(t, dict) else None
+        if not isinstance(h, list) or len(h) != 7:
+            raise HTTPException(422, f"Turno {i + 1}: se esperan 7 valores (L a D).")
+        try:
+            h = [round(float(x or 0), 2) for x in h]
+        except (TypeError, ValueError):
+            raise HTTPException(422, f"Turno {i + 1}: horas inválidas.")
+        if any(x < 0 or x > 12 for x in h):
+            raise HTTPException(422, f"Turno {i + 1}: cada día debe tener entre 0 y 12 h.")
+        out.append({"turno": i + 1, "horas": h})
+    for d in range(7):
+        if sum(t["horas"][d] for t in out) > 24:
+            raise HTTPException(422, f"{DIAS[d]}: la suma de turnos supera 24 h.")
+    if sum(sum(t["horas"]) for t in out) <= 0:
+        raise HTTPException(422, "La línea quedaría sin horas en la semana.")
+    return out
+
+
+def _separar_linea(cambios: Optional[dict]) -> dict:
+    """Cambios de línea: numéricos validados con _limpiar + turnos_config validado aparte."""
+    cambios = dict(cambios or {})
+    tc = cambios.pop("turnos_config", None)
+    out = _limpiar(cambios, CAMPOS_LINEA)
+    if tc is not None:
+        out["turnos_config"] = _validar_turnos(tc)
+    return out
+
+
+def _json_tc(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except Exception:
+            return v
+    return json.dumps(v, sort_keys=True)
+
+
 def _limpiar(cambios: Optional[dict], permitidos: dict) -> dict:
     out = {}
     for k, v in (cambios or {}).items():
@@ -154,7 +209,7 @@ def _impacto_linea(c, codigo: str, cambios: dict) -> dict:
         raise HTTPException(404, f"Línea no encontrada: {codigo}")
     horas = float(cambios.get("horas_turno", lin.get("horas_turno") or 0))
     turnos = int(cambios.get("turnos_dia", lin.get("turnos_dia") or 0))
-    if horas * turnos > 24:
+    if "turnos_config" not in cambios and not lin.get("turnos_config") and horas * turnos > 24:
         raise HTTPException(422, "Turnos × horas por turno no puede superar 24 h por día.")
     fc = _forecast()
     lin_prop = {**lin, **cambios}
@@ -185,13 +240,15 @@ def _impacto_linea(c, codigo: str, cambios: dict) -> dict:
 
 # ── Escritura con historial ───────────────────────────────────────────────────
 def _registrar(c, entidad, sku, linea, campo, anterior, nuevo, motivo, editor,
-               origen="panel", recomendacion_id=None, revierte_id=None) -> int:
+               origen="panel", recomendacion_id=None, revierte_id=None, anterior_txt=None, nuevo_txt=None) -> int:
     return c.execute(sa.text("""
         INSERT INTO mrp_params_historial (entidad, sku, linea, campo, valor_anterior, valor_nuevo,
-                                          motivo, editor, origen, recomendacion_id, revierte_id)
-        VALUES (:e, :s, :l, :c, :a, :n, :m, :ed, :o, :r, :rv) RETURNING id"""),
+                                          motivo, editor, origen, recomendacion_id, revierte_id,
+                                          valor_anterior_txt, valor_nuevo_txt)
+        VALUES (:e, :s, :l, :c, :a, :n, :m, :ed, :o, :r, :rv, :at, :nt) RETURNING id"""),
         {"e": entidad, "s": sku, "l": linea, "c": campo, "a": anterior, "n": nuevo, "m": motivo.strip(),
-         "ed": editor.strip(), "o": origen, "r": recomendacion_id, "rv": revierte_id}).scalar()
+         "ed": editor.strip(), "o": origen, "r": recomendacion_id, "rv": revierte_id,
+         "at": anterior_txt, "nt": nuevo_txt}).scalar()
 
 
 def _aplicar_sku(c, sku, cambios_prod, factores, motivo, editor, origen="panel", reco_ids=(), revierte_id=None):
@@ -224,6 +281,19 @@ def _aplicar_linea(c, codigo, cambios, motivo, editor, origen="panel", reco_ids=
     actual = dict(c.execute(sa.text("SELECT * FROM mrp_lineas WHERE codigo = :c FOR UPDATE"), {"c": codigo}).first()._mapping)
     hechos = []
     for campo, val in cambios.items():
+        if campo == "turnos_config":
+            ant, nue = _json_tc(actual.get("turnos_config")), _json_tc(val)
+            if ant == nue:
+                continue
+            c.execute(sa.text("UPDATE mrp_lineas SET turnos_config = CAST(:v AS JSONB), updated_at = now() WHERE codigo = :c"),
+                      {"v": json.dumps(val), "c": codigo})
+            sem_a = sum(sum(t["horas"]) for t in json.loads(ant)) if ant else None
+            sem_n = sum(sum(t["horas"]) for t in val)
+            hid = _registrar(c, "linea", None, codigo, "turnos_config", sem_a, sem_n, motivo, editor, origen,
+                             _reco_para(c, "linea", codigo, codigo, campo, reco_ids), revierte_id,
+                             anterior_txt=ant, nuevo_txt=nue)
+            hechos.append({"historial_id": hid, "campo": campo, "anterior": ant, "nuevo": nue})
+            continue
         if actual.get(campo) is not None and float(actual[campo]) == float(val):
             continue
         c.execute(sa.text(f"UPDATE mrp_lineas SET {campo} = :v, updated_at = now() WHERE codigo = :c"),
@@ -291,7 +361,9 @@ class EstadoReco(Autorizacion):
 @router.get("/config")
 def config():
     with _engine.connect() as c:
+        cal = c.execute(sa.text("SELECT valor FROM mrp_params_config WHERE clave = 'capacidad_calendario'")).scalar()
         return {"pin_configurado": _pin_configurado(c), "aviso": AVISO_APLICACION, "limites": LIMITES,
+                "calendario_activo": (cal or "").lower() == "on",
                 "umbrales": {"horas_batch_min": _pd.UMBRAL_HORAS_BATCH_MIN,
                              "factor_rango": list(_pd.FACTOR_RANGO_NORMAL)}}
 
@@ -322,7 +394,7 @@ def editar_sku(sku: str, body: EditarSku):
 
 @router.post("/linea/{codigo}/validar")
 def validar_linea(codigo: str, body: ValidarLinea):
-    cambios = _limpiar(body.cambios, CAMPOS_LINEA)
+    cambios = _separar_linea(body.cambios)
     with _engine.connect() as c:
         return _impacto_linea(c, codigo, cambios)
 
@@ -330,7 +402,7 @@ def validar_linea(codigo: str, body: ValidarLinea):
 @router.put("/linea/{codigo}")
 def editar_linea(codigo: str, body: EditarLinea):
     _verificar_identidad(body.editor, body.motivo)
-    cambios = _limpiar(body.cambios, CAMPOS_LINEA)
+    cambios = _separar_linea(body.cambios)
     if not cambios:
         raise HTTPException(422, "No hay cambios para guardar.")
     with _engine.begin() as c:
@@ -367,6 +439,23 @@ def revertir(hid: int, body: Autorizacion):
             raise HTTPException(404, "Cambio no encontrado.")
         if h.revertido_por:
             raise HTTPException(409, f"Este cambio ya fue revertido (#{h.revertido_por}).")
+        if h.campo == "turnos_config":
+            if not h.valor_anterior_txt:
+                raise HTTPException(409, "El cambio no tiene patrón anterior registrado: no se puede revertir.")
+            actual_tc = c.execute(sa.text("SELECT turnos_config FROM mrp_lineas WHERE codigo = :c"), {"c": h.linea}).scalar()
+            if _json_tc(actual_tc) != _json_tc(h.valor_nuevo_txt):
+                raise HTTPException(409, "Los turnos cambiaron después de este registro: revertir desde el cambio más reciente.")
+            val_tc = _validar_turnos(h.valor_anterior_txt)
+            imp = _impacto_linea(c, h.linea, {"turnos_config": val_tc})
+            if not imp["puede_guardar"]:
+                raise HTTPException(422, {"mensaje": "Revertir genera errores nuevos en SKU de la línea.", "impacto": imp})
+            hechos = _aplicar_linea(c, h.linea, {"turnos_config": val_tc}, motivo, body.editor, "revertir", revierte_id=hid)
+            if hechos:
+                c.execute(sa.text("UPDATE mrp_params_historial SET revertido_por = :n WHERE id = :i"),
+                          {"n": hechos[0]["historial_id"], "i": hid})
+            return {"revertido": True, "cambios": hechos, "aviso": AVISO_APLICACION}
+        if h.campo.startswith("excepcion"):
+            raise HTTPException(409, "Las excepciones se anulan desde la lista de excepciones.")
         if h.valor_anterior is None:
             raise HTTPException(409, "El cambio no tiene valor anterior registrado: no se puede revertir.")
         tipo = {**CAMPOS_SKU, **CAMPOS_SKU_LINEA, **CAMPOS_LINEA}[h.campo]
@@ -440,6 +529,95 @@ def estado_reco(rid: int, body: EstadoReco):
     if not n:
         raise HTTPException(404, "Recomendación no encontrada.")
     return {"id": rid, "estado": body.estado}
+
+
+# ── Calendario de capacidad: excepciones por fecha y activación (11-11-2026) ──
+TIPOS_EXC = ("extension", "sabado", "domingo_feriado", "sin_produccion", "otro")
+
+
+class Excepcion(Autorizacion):
+    linea: str
+    fecha: str               # YYYY-MM-DD
+    horas: float             # horas TOTALES del día (todos los turnos)
+    tipo: str = "extension"
+
+
+class Activacion(Autorizacion):
+    activo: bool
+
+
+@router.get("/excepciones")
+def listar_excepciones(linea: Optional[str] = None, desde: Optional[str] = None, incluir_anuladas: bool = False):
+    sql = "SELECT * FROM mrp_capacidad_excepciones WHERE fecha >= COALESCE(CAST(:d AS DATE), current_date - 7)"
+    p = {"d": desde}
+    if linea:
+        sql += " AND linea = :l"; p["l"] = linea
+    if not incluir_anuladas:
+        sql += " AND NOT anulado"
+    sql += " ORDER BY fecha, linea"
+    with _engine.connect() as c:
+        return {"excepciones": [dict(r._mapping) for r in c.execute(sa.text(sql), p)]}
+
+
+@router.post("/excepciones")
+def crear_excepcion(body: Excepcion):
+    from datetime import date as _date
+    _verificar_identidad(body.editor, body.motivo)
+    if body.tipo not in TIPOS_EXC:
+        raise HTTPException(422, f"Tipo inválido: {body.tipo}")
+    try:
+        f = _date.fromisoformat(body.fecha)
+    except ValueError:
+        raise HTTPException(422, "Fecha inválida (YYYY-MM-DD).")
+    if not 0 <= float(body.horas) <= 24:
+        raise HTTPException(422, "Las horas del día deben estar entre 0 y 24.")
+    with _engine.begin() as c:
+        _verificar_pin(c, body.pin)
+        if c.execute(sa.text("SELECT 1 FROM mrp_lineas WHERE codigo = :l"), {"l": body.linea}).first() is None:
+            raise HTTPException(404, f"Línea no encontrada: {body.linea}")
+        prev = c.execute(sa.text("""SELECT id, horas FROM mrp_capacidad_excepciones
+                                    WHERE linea = :l AND fecha = :f AND NOT anulado FOR UPDATE"""),
+                         {"l": body.linea, "f": f}).first()
+        if prev is not None:
+            c.execute(sa.text("""UPDATE mrp_capacidad_excepciones SET anulado = TRUE, anulado_por = :e, anulado_en = now()
+                                 WHERE id = :i"""), {"e": body.editor.strip(), "i": prev.id})
+        eid = c.execute(sa.text("""INSERT INTO mrp_capacidad_excepciones (linea, fecha, horas, tipo, motivo, creado_por)
+                                   VALUES (:l, :f, :h, :t, :m, :e) RETURNING id"""),
+                        {"l": body.linea, "f": f, "h": float(body.horas), "t": body.tipo,
+                         "m": body.motivo.strip(), "e": body.editor.strip()}).scalar()
+        _registrar(c, "linea", None, body.linea, f"excepcion {f.isoformat()}",
+                   float(prev.horas) if prev is not None else None, float(body.horas), body.motivo, body.editor)
+    return {"id": eid, "reemplazo": prev.id if prev is not None else None, "aviso": AVISO_APLICACION}
+
+
+@router.post("/excepciones/{eid}/anular")
+def anular_excepcion(eid: int, body: Autorizacion):
+    _verificar_identidad(body.editor, body.motivo or "Anulación")
+    with _engine.begin() as c:
+        _verificar_pin(c, body.pin)
+        r = c.execute(sa.text("SELECT * FROM mrp_capacidad_excepciones WHERE id = :i FOR UPDATE"), {"i": eid}).first()
+        if r is None or r.anulado:
+            raise HTTPException(404, "Excepción no encontrada o ya anulada.")
+        c.execute(sa.text("""UPDATE mrp_capacidad_excepciones SET anulado = TRUE, anulado_por = :e, anulado_en = now()
+                             WHERE id = :i"""), {"e": body.editor.strip(), "i": eid})
+        _registrar(c, "linea", None, r.linea, f"excepcion {r.fecha.isoformat()}", float(r.horas), None,
+                   body.motivo or "Anulación de excepción", body.editor)
+    return {"anulada": eid, "aviso": AVISO_APLICACION}
+
+
+@router.put("/calendario")
+def activar_calendario(body: Activacion):
+    """Interruptor general del calendario de capacidad (plan, KPIs y análisis)."""
+    _verificar_identidad(body.editor, body.motivo)
+    with _engine.begin() as c:
+        _verificar_pin(c, body.pin)
+        ant = c.execute(sa.text("SELECT valor FROM mrp_params_config WHERE clave = 'capacidad_calendario'")).scalar()
+        nue = "on" if body.activo else "off"
+        c.execute(sa.text("""INSERT INTO mrp_params_config (clave, valor, updated_at) VALUES ('capacidad_calendario', :v, now())
+                             ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor, updated_at = now()"""), {"v": nue})
+        _registrar(c, "linea", None, None, "capacidad_calendario", None, None, body.motivo, body.editor,
+                   anterior_txt=ant, nuevo_txt=nue)
+    return {"capacidad_calendario": nue, "aviso": AVISO_APLICACION}
 
 
 # ── CLI: definir el PIN ───────────────────────────────────────────────────────

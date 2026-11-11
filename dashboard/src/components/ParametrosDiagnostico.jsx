@@ -34,6 +34,7 @@ const ALERTA_LABEL = {
   CAP_BODEGA_MENOR_BATCH:  "Bodega < batch",
   CAP_BODEGA_SIN_SS:       "Bodega < batch + SS",
   BATCH_CORTO:             "Batch < 3 h",
+  BATCH_NO_CABE_DIA_CORTO: "Batch no cabe en día de 8 h",
   FACTOR_FUERA_RANGO:      "Factor fuera de rango",
   VELOCIDAD_CERO:          "Velocidad 0",
   SKU_SIN_PARAMS:          "SKU sin parámetros",
@@ -499,7 +500,9 @@ export default function ParametrosDiagnostico() {
                 <div style={{ fontSize: 10.5, color: C.textMuted }}>{l.area}</div>
               </div>
               <div style={{ fontSize: 11.5, color: C.textMuted, minWidth: 200 }}>
-                {fmtN(d.velocidad_u_hr)} u/hr · {d.turnos_dia}t × {fmt1(d.horas_turno ? d.horas_turno : d.horas_dia / (d.turnos_dia || 1))}h × {d.dias_semana}d
+                {fmtN(d.velocidad_u_hr)} u/hr · {d.horas_por_dia
+                  ? <span title="Horas por día (lunes a domingo), sumando turnos">{d.turnos_dia}t · {d.horas_por_dia.slice(0, 5).map((h) => fmt1(h)).join("-")}{(d.horas_por_dia[5] || d.horas_por_dia[6]) ? ` · S ${fmt1(d.horas_por_dia[5])} D ${fmt1(d.horas_por_dia[6])}` : ""} = {fmt1(d.horas_semana)} h/sem</span>
+                  : <>{d.turnos_dia}t × {fmt1(d.horas_turno ? d.horas_turno : d.horas_dia / (d.turnos_dia || 1))}h × {d.dias_semana}d</>}
               </div>
               <div style={{ fontSize: 11.5, minWidth: 175 }}>
                 <span style={{ color: C.textMuted }}>día </span><b>{fmtN(d.cap_dia_u)}</b>

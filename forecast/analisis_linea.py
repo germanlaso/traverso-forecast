@@ -42,6 +42,15 @@ SEMANAS_DEMOSTRADA = 8        # ventana para capacidad demostrada
 _CACHE_DEMO = {}              # {fecha: {linea: {...}}} — se recalcula una vez al día
 
 
+def horas_dia_linea(L: dict, d: date) -> float:
+    """(11-11-2026) Horas de la línea ese día, igual que el solver: patrón por día/turno y
+    excepciones si el calendario está activo (claves _tc/_exc que pone _cargar_desde_bd);
+    si no, horas_turno x turnos en días hábiles (sin feriados)."""
+    import calendario as _cal
+    return _cal.horas_linea_dia(d, float(L.get("horas_turno") or 0), int(L.get("turnos_dia") or 0),
+                                L.get("_tc"), L.get("_exc"))
+
+
 def _lunes(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
@@ -164,21 +173,25 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
             continue
         h_dia = float(L.get("turnos_dia") or 0) * float(L.get("horas_turno") or 0)
         dias_sem = int(L.get("dias_semana") or 5)
+        import calendario as _cal
+        h_sem_tipo = _cal.horas_semana_patron(L.get("_tc"), float(L.get("horas_turno") or 0),
+                                              int(L.get("turnos_dia") or 0), dias_sem)
         uso = uso_linea.get(lin, {}) or {}
         filas = []
         for i in range(semanas):
             ls = lunes0 + timedelta(days=7 * i)
             dias = [ls + timedelta(days=k) for k in range(7)]
-            habiles = [d for d in dias if d.weekday() < dias_sem and d >= hoy]
-            cap_h = h_dia * len(habiles)
+            hd = {d: horas_dia_linea(L, d) for d in dias}
+            habiles = [d for d in dias if hd[d] > 0 and d >= hoy]
+            cap_h = sum(hd[d] for d in habiles)
             h_req = req[lin].get(ls, 0.0)
-            h_prog = sum(min(h_dia * 1.0 if d.weekday() < dias_sem else h_dia,
-                             float(uso.get(d.isoformat(), 0) or 0) / 100.0 * h_dia + h_aprob[lin].get(d.isoformat(), 0.0))
-                         for d in dias if d >= hoy)
+            h_prog = sum(min(hd[d], float(uso.get(d.isoformat(), 0) or 0) / 100.0 * hd[d]
+                                 + h_aprob[lin].get(d.isoformat(), 0.0))
+                         for d in dias if d >= hoy and hd[d] > 0)
             filas.append({
                 "semana": ls.isoformat(), "semana_iso": ls.isocalendar()[1], "dias_habiles": len(habiles),
                 # semana en curso: solo cuentan los días hábiles que quedan (capacidad Y demanda)
-                "parcial": len(habiles) < dias_sem,
+                "parcial": any(d < hoy and hd[d] > 0 for d in dias),
                 "desde": habiles[0].isoformat() if habiles else None,
                 "hasta": habiles[-1].isoformat() if habiles else None,
                 "horas_nominales": round(cap_h, 1), "horas_requeridas": round(h_req, 1),
@@ -209,12 +222,13 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
             "linea": lin, "semaforo": semaforo, "motivos": motivos, "n_skus": len(skus_linea[lin]),
             "max_carga_requerida_3sem": round(max_carga, 4),
             "reposicion_ss": {"horas": round(req_ss[lin], 1),
-                              "pct_capacidad_3sem": round(req_ss[lin] / (h_dia * dias_sem * SEMANAS_ALERTA), 4)
-                              if h_dia else None},
+                              "pct_capacidad_3sem": round(req_ss[lin] / (h_sem_tipo * SEMANAS_ALERTA), 4)
+                              if h_sem_tipo else None},
             "capacidad_demostrada": demo,
             "carga_vs_demostrada": round(max_carga / demo["top3"], 4) if demo and demo["top3"] else None,
             "parametros": {"turnos_dia": L.get("turnos_dia"), "horas_turno": L.get("horas_turno"),
-                           "dias_semana": dias_sem, "velocidad_u_hr": L.get("velocidad_u_hr")},
+                           "dias_semana": dias_sem, "velocidad_u_hr": L.get("velocidad_u_hr"),
+                           "horas_semana": h_sem_tipo, "turnos_config": L.get("_tc")},
             "semanas": filas,
             "quiebres": {k: sorted(v, key=lambda x: x["primer_quiebre"]) for k, v in q.items()},
         })
@@ -241,6 +255,13 @@ def _cargar_desde_bd(c):
         for e in piezas["entradas_fijas"]:
             e["sku"] = sku_of.get(e.get("numero_of"))
     lineas = {r.codigo: dict(r._mapping) for r in c.execute(sa.text("SELECT * FROM mrp_lineas"))}
+    # (11-11-2026) calendario de capacidad (mismo criterio que el solver)
+    import mrp as _mrp
+    if _mrp.capacidad_calendario_activa():
+        excs = _mrp.cargar_excepciones_capacidad()
+        for cod, L in lineas.items():
+            L["_tc"] = _mrp._normalizar_turnos_config(L.get("turnos_config"))
+            L["_exc"] = excs.get(cod) or None
     sku_lineas = [dict(r._mapping) for r in c.execute(sa.text("SELECT sku, linea, preferida, factor_velocidad FROM mrp_sku_lineas"))]
     sku_params = {r.sku: dict(r._mapping) for r in c.execute(sa.text(
         "SELECT sku, descripcion, u_por_caja, mto, activo FROM mrp_sku_params"))}

@@ -43,7 +43,7 @@ ESTADOS_PROGRAMADO_APP = ("APROBADA", "MODIFICADA")
 # Categoría desde la tabla propia del módulo (mrp_lineas.area mezcla planta/línea y no sirve).
 SQL_LINEAS = (
     "SELECT l.codigo, l.nombre, COALESCE(ol.categoria, 'SIN CATEGORÍA') AS categoria, "
-    "       l.turnos_dia, l.horas_turno, l.dias_semana, l.velocidad_u_hr "
+    "       l.turnos_dia, l.horas_turno, l.dias_semana, l.velocidad_u_hr, l.turnos_config "
     "FROM mrp_lineas l LEFT JOIN mrp_operacion_lineas ol ON ol.codigo = l.codigo "
     "WHERE l.activa"
 )
@@ -124,6 +124,31 @@ def _r2(x):
     return round(x, 2)
 
 
+def _calendario_activo() -> bool:
+    try:
+        import mrp as _mrp
+        return _mrp.capacidad_calendario_activa()
+    except Exception:
+        return False
+
+
+def _horas_por_dia(L, desde: date, hasta: date, activo: bool, excepciones: Optional[dict]) -> Optional[dict]:
+    """(11-11-2026) {fecha: horas} con el calendario de capacidad, o None si está inactivo
+    o la línea no tiene turnos_config (se usa el cálculo anterior)."""
+    if not activo:
+        return None
+    import calendario as _cal
+    import mrp as _mrp
+    tc = _mrp._normalizar_turnos_config(getattr(L, "turnos_config", None))
+    if not tc:
+        return None
+    out, d = {}, desde
+    while d <= hasta:
+        out[d] = _cal.horas_linea_dia(d, turnos_config=tc, excepciones=excepciones)
+        d += timedelta(days=1)
+    return out
+
+
 def dias_laborables(desde: date, hasta: date, dias_semana: int) -> int:
     """Días del rango con weekday < dias_semana (5 = lunes a viernes). Feriados NO se descuentan."""
     n, d = 0, desde
@@ -144,6 +169,17 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
     q_app = sa.text(SQL_PROG_APP).bindparams(sa.bindparam("estados", expanding=True))
     with _engine.connect() as c:
         lineas = {r.codigo: r for r in c.execute(sa.text(SQL_LINEAS))}
+        # (11-11-2026) Calendario de capacidad: si está activo, las horas nominales salen del
+        # patrón por día/turno (42 h), descontando feriados y con las excepciones del período.
+        _cal = _calendario_activo()
+        excs = defaultdict(dict)
+        if _cal:
+            try:
+                for r in c.execute(sa.text("""SELECT linea, fecha, horas FROM mrp_capacidad_excepciones
+                                              WHERE NOT anulado AND fecha BETWEEN :d AND :h"""), {"d": desde, "h": hasta}):
+                    excs[r.linea][r.fecha] = float(r.horas)
+            except Exception:
+                excs = defaultdict(dict)
         sku_lin = defaultdict(list)
         for r in c.execute(sa.text(SQL_SKU_LINEAS)):
             sku_lin[r.sku].append(r)
@@ -278,8 +314,12 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
     res_lineas = []
     for cod in sorted(lineas):
         L, a = lineas[cod], acc[cod]
-        nominal = float((L.turnos_dia or 0) * (L.horas_turno or 0)
-                        * dias_laborables(desde, hasta, L.dias_semana))
+        horas_d = _horas_por_dia(L, desde, hasta, _cal, excs.get(cod))   # {date: horas} o None (legado)
+        if horas_d is not None:
+            nominal = float(sum(horas_d.values()))
+        else:
+            nominal = float((L.turnos_dia or 0) * (L.horas_turno or 0)
+                            * dias_laborables(desde, hasta, L.dias_semana))
         pp, pn, sp = a["parada_plan_h"], a["parada_noplan_h"], a["sin_programa_h"]
         disponible = max(nominal - pp, 0.0)
         cap_real = max(disponible - pn, 0.0)
@@ -291,11 +331,16 @@ def calcular_periodo(desde: date, hasta: date) -> dict:
         # día sin paradas (la cobertura del registro es irregular).
         h_dia = float((L.turnos_dia or 0) * (L.horas_turno or 0))
         dias_reg = paradas_dia[cod]
-        operada_reg = sum(max((h_dia if d.weekday() < (L.dias_semana or 0) else 0.0) - m / 60.0, 0.0)
-                          for d, m in dias_reg.items())
+        if horas_d is not None:
+            operada_reg = sum(max(horas_d.get(d, 0.0) - m / 60.0, 0.0) for d, m in dias_reg.items())
+            n_lab = sum(1 for h in horas_d.values() if h > 0)
+            dias_reg_lab = sum(1 for d in dias_reg if horas_d.get(d, 0.0) > 0)
+        else:
+            operada_reg = sum(max((h_dia if d.weekday() < (L.dias_semana or 0) else 0.0) - m / 60.0, 0.0)
+                              for d, m in dias_reg.items())
+            n_lab = dias_laborables(desde, hasta, L.dias_semana)
+            dias_reg_lab = sum(1 for d in dias_reg if d.weekday() < (L.dias_semana or 0))
         heq_reg = sum(diario[cod].get(d.isoformat(), 0.0) for d in dias_reg)
-        n_lab = dias_laborables(desde, hasta, L.dias_semana)
-        dias_reg_lab = sum(1 for d in dias_reg if d.weekday() < (L.dias_semana or 0))
         cobertura = _ratio(dias_reg_lab, n_lab)
         ocup_sap = _ratio(heq_sap, nominal)
         ocupacion_real = _ratio(heq, nominal)

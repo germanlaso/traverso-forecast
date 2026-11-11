@@ -374,8 +374,13 @@ export function ModalEditarSku({ item, linea, onClose, onGuardado }) {
 export function ModalEditarLinea({ linea, onClose, onGuardado }) {
   useEsc(onClose);
   const p = linea.params || {};
-  const ini = useMemo(() => ({ velocidad_u_hr: p.velocidad_u_hr, turnos_dia: p.turnos_dia, horas_turno: p.horas_turno,
-                               dias_semana: p.dias_semana }), [p]);
+  const tcIni = useMemo(() => (p.turnos_config || null), [p]);
+  // Con calendario (turnos_config) se edita velocidad + horas por día y turno; sin él, los campos anteriores.
+  const ini = useMemo(() => (tcIni ? { velocidad_u_hr: p.velocidad_u_hr }
+    : { velocidad_u_hr: p.velocidad_u_hr, turnos_dia: p.turnos_dia, horas_turno: p.horas_turno, dias_semana: p.dias_semana }), [p, tcIni]);
+  const [turnos, setTurnos] = useState(() => (tcIni || []).map((t) => (t.horas || []).map((h) => String(h))));
+  const [calActivo, setCalActivo] = useState(null);
+  useEffect(() => { api("GET", "/params/config").then((c) => setCalActivo(!!c.calendario_activo)).catch(() => {}); }, []);
   const [form, setForm] = useState(Object.fromEntries(Object.entries(ini).map(([k, v]) => [k, String(v ?? "")])));
   const [imp, setImp] = useState(null);
   const [impErr, setImpErr] = useState(null);
@@ -385,11 +390,15 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
   const [resultado, setResultado] = useState(null);
   const auth = useAuth();
 
+  const turnosNum = useMemo(() => turnos.map((t) => ({ horas: t.map((h) => Number(h || 0)) })), [turnos]);
+  const turnosCambiaron = useMemo(() => tcIni && JSON.stringify(turnosNum.map((t) => t.horas))
+      !== JSON.stringify(tcIni.map((t) => (t.horas || []).map(Number))), [turnosNum, tcIni]);
   const cambios = useMemo(() => {
     const c = {};
     Object.keys(ini).forEach((k) => { if (form[k] !== "" && Number(form[k]) !== Number(ini[k])) c[k] = Number(form[k]); });
+    if (turnosCambiaron) c.turnos_config = turnosNum;
     return c;
-  }, [form, ini]);
+  }, [form, ini, turnosCambiaron, turnosNum]);
   const hayCambios = Object.keys(cambios).length > 0;
   const cambiosDeb = useDebounced(cambios, 400);
 
@@ -434,21 +443,55 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
           <span onClick={onClose} style={{ cursor: "pointer", fontSize: 20, color: C.gray }} title="Cerrar (Esc)">✕</span>
         </div>
         <div style={st.body}>
-          <Tabs tab={tab} setTab={setTab} items={[["editar", "Editar"], ["historial", "Historial"]]} />
+          <Tabs tab={tab} setTab={setTab} items={[["editar", "Editar"], ["excepciones", "Excepciones por fecha"], ["historial", "Historial"]]} />
+          {calActivo === false && tcIni && (
+            <div style={{ background: C.amberLt, color: C.amberDk, borderRadius: 8, padding: "7px 10px", fontSize: 12, marginBottom: 10 }}>
+              El calendario de capacidad está <b>apagado</b>: el plan todavía usa {p.turnos_dia} turno × {fmt1(p.horas_turno)} h × {p.dias_semana} días.
+              Lo que configures aquí se aplicará cuando se active.</div>)}
           {tab === "editar" && <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-              {campo("velocidad_u_hr", "Velocidad (u/h)", { min: 1 })}
-              {campo("turnos_dia", "Turnos por día", { min: 1, max: 3 })}
-              {campo("horas_turno", "Horas por turno", { min: 1, max: 12, step: 0.5 })}
-              {campo("dias_semana", "Días por semana", { min: 1, max: 7 })}
-            </div>
+            {tcIni ? <>
+              <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 12, alignItems: "end" }}>
+                {campo("velocidad_u_hr", "Velocidad (u/h)", { min: 1 })}
+                <div style={{ fontSize: 11.5, color: C.gray }}>Jornada legal: 42 h semanales (lunes y martes 9 h, miércoles a viernes 8 h). Cada turno se configura por día; un día en 0 = sin ese turno.</div>
+              </div>
+              <div style={st.sec}>Horas por día y turno</div>
+              <table style={{ borderCollapse: "collapse" }}>
+                <thead><tr><th style={st.th}></th>{["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((d) => <th key={d} style={{ ...st.th, textAlign: "center" }}>{d}</th>)}<th style={st.th}>Semana</th><th style={st.th}></th></tr></thead>
+                <tbody>
+                  {turnos.map((t, i) => (
+                    <tr key={i}>
+                      <td style={{ ...st.td, fontWeight: 700, whiteSpace: "nowrap" }}>Turno {i + 1}</td>
+                      {t.map((h, d) => (
+                        <td key={d} style={st.td}>
+                          <input style={{ ...st.input, width: 52, textAlign: "center", padding: "4px" }} type="number" min="0" max="12" step="0.5" value={h}
+                                 onChange={(e) => setTurnos(turnos.map((tt, ii) => ii !== i ? tt : tt.map((hh, dd) => dd === d ? e.target.value : hh)))} />
+                        </td>))}
+                      <td style={{ ...st.td, fontWeight: 700 }}>{fmt1(t.reduce((a, x) => a + Number(x || 0), 0))} h</td>
+                      <td style={st.td}>{i > 0 && <button style={{ ...st.btn, padding: "3px 8px", fontSize: 11 }} onClick={() => setTurnos(turnos.filter((_, ii) => ii !== i))}>Quitar</button>}</td>
+                    </tr>))}
+                  <tr>
+                    <td style={{ ...st.td, color: C.gray }}>Total día</td>
+                    {[0, 1, 2, 3, 4, 5, 6].map((d) => <td key={d} style={{ ...st.td, textAlign: "center", fontWeight: 700 }}>{fmt1(turnos.reduce((a, t) => a + Number(t[d] || 0), 0))}</td>)}
+                    <td style={{ ...st.td, fontWeight: 700, color: C.tealMid }}>{fmt1(turnos.reduce((a, t) => a + t.reduce((b, x) => b + Number(x || 0), 0), 0))} h</td><td style={st.td}></td>
+                  </tr>
+                </tbody>
+              </table>
+              {turnos.length < 3 && <button style={{ ...st.btn, marginTop: 6 }} onClick={() => setTurnos([...turnos, ["0", "0", "0", "0", "0", "0", "0"]])}>＋ Agregar turno</button>}
+            </> : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+                {campo("velocidad_u_hr", "Velocidad (u/h)", { min: 1 })}
+                {campo("turnos_dia", "Turnos por día", { min: 1, max: 3 })}
+                {campo("horas_turno", "Horas por turno", { min: 1, max: 12, step: 0.5 })}
+                {campo("dias_semana", "Días por semana", { min: 1, max: 7 })}
+              </div>)}
 
             <div style={st.sec}>Impacto en los SKU de la línea</div>
             {!hayCambios ? <div style={{ fontSize: 12, color: C.textMuted }}>Modifica un valor para ver el impacto antes de guardar.</div>
               : impErr ? <div style={{ fontSize: 12, color: C.redDk }}>{impErr}</div>
               : !imp ? <div style={{ fontSize: 12, color: C.textMuted }}>Calculando impacto…</div> : <>
                 <div style={{ display: "flex", gap: 18, fontSize: 12.5, flexWrap: "wrap", marginBottom: 8 }}>
-                  <span>Capacidad día: {fmtN(da.cap_dia_u)} → <b>{fmtN(dp.cap_dia_u)}</b> u</span>
+                  <span>Capacidad día{dp.calendario ? " (día más largo)" : ""}: {fmtN(da.cap_dia_u)} → <b>{fmtN(dp.cap_dia_u)}</b> u</span>
+                  {dp.calendario && <span>Horas semana: {fmt1(da.horas_semana)} → <b>{fmt1(dp.horas_semana)}</b> h</span>}
                   <span>Capacidad semana: {fmtN(da.cap_sem_u)} → <b>{fmtN(dp.cap_sem_u)}</b> u</span>
                   <span style={{ color: imp.n_nuevos_errores ? C.redDk : C.text }}>Errores nuevos: <b>{imp.n_nuevos_errores}</b></span>
                   <span style={{ color: imp.n_nuevas_advertencias ? C.amberDk : C.text }}>Advertencias nuevas: <b>{imp.n_nuevas_advertencias}</b></span>
@@ -484,6 +527,7 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
             </div>
             {resultado && <div style={{ marginTop: 10, fontSize: 12.5, color: resultado.ok ? C.tealMid : C.redDk }}>{resultado.texto}</div>}
           </>}
+          {tab === "excepciones" && <Excepciones linea={linea.codigo} auth={auth} />}
           {tab === "historial" && <>
             <CamposAuth auth={auth} />
             <div style={{ height: 10 }} />
@@ -491,6 +535,62 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
           </>}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Excepciones de capacidad por fecha (sábado trabajado, extensión, día sin producción) ──
+const TIPOS_EXC = [["extension", "Extensión de turno"], ["sabado", "Sábado trabajado"], ["domingo_feriado", "Domingo o feriado trabajado"],
+                   ["sin_produccion", "Día sin producción"], ["otro", "Otro"]];
+function Excepciones({ linea, auth }) {
+  const [filas, setFilas] = useState(null), [msg, setMsg] = useState(null);
+  const [f, setF] = useState({ fecha: "", horas: "", tipo: "sabado" });
+  const cargar = () => api("GET", `/params/excepciones?linea=${encodeURIComponent(linea)}`).then((d) => setFilas(d.excepciones || [])).catch((e) => setMsg(e.message));
+  useEffect(() => { cargar(); /* eslint-disable-next-line */ }, [linea]);
+  const ok = f.fecha && f.horas !== "" && auth.completa;
+  const crear = async () => {
+    setMsg(null);
+    try {
+      await api("POST", "/params/excepciones", { linea, fecha: f.fecha, horas: Number(f.horas), tipo: f.tipo, editor: auth.editor, pin: auth.pin, motivo: auth.motivo });
+      auth.recordar(); setMsg("Excepción guardada. Aplica desde la próxima corrida del plan."); setF({ fecha: "", horas: "", tipo: f.tipo }); cargar();
+    } catch (e) { setMsg(e.message); }
+  };
+  const anular = async (x) => {
+    setMsg(null);
+    if (!(auth.editor.trim().length >= 3 && auth.pin.length >= 4)) return setMsg("Completa tu nombre y el PIN para anular.");
+    try { await api("POST", `/params/excepciones/${x.id}/anular`, { editor: auth.editor, pin: auth.pin, motivo: auth.motivo.trim() || "Anulación" }); cargar(); }
+    catch (e) { setMsg(e.message); }
+  };
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.gray, marginBottom: 8 }}>
+        Las horas indicadas son el <b>total del día</b> (todos los turnos) y reemplazan al patrón semanal ese día, incluso si es feriado.
+        Úsalo para sábados trabajados, extensiones de turno o días sin producción (0 h).</div>
+      <div style={{ display: "grid", gridTemplateColumns: "160px 110px 1fr", gap: 10 }}>
+        <label style={st.label}>Fecha<input style={st.input} type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+        <label style={st.label}>Horas del día<input style={st.input} type="number" min="0" max="24" step="0.5" value={f.horas} onChange={(e) => setF({ ...f, horas: e.target.value })} /></label>
+        <label style={st.label}>Tipo
+          <select style={st.input} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
+            {TIPOS_EXC.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select></label>
+      </div>
+      <CamposAuth auth={auth} />
+      <div style={{ marginTop: 8 }}><button style={{ ...st.btnPri, opacity: ok ? 1 : .45 }} disabled={!ok} onClick={crear}>Guardar excepción</button></div>
+      {msg && <div style={{ fontSize: 12, marginTop: 6, color: msg.startsWith("Excepción") ? C.tealMid : C.redDk }}>{msg}</div>}
+      <div style={st.sec}>Excepciones vigentes</div>
+      {!filas ? <div style={{ fontSize: 12, color: C.textMuted }}>Cargando…</div> : filas.length === 0 ? <div style={{ fontSize: 12, color: C.textMuted }}>Sin excepciones.</div> : (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr>{["Fecha", "Horas", "Tipo", "Motivo", "Quién", ""].map((h) => <th key={h} style={st.th}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => (
+            <tr key={x.id}>
+              <td style={st.td}>{new Date(x.fecha + "T12:00:00").toLocaleDateString("es-CL", { weekday: "short", day: "2-digit", month: "2-digit" })}</td>
+              <td style={st.td}><b>{fmt1(x.horas)} h</b></td>
+              <td style={st.td}>{(TIPOS_EXC.find(([k]) => k === x.tipo) || [0, x.tipo])[1]}</td>
+              <td style={{ ...st.td, maxWidth: 260 }}>{x.motivo}</td>
+              <td style={st.td}>{x.creado_por}</td>
+              <td style={st.td}><button style={{ ...st.btn, padding: "3px 8px", fontSize: 11 }} onClick={() => anular(x)}>Anular</button></td>
+            </tr>))}</tbody>
+        </table>)}
     </div>
   );
 }

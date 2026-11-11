@@ -35,6 +35,20 @@ function diasDesde(fechaDom,nSem){
   }
   return dias;
 }
+// (11-11-2026) Capacidad del día según el calendario de capacidad (patrón por día y turno,
+// jornada 42 h = 9-9-8-8-8, más excepciones por fecha). Si el backend no lo envía
+// (calendario apagado): capacidad semanal / 5, como antes.
+function capDiaDe(linea,fecha){
+  const exc=linea?.cap_u_excepciones?.[fecha];
+  if(exc!=null) return exc;
+  const arr=linea?.cap_u_dia_semana;
+  if(Array.isArray(arr)&&arr.length===7){
+    if(esFeriado(fecha)) return 0;
+    const d=new Date(fecha+"T12:00:00");
+    return arr[(d.getDay()+6)%7];
+  }
+  return (linea?.cap_u_semana??0)/5;
+}
 function fmtN(n){return Math.round(n??0).toLocaleString("es-CL");}
 function fmtPct(n){return `${Math.round((n??0)*100)}%`;}
 
@@ -280,7 +294,8 @@ function ModalCrearOF({linea,skusCandidatos,descBySku,params,capDiaU,capUsadaByF
   })();
   const usadaFrac=capUsadaByFecha?.[fecha]??0;
   // Capacidad libre del día en unidades "de capacidad" (equivalente a fv=1).
-  const libreCapU=Math.max(0,capDiaU*(1-usadaFrac));
+  const _capDiaF=typeof capDiaU==="function"?capDiaU(fecha):capDiaU;
+  const libreCapU=Math.max(0,_capDiaF*(1-usadaFrac));
   // Expresada para el SKU elegido: u físicas = capacidad × fv (un SKU lento,
   // fv<1, rinde MENOS u físicas por unidad de capacidad). Cajas = u / u_por_caja.
   const libreFisU=Math.round(libreCapU*fv);
@@ -403,7 +418,7 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
   // dimensionadas por el optimizador para caber en la capacidad de ese día
   // (junto con otros SKUs si hay multi-SKU intra-día). El frontend NO
   // redistribuye: dibuja la OFT en su fecha_lanzamiento exacta.
-  const capDia=linea.cap_u_semana/5;
+  // (11-11-2026) la capacidad del día sale de capDiaDe(linea, fecha)
   // (31-07) capUsadaAprob: misma formula que capUsada pero solo OF/OFM aprobadas.
   // Es la capacidad YA COMPROMETIDA: el optimizer no puede usarla (ver warning
   // V6.37 del cron: "(linea,dia) saturados solo por OFs aprobadas").
@@ -437,7 +452,8 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
     const cajasReales=Number(aprobacion?.cantidad_real_cj??o.cantidad_cajas);
     const uProd=Math.round(cajasReales*upj);            // unidades fisicas (para mostrar)
     const uCapacidad=uProd/(fv||1);                     // unidades equivalentes de capacidad
-    const usoPctReal=uCapacidad/capDia;
+    const _capDia=capDiaDe(linea,fechaIni);
+    const usoPctReal=_capDia>0?uCapacidad/_capDia:0;
 
     mapa[fechaIni].push({
       ...o,
@@ -709,7 +725,7 @@ export default function DetalleProduccion({
         const ln=modalCrear.linea;
         const ordLn=getOrdenesLinea(ln);
         const {capUsada}=distribuirOrdenes(ordLn,diasExt,aprobMap,params,ln);
-        const capDiaU=ln.cap_u_semana/5;
+        const capDiaU=(f)=>capDiaDe(ln,f);   // (11-11-2026) por fecha
         const skusCand=Array.from(new Set([
           ...Object.keys(params).filter(sk=>params[sk]?.linea===ln.codigo),
           ...ordLn.map(o=>o.sku),
@@ -868,7 +884,7 @@ export default function DetalleProduccion({
                 const usoAprob=capUsadaAprob?.[dia.fecha]??0;   // (31-07) ya comprometido
                 const uAprob=uAprobDia?.[dia.fecha]??0;         // (05-08) unidades aprobadas
                 const desborde=uso>1;
-                const capDia=linea.cap_u_semana/5;
+                const capDia=capDiaDe(linea,dia.fecha);
                 const setupUDia=ords.reduce((s,o)=>s+(o.setup_unidades||0),0);
                 const setupPctDia=capDia>0?setupUDia/capDia:0;
                 return(

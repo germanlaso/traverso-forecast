@@ -64,7 +64,12 @@ def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas
     if ln is None:
         raise ValueError(f"Línea sin datos: {linea}")
     L = lineas[linea]
-    h_dia = float(L["turnos_dia"] or 0) * float(L["horas_turno"] or 0)
+    import calendario as _cal
+    h_sem = _cal.horas_semana_patron(L.get("_tc"), float(L["horas_turno"] or 0), int(L["turnos_dia"] or 0),
+                                     int(L["dias_semana"] or 5))
+    _lab = [h for h in ([sum(t["horas"][i] for t in L["_tc"]) for i in range(7)] if L.get("_tc") else []) if h > 0]
+    # día "tipo" para expresar horas como días o sábados (con 42 h: 8,4 h)
+    h_dia = (h_sem / len(_lab)) if _lab else float(L["turnos_dia"] or 0) * float(L["horas_turno"] or 0)
     vel_l = float(L["velocidad_u_hr"] or 0)
     hoy = date.fromisoformat(carga["hoy"])
     evaluables = [f for f in ln["semanas"] if f["dias_habiles"] >= 3][:HORIZONTE_SEM]
@@ -115,9 +120,10 @@ def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas
     restos, restos_inutiles, dias_libres = 0.0, 0.0, 0
     d = hoy
     while d <= fin:
-        if d.weekday() < int(L["dias_semana"] or 5):
-            u = min(1.0, float(uso.get(d.isoformat(), 0) or 0) / 100.0 + h_aprob_dia.get(d.isoformat(), 0.0) / (h_dia or 1))
-            libre = max(0.0, 1 - u) * h_dia
+        h_d = _al.horas_dia_linea(L, d)
+        if h_d > 0:
+            u = min(1.0, float(uso.get(d.isoformat(), 0) or 0) / 100.0 + h_aprob_dia.get(d.isoformat(), 0.0) / h_d)
+            libre = max(0.0, 1 - u) * h_d
             if u <= 0.01:
                 dias_libres += 1
             restos += libre
@@ -130,7 +136,7 @@ def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas
                   for f in evaluables]
     horas_extra_sem = max([s["horas_extra"] for s in sobrecarga] or [0])
     demo = ln.get("capacidad_demostrada") or {}
-    cap_nom_sem = h_dia * int(L["dias_semana"] or 5)
+    cap_nom_sem = h_sem
     holgura_demostrada_h = max(0.0, (demo.get("top3") or 1.0) - 1.0) * cap_nom_sem   # horas/sem extra ya demostradas
 
     # OF del plan en la línea (granularidad real del plan)
@@ -209,7 +215,8 @@ def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas
         if x["linea"] == linea or _familia(x["linea"]) != _familia(linea):
             continue
         Lx = lineas[x["linea"]]
-        cap_x = float(Lx["turnos_dia"] or 0) * float(Lx["horas_turno"] or 0) * int(Lx["dias_semana"] or 5)
+        cap_x = _cal.horas_semana_patron(Lx.get("_tc"), float(Lx["horas_turno"] or 0),
+                                         int(Lx["turnos_dia"] or 0), int(Lx["dias_semana"] or 5))
         libre = max(0.0, UMBRAL_LINEA_ALT - x["max_carga_requerida_3sem"]) * cap_x
         asignada = any(x["linea"] in s_["lineas_asignadas"] for s_ in skus_q)
         candidatas.append({"linea": x["linea"], "carga_3sem": x["max_carga_requerida_3sem"], "horas_libres_sem": round(libre, 1),

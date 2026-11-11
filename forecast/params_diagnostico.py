@@ -440,6 +440,7 @@ def construir_diagnostico(lineas: list[dict],
                 "horas_turno":    _f(lin.get("horas_turno"), 8),
                 "dias_semana":    der_l["dias_semana"],
                 "velocidad_u_hr": der_l["velocidad_u_hr"],
+                "turnos_config":  _turnos_config(lin.get("turnos_config")),   # (11-11-2026) horas por día y turno
             },
             "derivados": {
                 **der_l,

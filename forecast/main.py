@@ -1505,6 +1505,14 @@ def get_mrp_params():
                     "nombre": l.nombre,
                     "cap_u_semana": l.capacidad_u_semana,
                     "horas_disp_sem": l.horas_disponibles_semana,
+                    # (11-11-2026) calendario de capacidad (None si está apagado: legado cap/5)
+                    "calendario": bool(getattr(l, "turnos_config", None)),
+                    "horas_por_dia": ([sum(float(t["horas"][i]) for t in l.turnos_config) for i in range(7)]
+                                      if getattr(l, "turnos_config", None) else None),
+                    "cap_u_dia_semana": ([round(l.velocidad_u_hr * sum(float(t["horas"][i]) for t in l.turnos_config))
+                                          for i in range(7)] if getattr(l, "turnos_config", None) else None),
+                    "cap_u_excepciones": {f.isoformat() if hasattr(f, "isoformat") else str(f): round(l.velocidad_u_hr * float(h))
+                                          for f, h in (getattr(l, "excepciones", None) or {}).items()},
                 }
                 for l in lineas.values()
             ],
