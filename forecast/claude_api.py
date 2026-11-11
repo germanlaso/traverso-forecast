@@ -50,14 +50,16 @@ def configurado() -> bool:
 
 
 def generar(system: str, usuario: str, max_tokens: int = 4000, modelo: str = None,
-            temperatura: float = 0.2, reintentos: int = 3, timeout: int = 180) -> dict:
+            temperatura: float = None, reintentos: int = 3, timeout: int = 180) -> dict:
     """Una consulta (system + mensaje de usuario). Devuelve {texto, modelo, tokens_in, tokens_out,
     costo_usd, segundos}. Reintenta en 429/5xx con espera creciente."""
     modelo = modelo or MODELO_DEFECTO
-    cuerpo = json.dumps({
-        "model": modelo, "max_tokens": max_tokens, "temperature": temperatura,
-        "system": system, "messages": [{"role": "user", "content": usuario}],
-    }).encode("utf-8")
+    payload = {"model": modelo, "max_tokens": max_tokens, "system": system,
+               "messages": [{"role": "user", "content": usuario}]}
+    # Los modelos actuales no aceptan `temperature` (HTTP 400 "deprecated"): solo se envía si se pide.
+    if temperatura is not None:
+        payload["temperature"] = temperatura
+    cuerpo = json.dumps(payload).encode("utf-8")
     headers = {"content-type": "application/json", "x-api-key": _api_key(), "anthropic-version": VERSION_API}
     t0, ultimo = time.time(), None
     for intento in range(reintentos + 1):
