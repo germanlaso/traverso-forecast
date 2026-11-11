@@ -40,9 +40,16 @@ class LineaProduccion:
     horas_turno: float
     dias_semana: int
     velocidad_u_hr: float
+    # (11-11-2026) Calendario de capacidad. None = comportamiento anterior (legado).
+    #   turnos_config: [{"turno": 1, "horas": [L, M, X, J, V, S, D]}, ...]  (jornada 42 h: 9,9,8,8,8,0,0)
+    #   excepciones:   {date: horas_totales_del_dia}  (sábado trabajado, extensión, día sin producción)
+    turnos_config: Optional[list] = None
+    excepciones: Optional[dict] = None
 
     @property
     def horas_disponibles_semana(self):
+        if self.turnos_config:
+            return sum(float(h or 0) for t in self.turnos_config for h in (t.get("horas") or []))
         return self.turnos_dia * self.horas_turno * self.dias_semana
 
     @property
@@ -102,6 +109,59 @@ def _float(val, default=0.0):
         return float(val)  # preserva el 0 legítimo (no coalescer con default)
     except: return default
 
+def _normalizar_turnos_config(v) -> Optional[list]:
+    """turnos_config de la BD (JSONB o texto) -> lista válida de turnos con 7 horas, o None."""
+    import json as _json
+    if v is None:
+        return None
+    if isinstance(v, str):
+        try:
+            v = _json.loads(v)
+        except Exception:
+            return None
+    out = []
+    for t in v or []:
+        h = list((t or {}).get("horas") or [])
+        if len(h) != 7:
+            continue
+        out.append({"turno": int(t.get("turno", len(out) + 1)), "horas": [float(x or 0) for x in h]})
+    return out or None
+
+
+def capacidad_calendario_activa() -> bool:
+    """(11-11-2026) ¿Usar el calendario de capacidad (horas por día y turno + excepciones)?
+    1) Variable CAPACIDAD_CALENDARIO=1/0 (fuerza, para probar con --no-promote).
+    2) Si no está, mrp_params_config.capacidad_calendario = 'on'.
+    Ante cualquier error -> False (comportamiento anterior)."""
+    import os as _os
+    v = _os.environ.get("CAPACIDAD_CALENDARIO")
+    if v is not None:
+        return v.strip() == "1"
+    try:
+        import sqlalchemy as _sa
+        from db_mrp import engine as _eng
+        with _eng.connect() as c:
+            r = c.execute(_sa.text("SELECT valor FROM mrp_params_config WHERE clave = 'capacidad_calendario'")).scalar()
+        return (r or "").strip().lower() == "on"
+    except Exception:
+        return False
+
+
+def cargar_excepciones_capacidad() -> dict:
+    """{linea: {date: horas}} de mrp_capacidad_excepciones vigentes (desde hace 60 días)."""
+    try:
+        import sqlalchemy as _sa
+        from db_mrp import engine as _eng
+        out = {}
+        with _eng.connect() as c:
+            for r in c.execute(_sa.text("""SELECT linea, fecha, horas FROM mrp_capacidad_excepciones
+                                           WHERE NOT anulado AND fecha >= current_date - 60""")):
+                out.setdefault(r.linea, {})[r.fecha] = float(r.horas)
+        return out
+    except Exception:
+        return {}
+
+
 def load_params_from_db():
     """
     Carga parámetros MRP desde PostgreSQL.
@@ -109,9 +169,12 @@ def load_params_from_db():
     """
     from db_mrp import get_all_lineas, get_all_sku_params, get_all_sku_lineas
 
+    activo = capacidad_calendario_activa()
+    excepciones = cargar_excepciones_capacidad() if activo else {}
     lineas = {}
     for row in get_all_lineas():
         codigo = row["codigo"]
+        tc = _normalizar_turnos_config(row.get("turnos_config")) if activo else None
         lineas[codigo] = LineaProduccion(
             codigo         = codigo,
             nombre         = row.get("nombre", ""),
@@ -119,6 +182,8 @@ def load_params_from_db():
             horas_turno    = float(row.get("horas_turno", 8) or 8),
             dias_semana    = int(row.get("dias_semana", 5) or 5),
             velocidad_u_hr = float(row.get("velocidad_u_hr", 0) or 0),
+            turnos_config  = tc,
+            excepciones    = (excepciones.get(codigo) or None) if activo else None,
         )
 
     sku_params = {}

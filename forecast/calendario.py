@@ -282,23 +282,74 @@ def calcular_ss_diario(
 # Capacidad por línea-día — interfaz para el optimizer
 # =============================================================================
 
+def horas_linea_dia(
+    fecha: date,
+    horas_turno: float = 8,
+    turnos_dia: int = 1,
+    turnos_config: list | None = None,
+    excepciones: dict | None = None,
+) -> float:
+    """
+    (11-11-2026) Horas de producción de una línea en un día. FUENTE ÚNICA de la
+    capacidad diaria para el solver y para los módulos que leen capacidad.
+
+    Orden de precedencia:
+      1. excepciones[fecha]  -> horas TOTALES del día (todos los turnos): sábado
+                                trabajado, extensión de turno, día sin producción.
+                                Manda incluso sobre feriados (trabajar un feriado).
+      2. feriado nacional    -> 0
+      3. turnos_config       -> suma de los turnos de horas[weekday]; cada turno tiene su
+                                patrón L..D (jornada legal 42 h: [9, 9, 8, 8, 8, 0, 0])
+      4. legado              -> horas_turno x turnos_dia los días hábiles (lun-vie)
+    """
+    if excepciones:
+        h = excepciones.get(fecha)
+        if h is None:
+            h = excepciones.get(fecha.isoformat())
+        if h is not None:
+            return max(0.0, float(h))
+    if es_feriado(fecha):
+        return 0.0
+    if turnos_config:
+        wd = fecha.weekday()
+        return float(sum(float((t.get("horas") or [0] * 7)[wd] or 0) for t in turnos_config))
+    if es_finde(fecha):
+        return 0.0
+    return float(horas_turno) * int(turnos_dia)
+
+
+def horas_semana_patron(turnos_config: list | None, horas_turno: float = 8,
+                        turnos_dia: int = 1, dias_semana: int = 5) -> float:
+    """Horas de una semana TIPO (sin feriados ni excepciones)."""
+    if turnos_config:
+        return float(sum(float(h or 0) for t in turnos_config for h in (t.get("horas") or [])))
+    return float(horas_turno) * int(turnos_dia) * int(dias_semana)
+
+
 def capacidad_dia_unidades(
     fecha: date,
     velocidad_u_hr: float,
     horas_turno: float,
     turnos_dia: int,
+    turnos_config: list | None = None,
+    excepciones: dict | None = None,
 ) -> int:
     """
     Capacidad en unidades de una línea para un día específico.
 
-    Devuelve 0 si el día no es hábil (feriado o finde).
+    Devuelve 0 si el día no tiene horas (feriado, finde, o 0 en el patrón).
     Esta función es la interfaz primaria del optimizer para conocer
     cap_dia[d, l] — modela la regla "no se produce los días no hábiles"
     sin necesidad de restricciones adicionales.
+
+    (11-11-2026) Sin turnos_config ni excepciones el comportamiento es IDÉNTICO al
+    anterior (horas_turno x turnos_dia en días hábiles). Con ellos usa horas_linea_dia.
     """
-    if not es_habil(fecha):
-        return 0
-    return int(velocidad_u_hr * horas_turno * turnos_dia)
+    if turnos_config is None and not excepciones:
+        if not es_habil(fecha):
+            return 0
+        return int(velocidad_u_hr * horas_turno * turnos_dia)
+    return int(velocidad_u_hr * horas_linea_dia(fecha, horas_turno, turnos_dia, turnos_config, excepciones))
 
 
 # =============================================================================
@@ -373,6 +424,21 @@ if __name__ == "__main__":
     assert cap_fer == 0, f"Feriado debe ser 0, obtuve {cap_fer}"
     assert cap_dom == 0, f"Domingo debe ser 0, obtuve {cap_dom}"
     print(f"✓ Capacidad: hábil={cap_lab}, feriado={cap_fer}, domingo={cap_dom}")
+
+    # (11-11-2026) Patrón 42 h, segundo turno y excepciones
+    _p42 = [{"turno": 1, "horas": [9, 9, 8, 8, 8, 0, 0]}]
+    assert horas_linea_dia(date(2026, 11, 16), turnos_config=_p42) == 9.0, "lunes 9 h"
+    assert horas_linea_dia(date(2026, 11, 18), turnos_config=_p42) == 8.0, "miércoles 8 h"
+    assert horas_linea_dia(date(2026, 11, 21), turnos_config=_p42) == 0.0, "sábado 0 h"
+    assert horas_linea_dia(date(2026, 12, 8), turnos_config=_p42) == 0.0, "8-dic feriado"
+    assert horas_linea_dia(date(2026, 11, 21), turnos_config=_p42, excepciones={date(2026, 11, 21): 8}) == 8.0, "sábado trabajado"
+    _p2t = _p42 + [{"turno": 2, "horas": [8, 8, 8, 0, 0, 0, 0]}]
+    assert horas_linea_dia(date(2026, 11, 17), turnos_config=_p2t) == 17.0, "martes 2 turnos"
+    assert horas_linea_dia(date(2026, 11, 19), turnos_config=_p2t) == 8.0, "jueves sin 2do turno"
+    assert horas_semana_patron(_p42) == 42.0, "semana 42 h"
+    assert capacidad_dia_unidades(date(2026, 11, 18), 1000, 9, 1) == 9000, "legado sin cambios"
+    assert capacidad_dia_unidades(date(2026, 11, 18), 1000, 9, 1, turnos_config=_p42) == 8000, "patrón"
+    print("✓ Patrón 42 h, 2do turno y excepciones")
 
     # Test 7: SS diario (suma de próximos ss_dias hábiles desde d inclusive)
     from calendario import calcular_ss_diario

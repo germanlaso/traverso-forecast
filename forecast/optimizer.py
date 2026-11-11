@@ -182,6 +182,15 @@ SS_COBERTURA = _os.environ.get("SS_COBERTURA", "0") == "1"
 #   N2_QBR_DIARIO:   0 (evento semanal) | 1 (evento diario, aditivo en duración)
 N2_QBR_MAG_MODO = _os.environ.get("N2_QBR_MAG_MODO", "ss_d").strip().lower()
 N2_QBR_DIARIO = _os.environ.get("N2_QBR_DIARIO", "0") == "1"
+# (11-11-2026) LLENAR TURNO: en la pasada C, si la línea ya abrió un día, castigar la
+# capacidad que queda OCIOSA ese día, para que el solver EXTIENDA el batch hasta llenar
+# el turno en vez de dejar horas sin usar. Solo en C (la barrera Q* impide empeorar
+# quiebres). Compite con el castigo de exceso sobre SS: en SKU de alta rotación (SS grande)
+# conviene llenar; en SKU de baja rotación, el exceso pesa más y no llena.
+#   N2_LLENAR_TURNO=1      activa (default 0: sin cambios)
+#   N2_W_OCIO_HORA=200     puntos por HORA ociosa en día abierto (evento de quiebre = 5.000)
+N2_LLENAR_TURNO = _os.environ.get("N2_LLENAR_TURNO", "0") == "1"
+N2_W_OCIO_HORA = int(_os.environ.get("N2_W_OCIO_HORA", "200") or 0)
 W_QBR_EVENTO_DIA = int(_os.environ.get("N2_W_QBR_EVENTO_DIA", str(W_QBR_EVENTO)))
 # (16-09 Nivel 3) escala separada para Pasada A (default = ESCALA_OBJ, sin cambio)
 ESCALA_OBJ_A = int(_os.environ.get("N2_ESCALA_A", str(ESCALA_OBJ)))
@@ -475,6 +484,8 @@ class _ModeloCPSAT:
         # sin importar cuantos "bloques" haya: la linea produce UNO a la vez.
         self.cambios_intradia: dict[tuple[str, date, str], cp_model.IntVar] = {}
         self.factor: dict[tuple[str, str], float] = {}                  # cache factor_velocidad
+        # (11-11-2026) LLENAR TURNO: capacidad ociosa (unidades de línea) en días abiertos
+        self.ocio: dict[tuple[date, str], cp_model.IntVar] = {}
 
 
 # =============================================================================
@@ -646,7 +657,23 @@ def optimizar_plan_v12_rich(
                 velocidad_u_hr=lp.get("velocidad_u_hr", 0),
                 horas_turno=lp.get("horas_turno", 8),
                 turnos_dia=lp.get("turnos_dia", 1),
+                # (11-11-2026) calendario de capacidad: None = comportamiento anterior
+                turnos_config=lp.get("turnos_config"),
+                excepciones=lp.get("excepciones"),
             )
+
+    # (11-11-2026) Visibilidad del calendario de capacidad (fail-loud: que se vea en el log
+    # si el solver está usando el patrón por día o el legado horas_turno x turnos_dia).
+    _con_cal = [l for l, lp in lineas_params.items() if lp.get("turnos_config")]
+    _con_exc = [l for l, lp in lineas_params.items() if lp.get("excepciones")]
+    try:
+        _lg = logging.getLogger("optimizer")
+    except Exception:
+        _lg = None
+    if _lg:
+        _lg.info(f"[CAPACIDAD] calendario por dia: {len(_con_cal)}/{len(lineas_params)} lineas"
+                 f" | con excepciones: {len(_con_exc)}"
+                 + (" | LEGADO (horas_turno x turnos_dia)" if not _con_cal else ""))
 
     # ─── 5. Construir modelo CP-SAT ──────────────────────────────────────────
     m = _construir_modelo(
@@ -1647,6 +1674,17 @@ def _construir_modelo(
                 u_ap_dl = aprobadas_u_dl.get((d, l), 0)
                 cap_libre_u = max(0, cap_l_d - u_ap_dl)
                 m.model.Add(sum(terms) <= cap_libre_u * FACTOR_ESCALA)
+                # (11-11-2026) LLENAR TURNO (solo pasada C): si la línea abre el día
+                # (algún SKU asignado), ocio >= capacidad libre - lo usado. El objetivo
+                # castiga ocio -> extiende batches hasta llenar el turno.
+                if N2_LLENAR_TURNO and es_pasada_c and cap_libre_u > 0 and N2_W_OCIO_HORA > 0:
+                    _asigs = [m.asig[(d, s, l)] for s in m.skus if l in m.pares_sku_linea[s]]
+                    if _asigs:
+                        _abierta = m.model.NewBoolVar(f"abierta_{d_idx}_{l}")
+                        m.model.AddMaxEquality(_abierta, _asigs)
+                        _ocio = m.model.NewIntVar(0, cap_libre_u, f"ocio_{d_idx}_{l}")
+                        m.model.Add(FACTOR_ESCALA * _ocio >= cap_libre_u * FACTOR_ESCALA - sum(terms)).OnlyEnforceIf(_abierta)
+                        m.ocio[(d, l)] = _ocio
 
             # R1b (v1.3, R2): cap. de nº de SKUs distintos asignados a esta línea-día.
             # N1 acota Σ_k asig[d,k,l] ≤ 4 para que el sub-problema de N2
@@ -1949,6 +1987,19 @@ def _agregar_objetivo(
         logger.info(f"[SECUENCIA] costo de cambio en objetivo: {_n_pen} arranques "
                     f"+ {_n_pen_i} cambios intradia | pesos="
                     + str({k: v for k, v in W_CAMBIO_GRUPO_K.items() if v}))
+
+    # (11-11-2026) LLENAR TURNO: castigo por hora ociosa en día abierto (solo C).
+    # coef por unidad de línea = W_OCIO_HORA x ESCALA_OBJ / velocidad -> en la misma
+    # escala que el evento de quiebre (W_QBR_EVENTO x ESCALA_OBJ).
+    _n_ocio = 0
+    for (d, l), v in m.ocio.items():
+        _vel = float(lineas_params[l].get("velocidad_u_hr", 0) or 0)
+        _coef = int(round(N2_W_OCIO_HORA * ESCALA_OBJ / _vel)) if _vel > 0 else 0
+        if _coef > 0:
+            obj_terms.append(_coef * v)
+            _n_ocio += 1
+    if _n_ocio:
+        logger.info(f"[LLENAR_TURNO] ON | {_n_ocio} dias-linea | W_OCIO_HORA={N2_W_OCIO_HORA}")
 
     # R12: peso simbólico para evitar inicios fantasma (ver Paso 3 del doc R12).
     # Sin este peso, la cota Σ inicio >= Σ asig - 1 deja al solver indiferente
@@ -2652,6 +2703,10 @@ def optimizar_plan(
             "horas_turno": float(_attr(ln, "horas_turno", 8) or 8),
             "turnos_dia": int(_attr(ln, "turnos_dia", 1) or 1),
             "nombre": _attr(ln, "nombre", ""),
+            # (11-11-2026) Calendario de capacidad (lista CERRADA de claves: si no se copia
+            # aca, el solver vuelve en silencio a horas_turno x turnos_dia). None = legado.
+            "turnos_config": _attr(ln, "turnos_config", None),
+            "excepciones": _attr(ln, "excepciones", None),
         }
 
     # ─── 3. sku_lineas — leerlas desde la BD (preferida + alternativas) ──────

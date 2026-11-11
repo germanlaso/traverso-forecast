@@ -63,24 +63,62 @@ def _alerta(nivel, codigo, mensaje):
 
 
 # ── Derivados de LÍNEA ───────────────────────────────────────────────────────
+def _turnos_config(v):
+    """turnos_config (JSONB / texto / lista) -> lista de turnos con 7 horas, o None."""
+    import json as _json
+    if v is None:
+        return None
+    if isinstance(v, str):
+        try:
+            v = _json.loads(v)
+        except Exception:
+            return None
+    out = [t for t in (v or []) if isinstance(t, dict) and len(t.get("horas") or []) == 7]
+    return out or None
+
+
 def derivados_linea(linea: dict) -> dict:
-    """Capacidades nominales de la línea (sin factor de SKU), en unidades."""
+    """Capacidades nominales de la línea (sin factor de SKU), en unidades.
+
+    (11-11-2026) Con turnos_config (horas por día y por turno, jornada 42 h = 9,9,8,8,8):
+      cap_dia_u      = día MÁS LARGO (un batch mayor no cabe ningún día -> error)
+      cap_dia_min_u  = día hábil MÁS CORTO (un batch mayor solo cabe algunos días -> advertencia)
+      cap_sem_u      = suma de la semana tipo
+    Sin turnos_config: cálculo anterior (horas_turno x turnos x días)."""
     vel    = _f(linea.get("velocidad_u_hr"))
     turnos = _i(linea.get("turnos_dia"), 1)
     horas  = _f(linea.get("horas_turno"), 8)
     dias   = _i(linea.get("dias_semana"), 5)
+    tc     = _turnos_config(linea.get("turnos_config"))
 
-    cap_turno = vel * horas
-    cap_dia   = cap_turno * turnos
-    cap_sem   = cap_dia * dias
+    if tc:
+        horas_por_dia = [sum(_f((t.get("horas") or [0] * 7)[i]) for t in tc) for i in range(7)]
+        laborables = [h for h in horas_por_dia if h > 0] or [0.0]
+        h_max, h_min = max(laborables), min(laborables)
+        cap_turno = vel * max(_f(h) for h in (tc[0].get("horas") or [0]))
+        cap_dia, cap_dia_min = vel * h_max, vel * h_min
+        cap_sem = vel * sum(horas_por_dia)
+        turnos, dias = len(tc), len([h for h in horas_por_dia if h > 0])
+        horas_dia, horas_sem = h_max, sum(horas_por_dia)
+    else:
+        horas_por_dia = None
+        cap_turno = vel * horas
+        cap_dia = cap_dia_min = cap_turno * turnos
+        cap_sem = cap_dia * dias
+        horas_dia, h_min, horas_sem = horas * turnos, horas * turnos, horas * turnos * dias
     return {
         "velocidad_u_hr": vel,
-        "horas_dia":      horas * turnos,
+        "horas_dia":      horas_dia,
+        "horas_dia_min":  h_min,
+        "horas_semana":   horas_sem,
+        "horas_por_dia":  horas_por_dia,          # [L..D] o None (legado)
         "cap_turno_u":    _r(cap_turno, 0),
         "cap_dia_u":      _r(cap_dia, 0),
+        "cap_dia_min_u":  _r(cap_dia_min, 0),
         "cap_sem_u":      _r(cap_sem, 0),
         "dias_semana":    dias,
         "turnos_dia":     turnos,
+        "calendario":     bool(tc),
     }
 
 
@@ -111,6 +149,7 @@ def diagnosticar_sku(params_producto: dict,
     vel_efec   = _f(der_linea.get("velocidad_u_hr")) * factor
     cap_turno  = _f(der_linea.get("cap_turno_u")) * factor
     cap_dia    = _f(der_linea.get("cap_dia_u")) * factor
+    cap_dia_min = _f(der_linea.get("cap_dia_min_u", der_linea.get("cap_dia_u"))) * factor
     cap_sem    = _f(der_linea.get("cap_sem_u")) * factor
 
     horas_batch  = _div(batch_min, vel_efec)
@@ -182,13 +221,27 @@ def diagnosticar_sku(params_producto: dict,
             f"efectiva ({cap_dia:,.0f} u). El solver puede no emitir la OFT y el stock "
             f"caer a negativo. Bajar el batch, subir el factor o cambiar de línea."))
 
+    elif batch_min > 0 and cap_dia_min and batch_min > cap_dia_min + 1e-6:
+        # (11-11-2026) Jornada con días de distinta duración (9-9-8-8-8): el batch cabe
+        # en los días largos pero NO en los cortos -> el solver solo puede programarlo esos días.
+        alertas.append(_alerta(
+            NIVEL_WARN, "BATCH_NO_CABE_DIA_CORTO",
+            f"El batch mínimo ({batch_min:,.0f} u) solo cabe en los días de "
+            f"{_f(der_linea.get('horas_dia')):g} h: no cabe en los de {_f(der_linea.get('horas_dia_min')):g} h "
+            f"({cap_dia_min:,.0f} u). El plan solo podrá producirlo esos días."))
+
     elif batch_min > 0 and not cabe_turno:
         alertas.append(_alerta(
             NIVEL_WARN, "BATCH_NO_CABE_TURNO",
             f"El batch mínimo ({batch_min:,.0f} u) no cabe en un turno "
             f"({cap_turno:,.0f} u): requiere más de un turno del día."))
 
-    if batch_min > 0 and cabe_dia and pct_dia is not None and pct_dia > UMBRAL_MARGEN_DIA:
+    # (11-11-2026) el margen se mide contra el día hábil MÁS CORTO (en jornada 9-9-8-8-8,
+    # un batch de 7,5 h usa 83% de un lunes pero 94% de un miércoles).
+    _pct_corto = _div(batch_min, cap_dia_min) if cap_dia_min else pct_dia
+    if (batch_min > 0 and cabe_dia and _pct_corto is not None and batch_min <= cap_dia_min + 1e-6
+            and _pct_corto > UMBRAL_MARGEN_DIA):
+        pct_dia = _pct_corto
         alertas.append(_alerta(
             NIVEL_WARN, "MARGEN_DIA_AJUSTADO",
             f"Un solo batch consume el {pct_dia*100:,.1f}% de la capacidad diaria: "

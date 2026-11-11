@@ -262,7 +262,8 @@ export function ModalEditarSku({ item, linea, onClose, onGuardado }) {
     if (r.campo === "factor_velocidad") setForm((f) => ({ ...f, factor_velocidad: String(r.valor_sugerido) }));
     else { setForm((f) => ({ ...f, [r.campo]: String(Math.round(r.valor_sugerido)) })); if (r.campo === "cap_bodega_u") setSinLimite(false); }
     setRecoIds((ids) => [...new Set([...ids, r.id])]);
-    if (!auth.motivo.trim()) auth.setMotivo(`${r.fuente}: ${ETIQUETA_CAMPO[r.campo]}`);
+    // motivo prellenado con la fuente y la explicación de la recomendación (queda en el historial)
+    if (!auth.motivo.trim()) auth.setMotivo(`${r.fuente}: ${r.motivo || ETIQUETA_CAMPO[r.campo]}`.slice(0, 600));
   };
 
   const guardar = async () => {
