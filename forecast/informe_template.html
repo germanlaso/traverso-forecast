@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Informe de Operación semanal · Traverso</title>
+<style>
+:root{
+  --teal:#1D9E75;--teal-lt:#E1F5EE;--teal-dk:#0F6E56;--blue:#185FA5;--blue-lt:#E6F1FB;
+  --amber:#EF9F27;--amber-lt:#FAEEDA;--amber-dk:#854F0B;--red:#E24B4A;--red-lt:#FCEBEB;--red-dk:#A32D2D;
+  --purple:#534AB7;--ink:#2C2C2A;--muted:#888780;--soft:#5F5E5A;--line:#D3D1C7;--grid:#ECEAE3;
+  --bg:#F8F7F4;--card:#FFFFFF;--chip:#F1EFE8;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --teal:#2DBA8C;--teal-lt:#123A2F;--teal-dk:#7FD9B8;--blue:#5B9BE0;--blue-lt:#16283D;
+    --amber:#F2B14E;--amber-lt:#3A2C14;--amber-dk:#F5C77A;--red:#F07170;--red-lt:#3D1A1A;--red-dk:#F5A3A2;
+    --purple:#8F87E8;--ink:#ECEAE3;--muted:#9C9A92;--soft:#C4C2BA;--line:#3A3936;--grid:#2C2B29;
+    --bg:#1A1A18;--card:#242422;--chip:#2E2D2A;color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.45}
+.wrap{max-width:1600px;margin:0 auto;padding:16px 18px 40px}
+header.top{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;border-bottom:3px solid var(--teal);padding-bottom:14px;margin-bottom:16px}
+.brand{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal-dk);font-weight:700}
+h1{font-size:26px;margin:4px 0 2px;letter-spacing:-.01em}
+.sub{color:var(--soft);font-size:13px}
+.meta{display:flex;gap:6px;flex-wrap:wrap}
+.chip{background:var(--chip);border-radius:12px;padding:3px 10px;font-size:11.5px;color:var(--soft);white-space:nowrap}
+nav.tabs{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 18px}
+nav.tabs button{border:1px solid var(--line);background:var(--card);color:var(--soft);padding:7px 14px;border-radius:18px;font-size:13px;cursor:pointer;font-family:inherit}
+nav.tabs button.on{background:var(--teal);border-color:var(--teal);color:#fff;font-weight:700}
+nav.tabs .sp{flex:1}
+nav.tabs .print{border-style:dashed}
+section.panel{display:none}
+section.panel.on{display:block}
+h2{font-size:19px;margin:0 0 4px}
+h3{font-size:15px;margin:0 0 2px}
+.lead{color:var(--soft);margin:0 0 14px;max-width:920px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}
+.cap{font-size:12px;color:var(--muted);margin:2px 0 10px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(480px,100%),1fr));gap:16px}
+@media (max-width:1250px){table{font-size:11.5px}td.num,th.num{white-space:nowrap}}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;position:relative;overflow:hidden}
+.kpi .l{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.kpi .v{font-size:30px;font-weight:700;margin:2px 0 0;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kpi .n{font-size:11.5px;color:var(--soft)}
+.kpi.bad{border-color:var(--red)}.kpi.bad .v{color:var(--red)}
+.kpi.warn{border-color:var(--amber)}.kpi.warn .v{color:var(--amber-dk)}
+.kpi.good .v{color:var(--teal-dk)}
+.kpi svg{display:block;margin-top:6px}
+.alerts{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px}
+.alert{border-radius:12px;padding:12px 14px 12px 16px;border-left:6px solid;background:var(--card);border-top:1px solid var(--line);border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.alert.c{border-left-color:var(--red)}.alert.h{border-left-color:var(--amber)}.alert.m{border-left-color:var(--blue)}
+.alert .sev{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.alert.c .sev{color:var(--red-dk)}.alert.h .sev{color:var(--amber-dk)}.alert.m .sev{color:var(--blue)}
+.alert .t{font-weight:700;margin:3px 0 4px;font-size:14.5px}
+.alert .d{font-size:12.5px;color:var(--soft)}
+.alert .act{font-size:12px;margin-top:6px;color:var(--ink)}
+.alert .act b{color:var(--teal-dk)}
+ol.acciones{margin:6px 0 0;padding-left:20px}ol.acciones li{margin:0 0 6px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{text-align:left;font-weight:700;color:var(--soft);border-bottom:1.5px solid var(--line);padding:6px 6px;white-space:normal;vertical-align:bottom;cursor:pointer;user-select:none}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+td{padding:5px 6px;border-bottom:1px solid var(--grid);vertical-align:top;overflow-wrap:anywhere}
+tr:hover td{background:var(--chip)}
+.scroll{overflow-x:auto}
+.heat td.h{text-align:center;font-variant-numeric:tabular-nums;border-radius:4px;min-width:40px;font-size:11.5px}
+.heat{border-collapse:separate;border-spacing:3px}
+.heat th{border:none;text-align:center;font-size:11.5px;line-height:1.2}
+.heat th:first-child,.heat td:first-child{text-align:left}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.seg button{border:none;background:transparent;padding:5px 12px;font-size:12px;cursor:pointer;color:var(--soft);font-family:inherit}
+.seg button.on{background:var(--teal-lt);color:var(--teal-dk);font-weight:700}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.tag{display:inline-block;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700}
+.tag.Capacidad{background:var(--red-lt);color:var(--red-dk)}.tag.Inmediato{background:var(--amber-lt);color:var(--amber-dk)}.tag.MTO{background:var(--chip);color:var(--soft)}.tag.Menor{background:var(--blue-lt);color:var(--blue)}
+.pri{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:10px}
+.pri.a{background:var(--red-lt);color:var(--red-dk)}.pri.ma{background:var(--amber-lt);color:var(--amber-dk)}.pri.m{background:var(--blue-lt);color:var(--blue)}.pri.k{background:var(--chip);color:var(--soft)}
+.rec h3{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.rec ul{margin:8px 0 0;padding-left:18px}.rec li{margin-bottom:4px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--soft);margin:4px 0 6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+svg text{font-family:Arial,Helvetica,sans-serif}
+.tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12px;padding:6px 9px;border-radius:6px;max-width:300px;z-index:50;display:none;line-height:1.35}
+footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid var(--line);padding-top:10px}
+.only-print{display:none}
+@media print{
+  :root{--bg:#fff;--card:#fff;--ink:#2C2C2A;--muted:#888780;--soft:#5F5E5A;--line:#D3D1C7;--grid:#ECEAE3;--chip:#F1EFE8;
+        --teal:#1D9E75;--teal-lt:#E1F5EE;--teal-dk:#0F6E56;--blue:#185FA5;--blue-lt:#E6F1FB;--amber:#EF9F27;--amber-lt:#FAEEDA;--amber-dk:#854F0B;--red:#E24B4A;--red-lt:#FCEBEB;--red-dk:#A32D2D;color-scheme:light}
+  html,body{font-size:11.5px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .wrap{max-width:none;padding:0}
+  nav.tabs{display:none}
+  section.panel{display:block !important;break-before:page}
+  section.panel:first-of-type{break-before:auto}
+  .kpi,.alert,tr,svg,.card.small{break-inside:avoid}
+  .card{break-inside:auto}
+  .card:has(svg),.grid2{break-inside:avoid}
+  #p-resumen .grid2{break-before:page}
+  h2,h3{break-after:avoid}
+  .grid2{grid-template-columns:1fr 1fr}
+  .only-print{display:block}
+  .no-print{display:none !important}
+  .kpi .v{font-size:24px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <div>
+    <div class="brand">Traverso · Planificación de Producción</div>
+    <h1>Informe de Operación</h1>
+    <div class="sub" id="periodo"></div>
+  </div>
+  <div class="meta" id="meta"></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-t="resumen" class="on">Resumen ejecutivo</button>
+  <button data-t="quiebre">Riesgo de quiebre</button>
+  <button data-t="cumpl">Cumplimiento</button>
+  <button data-t="ocup">Ocupación</button>
+  <button data-t="param">Parámetros y decisiones</button>
+  <button data-t="notas">Datos y definiciones</button>
+  <span class="sp"></span>
+  <button class="print" onclick="window.print()">Imprimir / PDF</button>
+</nav>
+
+
+<!-- ===================== RESUMEN ===================== -->
+<section class="panel on" id="p-resumen">
+  <h2>Resumen ejecutivo</h2>
+  <p class="lead" id="lead"></p>
+  <div class="kpis" id="kpis"></div>
+  <h3 style="margin:4px 0 10px">Alertas principales</h3>
+  <div class="alerts" id="alerts"></div>
+  <div class="card">
+    <h3>Recomendaciones a analizar</h3>
+    <ol class="acciones" id="acciones"></ol>
+    <p class="cap" id="cap-ia"></p>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Programado SAP vs producido, por semana</h3>
+      <p class="cap">Cajas (barras) y cumplimiento real ÷ SAP (línea), últimas semanas cerradas.</p>
+      <div id="ch-semanas"></div>
+    </div>
+    <div class="card">
+      <h3>Uso de línea proyectado, próximas 4 semanas</h3>
+      <p class="cap" id="cap-uso"></p>
+      <div id="ch-uso"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== QUIEBRE ===================== -->
+<section class="panel" id="p-quiebre">
+  <h2>Riesgo de quiebre · próximas 4 semanas</h2>
+  <p class="lead" id="lead-riesgo"></p>
+  <div class="card">
+    <h3>Mapa de quiebres proyectados</h3>
+    <p class="cap">Cada círculo es un SKU: posición = día del primer quiebre; tamaño = demanda no cubierta máxima (cj); fila = línea, ordenada por uso proyectado.</p>
+    <div class="legend"><span><i style="background:var(--red)"></i>Capacidad (desde semana 2)</span><span><i style="background:var(--amber)"></i>Inmediato (pedidos sobre stock)</span><span><i style="background:var(--blue)"></i>Menor (&lt; 20 cj)</span><span><i style="background:var(--muted)"></i>MTO (fabricación a pedido)</span></div>
+    <div id="ch-quiebres"></div>
+  </div>
+  <div class="card">
+    <div class="row"><h3>Detalle de SKU con quiebre proyectado</h3><span class="cap no-print">Clic en un encabezado para ordenar</span></div>
+    <div class="scroll"><table id="t-quiebres"></table></div>
+    <p class="cap" style="margin-top:8px" id="cap-quiebres"></p>
+  </div>
+</section>
+
+<!-- ===================== CUMPLIMIENTO ===================== -->
+<section class="panel" id="p-cumpl">
+  <h2>Cumplimiento semanal por línea</h2>
+  <p class="lead" id="lead-cumpl"></p>
+  <div class="card">
+    <div class="row">
+      <h3 id="heat-title">Cumplimiento real ÷ SAP</h3>
+      <div class="seg no-print" id="seg-heat"><button data-k="cumpl" class="on">Cumplimiento</button><button data-k="ocup">Ocupación real</button></div>
+    </div>
+    <p class="cap" id="heat-cap"></p>
+    <div class="scroll"><table class="heat" id="t-heat"></table></div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3 id="evol-title">Evolución</h3>
+      <p class="cap">Cumplimiento por línea en ambos tramos. Rojo = empeora más de 10 puntos; verde = mejora más de 10 puntos.</p>
+      <div id="ch-evol"></div>
+    </div>
+    <div class="card">
+      <h3>Desviaciones explicadas vs por explicar</h3>
+      <p class="cap" id="cap-bit"></p>
+      <div class="scroll"><table id="t-bit"></table></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3 id="desv-title">Mayores desvíos por SKU</h3>
+    <p class="cap">Programado en SAP vs producido real (Terminal Report), ordenado por cajas no producidas.</p>
+    <div class="scroll"><table id="t-desvios"></table></div>
+  </div>
+</section>
+
+<!-- ===================== OCUPACIÓN ===================== -->
+<section class="panel" id="p-ocup">
+  <h2>Ocupación por línea</h2>
+  <p class="lead" id="lead-ocup"></p>
+  <div class="card">
+    <h3 id="ft-title">Producción fuera del turno nominal</h3>
+    <p class="cap">Días con Terminal Report en sábado, domingo o festivo, y días con más de 110% de las horas de un turno. Un día con más de 24 h-eq indica que el Terminal Report agrupó producción de varios días.</p>
+    <div class="scroll"><table id="t-ft"></table></div>
+  </div>
+  <div class="card">
+    <h3>Capacidad demostrada vs capacidad parametrizada</h3>
+    <p class="cap"><b>Qué muestra:</b> cuánto produjo cada línea en sus mejores semanas, medido contra la capacidad con que la planifica el sistema. <b>100%</b> = capacidad nominal. La <b>barra</b> es el promedio de sus 3 mejores semanas y el <b>círculo</b>, su mejor semana. <b>Sobre 100% (ámbar):</b> la línea produjo más de lo que el sistema cree posible, en general por extensiones de turno o trabajo en fin de semana o festivo.</p>
+    <div class="legend"><span><i style="background:var(--teal)"></i>Promedio 3 mejores semanas (≤105%)</span><span><i style="background:var(--amber)"></i>Promedio 3 mejores semanas (&gt;105%)</span><span><i style="background:var(--card);border:2px solid var(--teal-dk);border-radius:50%"></i>Mejor semana</span><span><i style="background:var(--red);width:2px"></i>100% = capacidad nominal</span></div>
+    <div id="ch-demo"></div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Saturadas vs holgadas</h3>
+      <p class="cap">Cada punto es una línea. <b>Eje horizontal:</b> ocupación real del período (lo que pasó). <b>Eje vertical:</b> uso que proyecta el plan para las próximas 4 semanas (lo que viene). <b>Zona roja:</b> vienen saturadas y seguirán saturadas. <b>Zona verde:</b> holgadas en ambos períodos.</p>
+      <div id="ch-scatter"></div>
+    </div>
+    <div class="card">
+      <h3>Líneas con bitácora</h3>
+      <p class="cap">Eficiencia = producción ÷ horas de funcionamiento, solo en días con registro. Cobertura = días con registro ÷ días laborables.</p>
+      <div class="scroll"><table id="t-l1"></table></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== PARÁMETROS Y DECISIONES ===================== -->
+<section class="panel" id="p-param">
+  <h2>Parámetros y decisiones</h2>
+  <p class="lead">Propuestas para <b>analizar con Producción</b>, no cambios a aplicar. Las recomendaciones vienen del panel de parámetros (abiertas), los casos del Análisis de Línea y la evaluación automática de las intervenciones.</p>
+  <div class="card rec">
+    <h3><span class="pri a">Capacidad</span>Líneas que producen sobre su capacidad parametrizada</h3>
+    <p class="cap">Promedio de las 3 mejores semanas sobre 105%: el plan ve menos capacidad de la que la línea demuestra.</p>
+    <div class="scroll"><table id="t-capnom"></table></div>
+  </div>
+  <div class="card rec">
+    <h3><span class="pri a">Panel</span>Recomendaciones abiertas en Herramientas → Parámetros</h3>
+    <div class="scroll"><table id="t-recos"></table></div>
+  </div>
+  <div class="card rec">
+    <h3><span class="pri a">Bodega</span>Cap. bodega menor que batch mínimo + stock de seguridad</h3>
+    <p class="cap">Rojo = lo que falta de bodega para cumplir batch mínimo + SS a la vez.</p>
+    <div id="ch-capb"></div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Casos de Análisis de Línea de la semana</h3>
+      <div class="scroll"><table id="t-casos"></table></div>
+      <p class="cap" id="cap-pend"></p>
+    </div>
+    <div class="card">
+      <h3>Cambios de parámetros e intervenciones evaluadas</h3>
+      <div class="scroll"><table id="t-cambios"></table></div>
+      <div class="scroll" style="margin-top:10px"><table id="t-interv"></table></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== NOTAS ===================== -->
+<section class="panel" id="p-notas">
+  <h2>Datos y definiciones</h2>
+  <div class="card">
+    <h3>Calidad de datos y alcance</h3>
+    <table id="t-calidad"></table>
+    <p class="cap" style="margin-top:10px">Los KPIs consideran solo SKU del catálogo de planificación. Importados con etiquetado (Kikkoman, Melitta), maquila (mayonesas salvo la 300x8) y armado se informan aparte y no entran a los indicadores de línea.</p>
+  </div>
+  <div class="card">
+    <h3>Definiciones</h3>
+    <table>
+      <tr><th>Indicador</th><th>Cálculo</th></tr>
+      <tr><td>Cumplimiento</td><td>Cajas reales (Terminal Report) ÷ cajas programadas en SAP. Cada OF se asigna a la semana del centro de su tramo planificado.</td></tr>
+      <tr><td>Ocupación real</td><td>Horas-equivalentes producidas ÷ horas nominales. Horas-equivalentes = unidades ÷ (velocidad u/h × factor de velocidad del SKU).</td></tr>
+      <tr><td>Ocupación programada</td><td>Horas-equivalentes programadas en SAP ÷ horas nominales.</td></tr>
+      <tr><td>Eficiencia</td><td>Horas-equivalentes producidas ÷ horas de funcionamiento, solo en días con registro en la bitácora.</td></tr>
+      <tr><td>Uso proyectado</td><td>Uso diario de línea del plan vigente (OF tentativas), promedio de los días hábiles de las próximas 4 semanas.</td></tr>
+      <tr><td>Adopción app</td><td>Cajas SAP de SKU que también tienen OF aprobada en la app ÷ cajas programadas en SAP.</td></tr>
+      <tr><td>Capacidad demostrada</td><td>Promedio de las 3 mejores semanas de ocupación real (conocimiento empírico del sistema).</td></tr>
+    </table>
+    <p class="cap" style="margin-top:10px" id="cap-fuentes"></p>
+  </div>
+</section>
+
+<footer id="footer"></footer>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+const D = __DATA__;
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const NS = 'http://www.w3.org/2000/svg';
+const pct = (v, d=0) => v==null ? '–' : (v*100).toFixed(d).replace('.', ',') + '%';
+const num = v => v==null ? '–' : Math.round(v).toLocaleString('es-CL');
+const tip = document.getElementById('tip');
+function showTip(e, html){ tip.innerHTML = html; tip.style.display='block'; const x=Math.min(e.clientX+14, innerWidth-310); tip.style.left=x+'px'; tip.style.top=(e.clientY+14)+'px'; }
+function hideTip(){ tip.style.display='none'; }
+function el(tag, attrs={}, parent){ const n=document.createElementNS(NS, tag); for(const k in attrs) n.setAttribute(k, attrs[k]); if(parent) parent.appendChild(n); return n; }
+function svg(w, h, host){ const s=el('svg',{viewBox:`0 0 ${w} ${h}`, width:'100%', role:'img'}); document.getElementById(host).innerHTML=''; document.getElementById(host).appendChild(s); return s; }
+function text(s, x, y, t, o={}){ const n=el('text',{x,y,'font-size':o.size||11,fill:o.fill||css('--muted'),'text-anchor':o.anchor||'start','font-weight':o.bold?700:400,'dominant-baseline':o.base||'auto'}, s); n.textContent=t; return n; }
+function hover(n, html){ n.addEventListener('mousemove', e=>showTip(e, html)); n.addEventListener('mouseleave', hideTip); n.style.cursor='default'; }
+
+// ---------- cabecera y textos (datos + lectura IA) ----------
+const IA = D.ia || {}; const LEC = IA.lecturas || {};
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+document.getElementById('periodo').textContent = D.meta.periodo;
+document.getElementById('meta').innerHTML = [D.meta.plan, 'Horizonte de riesgo: '+D.meta.horizonte, 'Generado: '+D.meta.generado].map(t=>`<span class="chip">${t}</span>`).join('');
+const K = D.kpi;
+const sat = D.lineas.filter(l=>l.fut>=0.845).map(l=>l.linea);
+document.getElementById('lead').innerHTML = IA.resumen_ejecutivo ? esc(IA.resumen_ejecutivo)
+  : `El plan vigente proyecta <b>${K.quiebres} SKU con quiebre</b> y <b>${K.bajo_ss} SKU bajo stock de seguridad</b> en las próximas 4 semanas. El cumplimiento de la última semana fue <b>${pct(K.cumpl_ult,1)}</b> (período: ${pct(K.cumpl,1)}).`;
+document.getElementById('lead-riesgo').innerHTML = esc(LEC.riesgo || 'Los quiebres que importan son los que aparecen después de la primera semana en líneas saturadas: ahí el plan ya incluye las OF tentativas del solver y aun así no alcanza. Los de los primeros días responden a pedidos comprometidos sobre el stock actual.');
+document.getElementById('lead-cumpl').innerHTML = `Cumplimiento del período: <b>${pct(K.cumpl,1)}</b> · última semana: <b>${pct(K.cumpl_ult,1)}</b>. ` + esc(LEC.cumplimiento || '');
+document.getElementById('lead-ocup').innerHTML = `Ocupación real del período: <b>${pct(K.ocR,1)}</b> de las horas nominales (programada: ${pct(K.ocP,1)}). ` + esc(LEC.ocupacion || '');
+document.getElementById('cap-uso').innerHTML = `<b>Qué muestra:</b> las horas que el plan vigente asignó a cada línea en los días hábiles del ${D.meta.horizonte}, como % de su capacidad nominal. <b>Rojo ≥85%:</b> saturada. <b>Ámbar 70–85%</b> y <b>verde &lt;70%</b>. La <b>marca negra</b> es la ocupación real del período.`;
+document.getElementById('cap-quiebres').innerHTML = `Faltante hoy = informe Faltantes del ${D.meta.faltantes_fecha || '–'}. MTO = fabricación a pedido: se gestiona por la orden del cliente, no por parámetros.`;
+document.getElementById('evol-title').textContent = `Evolución: ${D.meta.tramo_ini} vs ${D.meta.tramo_fin}`;
+document.getElementById('desv-title').textContent = `Mayores desvíos por SKU · ${D.meta.periodo_corto}`;
+document.getElementById('ft-title').textContent = `Producción fuera del turno nominal · ${D.meta.periodo_corto}`;
+document.getElementById('cap-fuentes').innerHTML = `Fuentes: plan vigente ${D.meta.plan_id}, <code>mrp_of_sap</code> (Terminal Report), bitácora de eventos por línea, parámetros y casos de la app. Lectura IA: ${IA.disponible ? esc((IA._meta||{}).modelo||'') + ', US$ ' + ((IA._meta||{}).costo_usd ?? '–') : 'no disponible'}.`;
+document.getElementById('footer').textContent = `Informe generado automáticamente el ${D.meta.generado} · Sistema de Planificación de Producción · Traverso S.A. Las cifras provienen del motor de KPIs y del plan vigente; la lectura y las recomendaciones son de IA y deben validarse con Producción.`;
+
+// ---------- tabs ----------
+document.querySelectorAll('#tabs button[data-t]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#tabs button[data-t]').forEach(x=>x.classList.toggle('on', x===b));
+  document.querySelectorAll('section.panel').forEach(p=>p.classList.toggle('on', p.id==='p-'+b.dataset.t));
+  history.replaceState(null,'','#'+b.dataset.t); window.scrollTo({top:0});
+});
+const h0 = location.hash.slice(1); if(h0){ const b=document.querySelector(`#tabs button[data-t="${h0}"]`); if(b) b.click(); }
+
+// ---------- KPIs ----------
+function spark(vals, color){
+  vals = vals.filter(v=>v!=null); if(vals.length<2) return '';
+  const w=150,h=28, mn=Math.min(...vals), mx=Math.max(...vals), r=(mx-mn)||1;
+  const pts=vals.map((v,i)=>`${(i/(vals.length-1)*w).toFixed(1)},${(h-3-(v-mn)/r*(h-6)).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.8"/></svg>`;
+}
+const S = D.semanas;
+const kpis = [
+  {l:'Cumplimiento última semana', v:pct(K.cumpl_ult,1), n:`real ÷ SAP · período ${pct(K.cumpl,1)}`, sp:S.map(s=>s.cumpl), c:'--blue', cls:''},
+  {l:'Adopción app', v:pct(K.adop,1), n:'del programa SAP con OF de la app', cls:'good'},
+  {l:'Ocupación real', v:pct(K.ocR,1), n:`programada: ${pct(K.ocP,1)}`, sp:S.map(s=>s.ocR), c:'--teal', cls:''},
+  {l:'SKU con quiebre', v:K.quiebres, n:`proyectados próx. 4 semanas (${K.quiebres_mto} MTO, fabricación a pedido)`, cls:'bad'},
+  {l:'SKU bajo SS', v:K.bajo_ss, n:'bajo su SS (stock de seguridad), próx. 4 semanas', cls:'warn'},
+  {l:'Líneas ≥85% uso', v:sat.length, n:sat.join(' · ') || '–', cls:'warn'},
+  {l:'Faltantes', v:K.faltantes_hoy, n:`SKU · ${num(K.faltantes_cj)} cj (corte ${D.meta.faltantes_fecha || '–'})`, cls:'bad'},
+];
+document.getElementById('kpis').innerHTML = kpis.map(k=>`<div class="kpi ${k.cls}"><div class="l">${k.l}</div><div class="v">${k.v}</div><div class="n">${k.n}</div>${k.sp?spark(k.sp, css(k.c)):''}</div>`).join('');
+
+// ---------- alertas y recomendaciones (IA) ----------
+const SEV = {critica:['c','Crítica'], alta:['h','Alta'], media:['m','Media']};
+document.getElementById('alerts').innerHTML = (IA.alertas||[]).map(a=>{ const s=SEV[a.severidad]||SEV.media;
+  return `<div class="alert ${s[0]}"><div class="sev">${s[1]}</div><div class="t">${esc(a.titulo)}</div><div class="d">${esc(a.detalle)}</div><div class="act"><b>→</b> ${esc(a.accion)}</div></div>`; }).join('')
+  || '<p class="cap">Lectura IA no disponible: revisar los indicadores y las pestañas de detalle.</p>';
+document.getElementById('acciones').innerHTML = (IA.recomendaciones||[]).map(r=>`<li><b>${esc(r.titulo)}</b> <span class="cap">· ${esc(r.responsable||'')}</span><br>${esc(r.detalle)}</li>`).join('') || '<li>Sin recomendaciones de la IA esta semana.</li>';
+document.getElementById('cap-ia').textContent = 'Recomendaciones de la IA a partir de los datos del informe: son propuestas a analizar, no cambios a aplicar.' + (LEC.decisiones ? ' ' + LEC.decisiones : '');
+
+// ---------- chart: semanas ----------
+(function(){
+  const W=560,H=250,m={l:44,r:44,t:14,b:44}, iw=W-m.l-m.r, ih=H-m.t-m.b;
+  const s=svg(W,H,'ch-semanas'); const n=S.length, bw=iw/n;
+  const mx=Math.ceil(Math.max(...S.map(x=>Math.max(x.sap,x.real)))/10000)*10000;
+  for(let v=0; v<=mx; v+=20000){ const y=m.t+ih-v/mx*ih; el('line',{x1:m.l,x2:W-m.r,y1:y,y2:y,stroke:css('--grid')},s); text(s,m.l-6,y+3,(v/1000)+'k',{anchor:'end',size:10}); }
+  [0.5,0.75,1].forEach(v=>{ const y=m.t+ih-v/1.2*ih; text(s,W-m.r+6,y+3,pct(v),{size:10}); });
+  S.forEach((x,i)=>{
+    const x0=m.l+i*bw+bw*0.14, w=bw*0.34;
+    const hs=x.sap/mx*ih, hr=x.real/mx*ih;
+    const r1=el('rect',{x:x0,y:m.t+ih-hs,width:w,height:hs,fill:css('--blue'),rx:2},s);
+    const r2=el('rect',{x:x0+w+2,y:m.t+ih-hr,width:w,height:hr,fill:css('--teal'),rx:2},s);
+    const tt=`<b>Sem ${x.sem} · ${x.ini}</b><br>SAP: ${num(x.sap)} cj<br>Real: ${num(x.real)} cj<br>Cumplimiento: ${pct(x.cumpl,1)}`;
+    hover(r1,tt); hover(r2,tt);
+    text(s,m.l+i*bw+bw/2,H-m.b+15,'Sem '+x.sem,{anchor:'middle',size:10.5,fill:css('--ink')});
+    text(s,m.l+i*bw+bw/2,H-m.b+28,x.ini,{anchor:'middle',size:9.5});
+  });
+  const pts=S.map((x,i)=>[m.l+i*bw+bw/2, m.t+ih-x.cumpl/1.2*ih]);
+  el('polyline',{points:pts.map(p=>p.join(',')).join(' '),fill:'none',stroke:css('--amber'),'stroke-width':2.2},s);
+  pts.forEach((p,i)=>{ const c=el('circle',{cx:p[0],cy:p[1],r:3.5,fill:css('--card'),stroke:css('--amber'),'stroke-width':2},s); hover(c,`Sem ${S[i].sem}: ${pct(S[i].cumpl,1)}`); text(s,p[0],p[1]-8,pct(S[i].cumpl),{anchor:'middle',size:9.5,fill:css('--amber-dk'),bold:true}); });
+  const lg=el('g',{},s); [['SAP','--blue'],['Real','--teal'],['Cumplimiento','--amber']].forEach((q,i)=>{ el('rect',{x:m.l+i*95,y:H-10,width:10,height:10,fill:css(q[1]),rx:2},lg); text(lg,m.l+14+i*95,H-1,q[0],{size:10.5,fill:css('--soft')}); });
+})();
+// ---------- chart: uso proyectado ----------
+(function(){
+  const L=D.lineas, W=560, rh=17, m={l:96,r:46,t:20,b:8}, H=m.t+L.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-uso'); const X=v=>m.l+Math.min(v,1.25)/1.25*iw;
+  [0,0.4,0.85,1].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:v===0.85?css('--red'):css('--grid'),'stroke-dasharray':v===0.85?'4 3':''},s); text(s,X(v),m.t-9,pct(v),{anchor:'middle',size:9.5,fill:v===0.85?css('--red-dk'):css('--muted')}); });
+  L.forEach((l,i)=>{
+    const y=m.t+i*rh; const col=l.fut>=0.845?css('--red'):l.fut>=0.7?css('--amber'):css('--teal');
+    text(s,m.l-6,y+rh/2+3,l.linea,{anchor:'end',size:10.5,fill:css('--ink')});
+    const r=el('rect',{x:m.l,y:y+3,width:X(l.fut)-m.l,height:rh-6,fill:col,rx:2,opacity:.9},s);
+    const mk=el('rect',{x:X(l.ocR)-1.5,y:y+1,width:3,height:rh-2,fill:css('--ink')},s);
+    text(s,X(l.fut)+4,y+rh/2+3,pct(l.fut),{size:9.5,fill:css('--soft')});
+    const tt=`<b>${l.linea}</b> (${l.cat})<br>Uso proyectado: ${pct(l.fut)} · ${l.d95} de ${D.meta.dias_fut} días ≥95%<br>Ocupación real del período: ${pct(l.ocR)}<br>Quiebres: ${l.q} · Bajo SS: ${l.ss}`;
+    hover(r,tt); hover(mk,tt);
+  });
+})();
+// ---------- chart: mapa de quiebres ----------
+(function(){
+  const Q=D.quiebres.map(q=>({...q, cls: q.mto?'MTO':(q.def_cj<20?'Menor':q.tipo)}));
+  const lines=[...new Set(Q.map(q=>q.linea))].sort((a,b)=>(D.lineas.find(l=>l.linea===b).fut)-(D.lineas.find(l=>l.linea===a).fut));
+  const W=1180, rh=44, m={l:150,r:20,t:28,b:30}, H=m.t+lines.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-quiebres'); const X=d=>m.l+(d+1.5)/30*iw;
+  for(let d=0; d<=27; d++){ const dt=new Date(2026,10,10+d); if(dt.getDay()===1 || d===0){ el('line',{x1:X(d),x2:X(d),y1:m.t-4,y2:H-m.b,stroke:css('--grid')},s); text(s,X(d),m.t-10,`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`,{anchor:'middle',size:10}); } }
+  el('rect',{x:X(-1.5),y:m.t-4,width:X(5.5)-X(-1.5),height:H-m.b-m.t+4,fill:css('--amber-lt'),opacity:.55},s);
+  text(s,X(2.75),H-m.b+16,'Semana 1: pedidos y recepciones',{anchor:'middle',size:10,fill:css('--amber-dk')});
+  text(s,X(16),H-m.b+16,'Semanas 2 a 4: capacidad',{anchor:'middle',size:10,fill:css('--red-dk')});
+  const colors={Capacidad:css('--red'),Inmediato:css('--amber'),Menor:css('--blue'),MTO:css('--muted')};
+  lines.forEach((ln,i)=>{
+    const y=m.t+i*rh+rh/2; const L=D.lineas.find(l=>l.linea===ln);
+    el('line',{x1:m.l,x2:W-m.r,y1:y,y2:y,stroke:css('--grid'),'stroke-dasharray':'2 3'},s);
+    text(s,m.l-8,y-1,ln,{anchor:'end',size:11.5,fill:css('--ink'),bold:true});
+    text(s,m.l-8,y+12,'uso '+pct(L.fut),{anchor:'end',size:9.5,fill:L.fut>=0.845?css('--red-dk'):css('--muted')});
+    const qs=Q.filter(q=>q.linea===ln);
+    qs.forEach((q,j)=>{
+      const r=Math.min(19, Math.max(4, Math.sqrt(q.def_cj)*0.7));
+      const same=qs.filter(z=>z.dia===q.dia); const k=same.indexOf(q); const off=(k-(same.length-1)/2)*Math.min(14, r*1.1);
+      const c=el('circle',{cx:X(q.dia),cy:y+off,r:r,fill:colors[q.cls],'fill-opacity':.72,stroke:css('--card'),'stroke-width':1.2},s);
+      hover(c,`<b>${q.sku}</b> · ${q.desc}<br>${q.linea} · primer quiebre ${q.fecha.slice(8,10)}/${q.fecha.slice(5,7)}<br>Demanda no cubierta máx.: ${num(q.def_cj)} cj · ${q.dias} día(s)<br>Disponible hoy: ${num(q.disp_cj)} cj${q.rp?'<br>⚑ Terminal Report pendiente':''}`);
+      if(q.def_cj>=120){ const right=q.dia>20; text(s,X(q.dia)+(right?-(r+4):(r+4)),y+off+3,(q.desc||'').split(' ').slice(0,3).join(' '),{size:9.5,fill:css('--soft'),anchor:right?'end':'start'}); }
+    });
+  });
+})();
+// ---------- tablas ordenables ----------
+function table(id, cols, rows){
+  const t=document.getElementById(id); let sortK=null, asc=true;
+  function draw(){
+    let r=[...rows]; if(sortK!=null){ const c=cols[sortK]; r.sort((a,b)=>{ const x=c.sv?c.sv(a):a[c.k], y=c.sv?c.sv(b):b[c.k]; return (x>y?1:x<y?-1:0)*(asc?1:-1); }); }
+    t.innerHTML = '<tr>'+cols.map((c,i)=>`<th class="${c.num?'num':''}" data-i="${i}">${c.h}${sortK===i?(asc?' ▲':' ▼'):''}</th>`).join('')+'</tr>' +
+      r.map(x=>'<tr>'+cols.map(c=>`<td class="${c.num?'num':''}">${c.f?c.f(x):(x[c.k]??'')}</td>`).join('')+'</tr>').join('');
+    t.querySelectorAll('th').forEach(th=>th.onclick=()=>{ const i=+th.dataset.i; asc = sortK===i ? !asc : true; sortK=i; draw(); });
+  }
+  draw();
+}
+table('t-quiebres', [
+  {h:'SKU',k:'sku'},{h:'Producto',k:'desc',f:x=>(x.desc||'')+(x.rp?' ⚑':'')},{h:'Línea',k:'linea'},
+  {h:'Uso línea',k:'fut',num:1,f:x=>pct(x.fut)},{h:'Primer quiebre',k:'fecha',f:x=>x.fecha.slice(8,10)+'/'+x.fecha.slice(5,7)},
+  {h:'Días',k:'dias',num:1},{h:'Demanda no cubierta máx. (cj)',k:'def_cj',num:1,f:x=>num(x.def_cj)},{h:'Disponible hoy (cj)',k:'disp_cj',num:1,f:x=>num(x.disp_cj)},
+  {h:'Faltante hoy (cj)',k:'falt',num:1,f:x=>x.falt?num(x.falt):''},
+  {h:'Tipo',k:'tipo',f:x=>{const c=x.mto?'MTO':(x.def_cj<20?'Menor':x.tipo); return `<span class="tag ${c}">${c}</span>`;}},
+], D.quiebres);
+table('t-desvios', [
+  {h:'SKU',k:'sku'},{h:'Producto',k:'desc'},{h:'Línea',k:'linea'},{h:'SAP cj',k:'sap',num:1,f:x=>num(x.sap)},
+  {h:'Real cj',k:'real',num:1,f:x=>num(x.real)},{h:'No producido cj',k:'gap',num:1,sv:x=>x.sap-x.real,f:x=>num(x.sap-x.real)},
+  {h:'Cumpl.',k:'cumpl',num:1,f:x=>pct(x.cumpl)},{h:'Semanas bajo 70%',k:'wb',num:1,f:x=>`${x.wb} de ${x.w}`},
+], D.desvios.slice(0,10));
+// ---------- heatmap ----------
+function heatColor(v, mode){
+  if(v==null) return `background:transparent;color:${css('--muted')}`;
+  if(mode==='cumpl'){
+    if(v<0.7) return `background:${css('--red-lt')};color:${css('--red-dk')};font-weight:700`;
+    if(v>1.3) return `background:${css('--amber-lt')};color:${css('--amber-dk')};font-weight:700`;
+    const a=(0.15+Math.min(v,1)*0.55).toFixed(2); return `background:rgba(29,158,117,${a});color:${v>0.85?'#fff':css('--ink')}`;
+  }
+  if(v>1.05) return `background:${css('--amber-lt')};color:${css('--amber-dk')};font-weight:700`;
+  const a=(0.06+Math.min(v,1)*0.8).toFixed(2); return `background:rgba(29,158,117,${a});color:${v>0.55?'#fff':css('--ink')}`;
+}
+function drawHeat(mode){
+  const t=document.getElementById('t-heat'); const L=[...D.lineas].sort((a,b)=>a.cat.localeCompare(b.cat)||a.linea.localeCompare(b.linea));
+  const key = mode==='cumpl'?'cumpl_sem':'oc_sem';
+  const extraH = mode==='cumpl'?[D.meta.tramo_fin,'Período']:['Período','Próx. 4 sem'];
+  let h='<tr><th>Línea</th>'+S.map(s=>`<th>Sem ${s.sem}<br><span style="font-weight:400;color:${css('--muted')}">${s.ini}</span></th>`).join('')+extraH.map(x=>`<th>${x}</th>`).join('')+'</tr>';
+  L.forEach(l=>{
+    const cells=l[key].map((v,i)=>`<td class="h" style="${heatColor(v,mode)}" title="${l.linea} · Sem ${S[i].sem}: ${pct(v)}">${pct(v)}</td>`).join('');
+    const ex = mode==='cumpl' ? [l.cumpl4,l.cumpl] : [l.ocR,l.fut];
+    h+=`<tr><td><b>${l.linea}</b> <span style="color:${css('--muted')};font-size:11px">${l.cat}</span></td>${cells}${ex.map(v=>`<td class="h" style="${heatColor(v,mode)};outline:1.5px solid ${css('--line')}">${pct(v)}</td>`).join('')}</tr>`;
+  });
+  const tot = mode==='cumpl' ? S.map(s=>s.cumpl) : S.map(s=>s.ocR);
+  h+='<tr><td><b>Total</b></td>'+tot.map(v=>`<td class="h" style="${heatColor(v,mode)};font-weight:700">${pct(v)}</td>`).join('')+`<td class="h"></td><td class="h"></td></tr>`;
+  t.innerHTML=h;
+  document.getElementById('heat-title').textContent = mode==='cumpl'?'Cumplimiento real ÷ SAP':'Ocupación real (h-eq producidas ÷ h nominales)';
+  document.getElementById('heat-cap').textContent = mode==='cumpl'?'Cajas reales (Terminal Report) ÷ cajas programadas en SAP. "–" = sin programa SAP esa semana. Rojo < 70%, ámbar > 130%.':'Ámbar = sobre 105% de la capacidad nominal: producción mayor a lo parametrizado. '+D.meta.nota_nominal+'';
+}
+drawHeat('cumpl');
+document.querySelectorAll('#seg-heat button').forEach(b=>b.onclick=()=>{ document.querySelectorAll('#seg-heat button').forEach(x=>x.classList.toggle('on',x===b)); drawHeat(b.dataset.k); });
+// ---------- chart: evolución (dumbbell) ----------
+(function(){
+  const L=D.lineas.filter(l=>l.cumpl_ini!=null && l.cumpl4!=null).sort((a,b)=>(a.cumpl4-a.cumpl_ini)-(b.cumpl4-b.cumpl_ini));
+  const W=560, rh=19, m={l:96,r:30,t:20,b:10}, H=m.t+L.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-evol'); const X=v=>m.l+Math.min(v,1.5)/1.5*iw;
+  [0.5,0.75,1,1.25].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:v===1?css('--line'):css('--grid')},s); text(s,X(v),m.t-9,pct(v),{anchor:'middle',size:9.5}); });
+  L.forEach((l,i)=>{
+    const y=m.t+i*rh+rh/2, d=l.cumpl4-l.cumpl_ini, col=d<-0.1?css('--red'):d>0.1?css('--teal'):css('--muted');
+    text(s,m.l-6,y+3,l.linea,{anchor:'end',size:10.5,fill:css('--ink')});
+    el('line',{x1:X(l.cumpl_ini),x2:X(l.cumpl4),y1:y,y2:y,stroke:col,'stroke-width':2.5},s);
+    el('circle',{cx:X(l.cumpl_ini),cy:y,r:3.5,fill:css('--card'),stroke:css('--muted'),'stroke-width':1.5},s);
+    const c=el('circle',{cx:X(l.cumpl4),cy:y,r:4.5,fill:col},s);
+    hover(c,`<b>${l.linea}</b><br>${D.meta.tramo_ini}: ${pct(l.cumpl_ini)}<br>${D.meta.tramo_fin}: ${pct(l.cumpl4)}`);
+  });
+})();
+// ---------- chart: capacidad demostrada ----------
+(function(){
+  const L=[...D.lineas].sort((a,b)=>b.top3-a.top3);
+  const W=1180, rh=20, m={l:110,r:150,t:22,b:8}, H=m.t+L.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-demo'); const X=v=>m.l+Math.min(v,2)/2*iw;
+  [0,0.5,1,1.5,2].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:v===1?css('--red'):css('--grid'),'stroke-dasharray':v===1?'4 3':''},s); text(s,X(v),m.t-10,pct(v),{anchor:'middle',size:9.5,fill:v===1?css('--red-dk'):css('--muted')}); });
+  L.forEach((l,i)=>{
+    const y=m.t+i*rh; const over=l.top3>1.05;
+    text(s,m.l-6,y+rh/2+3,l.linea,{anchor:'end',size:10.5,fill:css('--ink'),bold:over});
+    const r=el('rect',{x:m.l,y:y+4,width:X(l.top3)-m.l,height:rh-8,fill:over?css('--amber'):css('--teal'),rx:2,opacity:.85},s);
+    const c=el('circle',{cx:X(l.max_oc),cy:y+rh/2,r:4,fill:css('--card'),stroke:over?css('--red'):css('--teal-dk'),'stroke-width':2},s);
+    text(s,X(Math.max(l.max_oc,l.top3))+8,y+rh/2+3,`${pct(l.top3)} · máx ${pct(l.max_oc)}`,{size:9.5,fill:over?css('--amber-dk'):css('--muted'),bold:over});
+    const tt=`<b>${l.linea}</b><br>Promedio 3 mejores semanas: ${pct(l.top3)}<br>Máximo semanal: ${pct(l.max_oc)}<br>Parámetro: ${l.param}`; hover(r,tt); hover(c,tt);
+  });
+  const lg=el('g',{},s);
+})();
+// ---------- chart: scatter saturación ----------
+(function(){
+  const L=D.lineas, W=560, H=330, m={l:58,r:16,t:14,b:40}, iw=W-m.l-m.r, ih=H-m.t-m.b;
+  const s=svg(W,H,'ch-scatter'); const X=v=>m.l+Math.min(v,1.1)/1.1*iw, Y=v=>m.t+ih-Math.min(v,1.1)/1.1*ih;
+  el('rect',{x:X(0.85),y:Y(1.1),width:X(1.1)-X(0.85),height:Y(0.85)-Y(1.1),fill:css('--red-lt'),opacity:.7},s);
+  el('rect',{x:X(0),y:Y(0.4),width:X(0.4)-X(0),height:Y(0)-Y(0.4),fill:css('--teal-lt'),opacity:.7},s);
+  [0,0.25,0.5,0.75,1].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t,y2:m.t+ih,stroke:css('--grid')},s); el('line',{x1:m.l,x2:m.l+iw,y1:Y(v),y2:Y(v),stroke:css('--grid')},s); text(s,X(v),H-m.b+14,pct(v),{anchor:'middle',size:9.5}); text(s,m.l-6,Y(v)+3,pct(v),{anchor:'end',size:9.5}); });
+  text(s,m.l+iw/2,H-6,'Ocupación real '+D.meta.periodo_corto+' (lo que pasó)',{anchor:'middle',size:10.5,fill:css('--soft')});
+  const yt=text(s,12,m.t+ih/2,'Uso proyectado próx. 4 semanas (lo que viene)',{anchor:'middle',size:10.5,fill:css('--soft')}); yt.setAttribute('transform',`rotate(-90 12 ${m.t+ih/2})`);
+  text(s,X(1.08),Y(1.06),'saturadas',{anchor:'end',size:10,fill:css('--red-dk'),bold:true});
+  text(s,X(0.02),Y(0.03),'holgadas',{size:10,fill:css('--teal-dk'),bold:true});
+  L.forEach(l=>{
+    const col=l.fut>=0.845||l.ocR>=0.85?css('--red'):l.fut<0.4&&l.ocR<0.4?css('--teal'):css('--amber');
+    const c=el('circle',{cx:X(l.ocR),cy:Y(l.fut),r:6,fill:col,'fill-opacity':.8,stroke:css('--card'),'stroke-width':1.5},s);
+    hover(c,`<b>${l.linea}</b><br>Ocupación real: ${pct(l.ocR)}<br>Uso proyectado: ${pct(l.fut)}`);
+    text(s,X(l.ocR)+8,Y(l.fut)+3,l.linea,{size:9.5,fill:css('--soft')});
+  });
+})();
+// ---------- tabla capacidad nominal ----------
+table('t-capnom', [
+  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Parámetro actual',k:'param'},
+  {h:'Máx. ocupación real',k:'max_oc',num:1,f:x=>pct(x.max_oc)},{h:'Prom. 3 mejores sem.',k:'top3',num:1,f:x=>pct(x.top3)},
+  {h:'Uso proyectado',k:'fut',num:1,f:x=>pct(x.fut)},{h:'Quiebres proyectados',k:'q',num:1},
+], D.lineas.filter(l=>l.top3>1.05).sort((a,b)=>b.top3-a.top3));
+// ---------- chart: cap bodega ----------
+(function(){
+  const C=D.cap_bodega, W=1180, rh=30, m={l:330,r:150,t:8,b:8}, H=m.t+C.length*rh+m.b, iw=W-m.l-m.r;
+  const mx=Math.max(...C.map(c=>Math.max(c.cap,c.need)))*1.05; const X=v=>m.l+v/mx*iw;
+  const s=svg(W,H,'ch-capb');
+  C.forEach((c,i)=>{
+    const y=m.t+i*rh;
+    text(s,m.l-8,y+rh/2-1,`${c.sku} · ${(c.desc||'').slice(0,34)}`,{anchor:'end',size:10.5,fill:css('--ink'),bold:c.q});
+    text(s,m.l-8,y+rh/2+11,`${c.linea}${c.q?' · con quiebre proyectado':''}`,{anchor:'end',size:9.5,fill:c.q?css('--red-dk'):css('--muted')});
+    const r=el('rect',{x:m.l,y:y+7,width:X(c.cap)-m.l,height:rh-14,fill:css('--blue'),opacity:.75,rx:2},s);
+    el('rect',{x:X(c.cap),y:y+7,width:X(c.need)-X(c.cap),height:rh-14,fill:css('--red'),opacity:.85,rx:2},s);
+    el('line',{x1:X(c.need),x2:X(c.need),y1:y+3,y2:y+rh-3,stroke:css('--red-dk'),'stroke-width':2},s);
+    text(s,X(c.need)+8,y+rh/2+4,`faltan ${num(c.need-c.cap)} u (${pct(c.need/c.cap-1)})`,{size:10,fill:css('--red-dk'),bold:true});
+    hover(r,`<b>${c.sku}</b> · ${c.desc}<br>Cap. bodega: ${num(c.cap)} u<br>Batch mín.: ${num(c.bmin)} u + SS: ${num(c.ss)} u = ${num(c.need)} u<br>Alertas exceso bodega: ${c.exb}`);
+  });
+})();
+
+// ---------- tablas dinámicas ----------
+table('t-bit', [
+  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Cumpl. última sem.',k:'cumpl',num:1,f:x=>pct(x.cumpl)},
+  {h:'Días con registro',k:'dias',num:1},{h:'Detención (h)',k:'det_h',num:1,f:x=>x.det_h==null?'–':x.det_h.toFixed(1).replace('.',',')},
+  {h:'Lectura',k:'lectura',f:x=>`<span class="tag ${x.explicada?'Menor':'MTO'}">${x.explicada?'Con registro':'Sin registro'}</span> ${esc(x.lectura)}`},
+], D.bit_lineas);
+document.getElementById('cap-bit').textContent = `Líneas con registro en la bitácora: ${D.bit_lineas.filter(x=>x.explicada).length} de ${D.lineas.length}. Sin registro, una desviación queda por explicar.`;
+table('t-ft', [
+  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Turno param.',k:'turno',num:1,f:x=>x.turno},
+  {h:'Días fin de semana / festivo',k:'dias_fs',num:1},{h:'h-eq esos días',k:'h_fs',num:1,f:x=>num(x.h_fs)},
+  {h:'Días sobre 110% del turno',k:'dias_sobre',num:1},{h:'Máximo en un día',k:'max_h',num:1,f:x=>x.max_h.toFixed(1).replace('.',',')+' h'},
+], D.fuera_turno);
+table('t-l1', [
+  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Ocupación real',k:'ocR',num:1,f:x=>pct(x.ocR)},
+  {h:'Eficiencia',k:'efic',num:1,f:x=>pct(x.efic)},{h:'Cobertura bitácora',k:'cob',num:1,f:x=>pct(x.cob)},
+], D.lineas_bitacora);
+table('t-recos', [
+  {h:'Prioridad',k:'prioridad'},{h:'Qué',k:'campo'},{h:'Dónde',k:'donde'},{h:'Vigente',k:'vigente',num:1,f:x=>num(x.vigente)},
+  {h:'Sugerido',k:'sugerido',num:1,f:x=>x.sugerido==null?'–':num(x.sugerido)},{h:'Fuente',k:'fuente'},{h:'Motivo',k:'motivo',f:x=>`<span class="cap">${esc(x.motivo)}</span>`},
+], D.recos);
+table('t-casos', [
+  {h:'Caso',k:'id',f:x=>'#'+x.id},{h:'Línea',k:'linea'},{h:'Origen',k:'origen'},{h:'Decisión',k:'decision',f:x=>x.decision||'pendiente'},
+  {h:'Causa principal',k:'causa',f:x=>`<span class="cap">${esc(x.causa||'')}</span>`},
+], D.casos);
+document.getElementById('cap-pend').textContent = `Acciones aceptadas pendientes de ejecutar: ${D.acciones_pendientes}.`;
+table('t-cambios', [
+  {h:'Parámetro cambiado (semana)',k:'campo'},{h:'Cambios',k:'n',num:1},{h:'SKU o líneas',k:'elementos',num:1},{h:'Quién',k:'editores'},
+], D.cambios);
+table('t-interv', [
+  {h:'Intervención evaluada',k:'palanca'},{h:'Línea',k:'linea'},{h:'Veredicto',k:'veredicto'},{h:'Lección',k:'aprendizaje',f:x=>`<span class="cap">${esc(x.aprendizaje||'')}</span>`},
+], D.interv);
+document.getElementById('t-calidad').innerHTML = '<tr><th>Tema</th><th>Situación</th></tr>' + D.calidad.map(c=>`<tr><td>${esc(c[0])}</td><td>${esc(c[1])}</td></tr>`).join('');
+
+</script>
+</body>
+</html>
