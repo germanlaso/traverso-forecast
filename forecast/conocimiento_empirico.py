@@ -100,7 +100,7 @@ def leer_capacidad_demostrada(max_dias: int = 3) -> dict:
                               {"m": METRICA_CAP, "d": max_dias}).fetchall()
     except Exception:
         return {}
-    return {r.clave: {"top3": r.valor_empirico, "mediana": r.p50, "maximo": r.p90, "n_semanas": r.n_obs,
+    return {r.clave: {"top3": r.valor_empirico, "mediana": r.p50, "p90": r.p90, "n_semanas": r.n_obs,
                       "confianza": r.confianza, "fuente": "conocimiento_empirico"} for r in filas}
 
 
