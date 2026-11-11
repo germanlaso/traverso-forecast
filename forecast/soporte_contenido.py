@@ -50,9 +50,12 @@ ARTICULOS_GENERALES = ("faq", "novedades", "contacto")
 RE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,59}$")              # ids seguros (sin rutas)
 RE_IMG = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,99}\.(png|jpg|jpeg|webp)$")
 RE_BLOQUE_CUEST = re.compile(r"```cuestionario\s*\n(.*?)\n```", re.S)
-RE_REF_GLOSARIO = re.compile(r"\[\[g:([a-z0-9_-]+)\]\]")
+RE_REF_GLOSARIO = re.compile(r"\[\[g:([a-z0-9_-]+)(?:\|[^\]]*)?\]\]")
+RE_REF_TEXTO = re.compile(r"\[\[g:([a-z0-9_-]+)(?:\|([^\]]*))?\]\]")
 RE_IMG_MD = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 APROBACION_DEFECTO = 0.8
+PALABRAS_VACIAS = set("""a al como con cual cuando de del donde el en es esta este hay la las lo los me mi no o para
+por porque que se si su sus un una uno y ya yo puedo hago hacer quiero ver veo sirve""".split())
 PUNTOS_DEFECTO = 100
 
 _cache = {}   # ruta -> (mtime, valor)
@@ -234,6 +237,12 @@ def mapa_unidades() -> dict:
 
 
 # ── Búsqueda (Ayuda y contexto de Mostacín) ──────────────────────────────────
+def texto_plano(s: str) -> str:
+    """Reemplaza [[g:id]] / [[g:id|texto]] por el texto visible (para búsqueda y Mostacín)."""
+    terminos = {t.get("id"): t.get("termino", "") for t in glosario()}
+    return RE_REF_TEXTO.sub(lambda m: m.group(2) or terminos.get(m.group(1), m.group(1)), s or "")
+
+
 def _fragmentos():
     """Divide artículos y unidades en fragmentos por título '## ' (unidad de búsqueda)."""
     frs = []
@@ -244,7 +253,7 @@ def _fragmentos():
                 if not r.stem.startswith("_")]
     for tipo, fid in fuentes:
         d = leer_articulo(fid) if tipo == "articulo" else _leer_unidad_completa(fid)
-        partes = re.split(r"\n(?=## )", "\n" + d["cuerpo"])
+        partes = re.split(r"\n(?=## )", "\n" + texto_plano(d["cuerpo"]))
         for parte in partes:
             parte = parte.strip()
             if not parte:
@@ -261,7 +270,9 @@ def _fragmentos():
 
 def buscar(q: str, limite: int = 10) -> list:
     """Búsqueda simple por palabras (sin tildes). Título y glosario pesan más que el cuerpo."""
-    palabras = [p for p in normalizar(q).split() if len(p) >= 2]
+    # raíz simple (5 letras) para que "apruebo" encuentre "aprobar"/"aprueba"; sin palabras vacías
+    palabras = [p[:5] if len(p) > 5 else p for p in re.findall(r"[a-z0-9]+", normalizar(q))
+                if len(p) >= 2 and p not in PALABRAS_VACIAS]
     if not palabras:
         return []
     puntaje = []

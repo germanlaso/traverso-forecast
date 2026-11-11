@@ -1,1 +1,573 @@
-[]
+[
+ {
+  "id": "forecast",
+  "termino": "Forecast",
+  "nombre": "Pronóstico de venta",
+  "definicion": "Proyección semanal de venta por SKU que calcula el sistema a partir de la historia de ventas. El modelo se reentrena cada domingo y alimenta el plan de producción.",
+  "sinonimos": [
+   "pronóstico",
+   "proyección de venta"
+  ],
+  "pantallas": [
+   "forecast",
+   "precision"
+  ]
+ },
+ {
+  "id": "precision",
+  "termino": "Precisión del forecast",
+  "nombre": "Venta real vs forecast",
+  "definicion": "Comparación de la venta real con lo que el forecast predijo con 1 y con 2 semanas de anticipación. Cada anticipación se evalúa por separado; nunca se mezclan.",
+  "sinonimos": [
+   "exactitud del forecast"
+  ],
+  "pantallas": [
+   "precision"
+  ]
+ },
+ {
+  "id": "sesgo",
+  "termino": "Sesgo",
+  "nombre": "Sesgo del forecast",
+  "definicion": "(Forecast total − venta real total) ÷ venta real total. Sobre 0: el forecast sobredimensiona (riesgo de sobrestock). Bajo 0: subdimensiona (riesgo de quiebre).",
+  "sinonimos": [
+   "bias"
+  ],
+  "pantallas": [
+   "precision"
+  ]
+ },
+ {
+  "id": "wmape",
+  "termino": "WMAPE",
+  "nombre": "Error porcentual ponderado",
+  "definicion": "Suma de los errores absolutos del forecast ÷ venta real total. Mide la magnitud del error: a diferencia del sesgo, los errores de distintos SKU no se compensan entre sí.",
+  "sinonimos": [
+   "error del forecast"
+  ],
+  "pantallas": [
+   "precision"
+  ]
+ },
+ {
+  "id": "evento",
+  "termino": "Evento",
+  "nombre": "Evento de demanda",
+  "definicion": "Periodo en que la venta de un producto fue anormal por una causa conocida (por ejemplo, un quiebre del competidor). Al registrarlo, el forecast corrige esa historia en la próxima corrida del plan.",
+  "sinonimos": [
+   "evento comercial"
+  ],
+  "pantallas": [
+   "eventos"
+  ]
+ },
+ {
+  "id": "ss",
+  "termino": "SS",
+  "nombre": "Stock de seguridad",
+  "definicion": "Stock mínimo que el plan busca mantener para absorber variaciones de la demanda. Se define en días hábiles de cobertura, pero en la mayoría de las pantallas y estadísticas se muestra convertido a cajas.",
+  "sinonimos": [
+   "stock de seguridad",
+   "stock mínimo"
+  ],
+  "pantallas": [
+   "stockdiario",
+   "stock",
+   "parametros"
+  ]
+ },
+ {
+  "id": "bajo-ss",
+  "termino": "Bajo SS",
+  "nombre": "Stock bajo el de seguridad",
+  "definicion": "Día o semana en que el stock proyectado queda bajo el stock de seguridad, pero sobre cero. Es una alerta temprana, no un quiebre.",
+  "sinonimos": [
+   "bajo stock de seguridad"
+  ],
+  "pantallas": [
+   "stockdiario",
+   "quiebres",
+   "home"
+  ]
+ },
+ {
+  "id": "riesgo",
+  "termino": "Riesgo",
+  "nombre": "SKU en riesgo",
+  "definicion": "En el Mapa de Quiebres: stock proyectado muy cerca de cero (igual o menor al 10% del stock de seguridad), sin llegar a quebrar.",
+  "sinonimos": [
+   "en riesgo"
+  ],
+  "pantallas": [
+   "quiebres",
+   "home"
+  ]
+ },
+ {
+  "id": "quiebre",
+  "termino": "Quiebre",
+  "nombre": "Quiebre de stock",
+  "definicion": "Día en que el stock proyectado de un SKU queda bajo cero: no alcanza para cubrir la demanda. Si queda bajo el stock de seguridad pero sobre cero, se llama \"bajo SS\".",
+  "sinonimos": [
+   "rotura",
+   "quiebre de stock"
+  ],
+  "pantallas": [
+   "quiebres",
+   "stockdiario",
+   "home"
+  ]
+ },
+ {
+  "id": "cobertura",
+  "termino": "Cobertura",
+  "nombre": "Días de cobertura",
+  "definicion": "Cuántos días de venta alcanza a cubrir un stock o un batch, según el forecast.",
+  "sinonimos": [
+   "días de stock"
+  ],
+  "pantallas": [
+   "stock",
+   "parametros"
+  ]
+ },
+ {
+  "id": "mto",
+  "termino": "MTO",
+  "nombre": "Producción a pedido",
+  "definicion": "SKU que se produce contra órdenes de venta y no contra forecast. No tiene forecast propio y su stock de seguridad es 0.",
+  "sinonimos": [
+   "a pedido",
+   "make to order"
+  ],
+  "pantallas": [
+   "stockdiario",
+   "parametros"
+  ]
+ },
+ {
+  "id": "ov",
+  "termino": "OV",
+  "nombre": "Orden de venta",
+  "definicion": "Pedido de un cliente registrado en SAP (nota de venta). En el plan, la demanda combina las OV ya ingresadas con el forecast.",
+  "sinonimos": [
+   "nota de venta",
+   "pedido"
+  ],
+  "pantallas": [
+   "stockdiario",
+   "faltantes"
+  ]
+ },
+ {
+  "id": "of",
+  "termino": "OF",
+  "nombre": "Orden de fabricación",
+  "definicion": "Orden para producir una cantidad de un SKU en una línea y fecha.",
+  "sinonimos": [
+   "orden de producción"
+  ],
+  "pantallas": [
+   "plan",
+   "detalle",
+   "programacion"
+  ]
+ },
+ {
+  "id": "oft",
+  "termino": "OF sugerida (OFT)",
+  "nombre": "Orden sugerida por el optimizador",
+  "definicion": "Orden que propone el sistema al generar el plan (número con prefijo OFT-). Es una propuesta: no es un compromiso hasta que el planificador la aprueba.",
+  "sinonimos": [
+   "OFT",
+   "sugerida",
+   "orden tentativa"
+  ],
+  "pantallas": [
+   "plan",
+   "detalle",
+   "stockdiario"
+  ]
+ },
+ {
+  "id": "of-aprobada",
+  "termino": "OF aprobada",
+  "nombre": "Orden aprobada",
+  "definicion": "Orden sugerida que el planificador revisó y aprobó (prefijo OF-). Pasa a ser parte fija del plan: el optimizador la respeta en las siguientes corridas.",
+  "sinonimos": [
+   "aprobada",
+   "producción firme"
+  ],
+  "pantallas": [
+   "plan",
+   "detalle",
+   "programacion"
+  ]
+ },
+ {
+  "id": "ofm",
+  "termino": "OFM",
+  "nombre": "OF manual",
+  "definicion": "Orden creada a mano por el planificador en Detalle Producción, fuera de las sugerencias del optimizador. Entra al plan como orden aprobada.",
+  "sinonimos": [
+   "OF manual"
+  ],
+  "pantallas": [
+   "detalle"
+  ]
+ },
+ {
+  "id": "urgente",
+  "termino": "Urgente",
+  "nombre": "OF urgente",
+  "definicion": "OF sugerida cuya fecha de lanzamiento es hoy o ya pasó y todavía no está aprobada.",
+  "sinonimos": [],
+  "pantallas": [
+   "detalle"
+  ]
+ },
+ {
+  "id": "plan-vigente",
+  "termino": "Plan vigente",
+  "nombre": "Plan de producción vigente",
+  "definicion": "Último plan generado y promovido por el proceso diario (06:00). Es la base de lo que muestran las pantallas de planificación y control.",
+  "sinonimos": [
+   "plan del día"
+  ],
+  "pantallas": [
+   "plan",
+   "home"
+  ]
+ },
+ {
+  "id": "horizonte",
+  "termino": "Horizonte",
+  "nombre": "Horizonte del plan",
+  "definicion": "Cantidad de semanas hacia adelante que cubre el plan.",
+  "sinonimos": [],
+  "pantallas": [
+   "plan",
+   "stock"
+  ]
+ },
+ {
+  "id": "lead-time",
+  "termino": "Lead time",
+  "nombre": "Tiempo de reposición",
+  "definicion": "Días entre el lanzamiento de una orden y la entrada del producto al stock.",
+  "sinonimos": [
+   "tiempo de entrega"
+  ],
+  "pantallas": [
+   "stock",
+   "parametros"
+  ]
+ },
+ {
+  "id": "faltante",
+  "termino": "Faltante",
+  "nombre": "Faltante de despacho",
+  "definicion": "Cantidad de una OV que no se despachó al cliente. Se informa a diario (8:00 y 11:00) con datos hasta el día anterior.",
+  "sinonimos": [
+   "no despachado"
+  ],
+  "pantallas": [
+   "faltantes",
+   "resumen30"
+  ]
+ },
+ {
+  "id": "sin-stock",
+  "termino": "Sin stock",
+  "nombre": "Causa: sin stock",
+  "definicion": "Causa de faltante: el stock total era menor a lo que se debía despachar.",
+  "sinonimos": [],
+  "pantallas": [
+   "faltantes"
+  ]
+ },
+ {
+  "id": "vu-insuficiente",
+  "termino": "VU insuficiente",
+  "nombre": "Causa: vida útil insuficiente",
+  "definicion": "Causa de faltante: había stock suficiente, pero no con la vida útil remanente que exige el cliente.",
+  "sinonimos": [],
+  "pantallas": [
+   "faltantes"
+  ]
+ },
+ {
+  "id": "vu",
+  "termino": "VU",
+  "nombre": "Vida útil",
+  "definicion": "Días de duración del producto. Algunos clientes exigen una vida útil remanente mínima para recibirlo.",
+  "sinonimos": [
+   "vida útil",
+   "frescura"
+  ],
+  "pantallas": [
+   "faltantes"
+  ]
+ },
+ {
+  "id": "batch-minimo",
+  "termino": "Batch mínimo",
+  "nombre": "Lote mínimo de producción",
+  "definicion": "Cantidad mínima a producir de un SKU cada vez que entra a la línea.",
+  "sinonimos": [
+   "lote mínimo",
+   "batch"
+  ],
+  "pantallas": [
+   "parametros"
+  ]
+ },
+ {
+  "id": "cap-bodega",
+  "termino": "Cap. bodega",
+  "nombre": "Capacidad de bodega",
+  "definicion": "Máximo de unidades de un SKU que se pueden almacenar. No puede ser menor al batch mínimo.",
+  "sinonimos": [
+   "capacidad de bodega"
+  ],
+  "pantallas": [
+   "parametros"
+  ]
+ },
+ {
+  "id": "velocidad-linea",
+  "termino": "Velocidad de línea",
+  "nombre": "Velocidad nominal",
+  "definicion": "Unidades por hora que produce una línea en condiciones normales.",
+  "sinonimos": [
+   "velocidad nominal"
+  ],
+  "pantallas": [
+   "parametros"
+  ]
+ },
+ {
+  "id": "factor-velocidad",
+  "termino": "Factor de velocidad",
+  "nombre": "Ajuste de velocidad por SKU",
+  "definicion": "Multiplicador de la velocidad de la línea para un SKU específico (por ejemplo, 0,8 = el SKU corre al 80% de la velocidad nominal).",
+  "sinonimos": [],
+  "pantallas": [
+   "parametros"
+  ]
+ },
+ {
+  "id": "linea-preferida",
+  "termino": "Línea preferida",
+  "nombre": "Línea preferida del SKU",
+  "definicion": "Línea donde se produce normalmente un SKU. Algunos SKU tienen además líneas alternativas.",
+  "sinonimos": [
+   "línea alternativa"
+  ],
+  "pantallas": [
+   "parametros",
+   "analisislinea"
+  ]
+ },
+ {
+  "id": "campana",
+  "termino": "Campaña",
+  "nombre": "Campaña de línea",
+  "definicion": "Regla que agrupa la producción por semana para reducir cambios: por granel (por ejemplo, semana de ketchup o de mostaza) o por formato de envase en una línea.",
+  "sinonimos": [
+   "campaña de granel",
+   "campaña de formato"
+  ],
+  "pantallas": [
+   "campanas"
+  ]
+ },
+ {
+  "id": "carga-requerida",
+  "termino": "Carga requerida",
+  "nombre": "Carga requerida por la demanda",
+  "definicion": "Horas de línea que exige la demanda del plan, como % de la capacidad nominal. Es lo que se necesita producir.",
+  "sinonimos": [
+   "requerido"
+  ],
+  "pantallas": [
+   "analisislinea"
+  ]
+ },
+ {
+  "id": "uso-programado",
+  "termino": "Uso programado",
+  "nombre": "Carga programada",
+  "definicion": "Horas de línea que el plan vigente logró asignar, como % de la capacidad nominal. Si queda bajo la carga requerida, la línea no está pudiendo cumplir.",
+  "sinonimos": [
+   "programado"
+  ],
+  "pantallas": [
+   "analisislinea"
+  ]
+ },
+ {
+  "id": "capacidad-demostrada",
+  "termino": "Capacidad demostrada",
+  "nombre": "Capacidad real de la línea",
+  "definicion": "Lo que la línea produjo realmente en las últimas 12 semanas frente a su capacidad nominal: semana normal (mediana) y promedio de las 3 mejores semanas.",
+  "sinonimos": [
+   "capacidad real"
+  ],
+  "pantallas": [
+   "analisislinea",
+   "aprendido"
+  ]
+ },
+ {
+  "id": "semaforo",
+  "termino": "Semáforo de líneas",
+  "nombre": "Estado de capacidad por línea",
+  "definicion": "Rojo: carga requerida sobre 95% en alguna de las próximas 3 semanas, o un SKU (no a pedido) con quiebre desde la semana 2. Ámbar: carga requerida sobre 85%, o quiebre inmediato en la semana 1 (pedidos o recepciones). Verde: el resto.",
+  "sinonimos": [
+   "semáforo"
+  ],
+  "pantallas": [
+   "analisislinea"
+  ]
+ },
+ {
+  "id": "caso",
+  "termino": "Caso",
+  "nombre": "Caso de análisis",
+  "definicion": "Análisis abierto para una línea que no está pudiendo cumplir: diagnóstico, acciones recomendadas y decisión. El sistema propone; nunca aplica cambios solo.",
+  "sinonimos": [
+   "análisis"
+  ],
+  "pantallas": [
+   "analisislinea"
+  ]
+ },
+ {
+  "id": "palancas",
+  "termino": "Palancas",
+  "nombre": "Palancas de capacidad",
+  "definicion": "Acciones para que una línea cumpla, en orden de esfuerzo: 1) ajustar parámetros, 2) extensión de turno o turno adicional, 3) línea alternativa, 4) ampliación de línea.",
+  "sinonimos": [
+   "acciones"
+  ],
+  "pantallas": [
+   "analisislinea",
+   "aprendido"
+  ]
+ },
+ {
+  "id": "intervencion",
+  "termino": "Intervención",
+  "nombre": "Cambio evaluado",
+  "definicion": "Cambio aplicado a partir de un caso. El sistema lo evalúa solo a los 7 días (preliminar) y a los 14 (veredicto), comparando contra el resto de los SKU.",
+  "sinonimos": [],
+  "pantallas": [
+   "aprendido"
+  ]
+ },
+ {
+  "id": "cumplimiento",
+  "termino": "Cumplimiento",
+  "nombre": "Cumplimiento de producción",
+  "definicion": "Cajas producidas realmente ÷ cajas programadas en SAP, total y por línea.",
+  "sinonimos": [],
+  "pantallas": [
+   "rendimiento",
+   "conciliacion"
+  ]
+ },
+ {
+  "id": "ocupacion",
+  "termino": "Ocupación",
+  "nombre": "Ocupación de línea",
+  "definicion": "Horas equivalentes de producción (producción real ÷ velocidad nominal) ÷ horas nominales disponibles.",
+  "sinonimos": [],
+  "pantallas": [
+   "rendimiento"
+  ]
+ },
+ {
+  "id": "eficiencia",
+  "termino": "Eficiencia",
+  "nombre": "Eficiencia de línea",
+  "definicion": "Producción real ÷ producción teórica (velocidad nominal × horas de funcionamiento). Solo se calcula en días con bitácora.",
+  "sinonimos": [],
+  "pantallas": [
+   "rendimiento"
+  ]
+ },
+ {
+  "id": "adopcion",
+  "termino": "Adopción",
+  "nombre": "Adopción del sistema",
+  "definicion": "Porcentaje de los SKU producidos en SAP en una semana que fueron planificados por el sistema.",
+  "sinonimos": [],
+  "pantallas": [
+   "conciliacion"
+  ]
+ },
+ {
+  "id": "terminal-report",
+  "termino": "Terminal Report",
+  "nombre": "Producción efectiva en SAP",
+  "definicion": "Registro en SAP de lo producido realmente. Es la fuente de la producción real en Rendimiento y Conciliación.",
+  "sinonimos": [
+   "TR"
+  ],
+  "pantallas": [
+   "conciliacion",
+   "rendimiento"
+  ]
+ },
+ {
+  "id": "bitacora",
+  "termino": "Bitácora",
+  "nombre": "Bitácora de eventos por línea",
+  "definicion": "Registro diario de lo que pasa en cada línea: paradas, bloqueos, días sin programa. Alimenta los KPIs y, para fechas futuras, el plan.",
+  "sinonimos": [],
+  "pantallas": [
+   "bitacora",
+   "detalle"
+  ]
+ },
+ {
+  "id": "parada-planificada",
+  "termino": "Parada planificada / bloqueo programado",
+  "nombre": "Eventos futuros que restan capacidad",
+  "definicion": "Eventos anotados a futuro en la bitácora que restan horas al plan. \"Línea disponible sin programa\" no resta horas.",
+  "sinonimos": [
+   "parada planificada",
+   "bloqueo programado"
+  ],
+  "pantallas": [
+   "bitacora",
+   "detalle"
+  ]
+ },
+ {
+  "id": "jornada-42h",
+  "termino": "Jornada 42 h",
+  "nombre": "Jornada legal 2026",
+  "definicion": "Turno de 42 horas semanales: 9 horas lunes y martes, 8 horas de miércoles a viernes.",
+  "sinonimos": [
+   "42 horas"
+  ],
+  "pantallas": [
+   "parametros"
+  ]
+ },
+ {
+  "id": "pin",
+  "termino": "PIN de edición",
+  "nombre": "PIN de edición",
+  "definicion": "Clave que, junto con el nombre y un motivo, se pide para editar parámetros o decidir casos. Cada cambio queda en el historial.",
+  "sinonimos": [
+   "PIN"
+  ],
+  "pantallas": [
+   "parametros",
+   "analisislinea"
+  ]
+ }
+]

@@ -21,6 +21,8 @@ import AnalisisLinea from './components/AnalisisLinea';
 import LoAprendido from './components/LoAprendido';
 import Landing from './components/Landing';
 import PrecisionForecast from './components/PrecisionForecast';
+import Ayuda from './components/Ayuda';                 // Soporte > Ayuda
+import PanelAyuda from './components/PanelAyuda';       // Ayuda contextual "?"
 
 const API = process.env.REACT_APP_API_BASE || '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -54,6 +56,7 @@ const NAV = [
   { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
   { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake'],['bitacora','Bitácora'],['rendimiento','Rendimiento'],['informeia','Informe IA'],['analisislinea','Análisis de Línea'],['aprendido','Lo aprendido']] },
   { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
+  { key:'soporte', label:'🛟 Soporte', tabs:[['ayuda','Ayuda']] },
 ];
 
 const C = {
@@ -282,6 +285,18 @@ function AppInner() {
   const [canales, setCanales] = useState([]);
   const [activeTab, setActiveTab] = useState('home');
   const [activeSection, setActiveSection] = useState('home');
+  // Soporte: panel "?" de la pantalla actual y destino a abrir en la pestaña Ayuda
+  const [panelAyuda, setPanelAyuda] = useState(false);
+  const [ayudaDestino, setAyudaDestino] = useState(null);
+  const irAPantalla = (tab) => {
+    const sec = NAV.find(n => n.tab === tab || (n.tabs || []).some(([t]) => t === tab));
+    if (sec) { setActiveSection(sec.key); setActiveTab(tab); }
+  };
+  const abrirEnAyuda = (id) => {
+    setPanelAyuda(false);
+    setAyudaDestino(id ? { id, t: Date.now() } : null);
+    setActiveSection('soporte'); setActiveTab('ayuda');
+  };
   const [stockSku, setStockSku] = useState('');  // SKU pre-seleccionado en tab stock
   const [stockNav,  setStockNav]  = useState(0);   // contador para forzar navegación
 
@@ -690,6 +705,10 @@ function AppInner() {
           <div style={s.topSub}>Motor Prophet · Segmento Comercial · Piloto v1.1</div>
         </div>
         <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          {/* Soporte: ayuda contextual de la pantalla actual */}
+          <button onClick={() => setPanelAyuda(true)} title="Ayuda de esta pantalla" aria-label="Ayuda de esta pantalla"
+            style={{width:28,height:28,borderRadius:'50%',border:'1.5px solid rgba(255,255,255,.85)',background:'transparent',
+              color:'#fff',fontWeight:700,fontSize:14,cursor:'pointer',lineHeight:1}}>?</button>
           {/* V6.38: badge global de plan desactualizado (visible en todas las pestañas) */}
           {planStale && lastPlanTimestamp && (
             <span style={{
@@ -1345,7 +1364,10 @@ function AppInner() {
         {activeTab === 'eventos' && <Eventos skus={skus} />}
         {activeTab === 'parametros' && <ParametrosDiagnostico />}
         {activeTab === 'precision' && <PrecisionForecast />}
+        {activeTab === 'ayuda' && <Ayuda destino={ayudaDestino} onIrPantalla={irAPantalla}
+          pantallasNavegables={new Set(NAV.flatMap(n => n.tab ? [n.tab] : n.tabs.map(([t]) => t)))} />}
       </div>
+      {panelAyuda && <PanelAyuda pantalla={activeTab} onClose={() => setPanelAyuda(false)} onAbrirEnAyuda={abrirEnAyuda} />}
     </div>
   );
 }
