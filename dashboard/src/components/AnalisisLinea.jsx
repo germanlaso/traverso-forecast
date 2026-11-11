@@ -151,9 +151,10 @@ function Caso({ caso, onCerrar, onDecidido }) {
 export default function AnalisisLinea() {
   const [data, setData] = useState(null), [error, setError] = useState(null);
   const [analizando, setAnalizando] = useState(null), [caso, setCaso] = useState(null), [casos, setCasos] = useState([]);
+  const [abiertas, setAbiertas] = useState({});          // {linea: true} -> fila de análisis desplegada
   const cargar = () => {
     api("GET", "/analisis/lineas?semanas=6").then(setData).catch((e) => setError(e.message));
-    api("GET", "/analisis/casos?limit=15").then((d) => setCasos(d.casos || [])).catch(() => {});
+    api("GET", "/analisis/casos?limit=200").then((d) => setCasos(d.casos || [])).catch(() => {});
   };
   useEffect(() => { cargar(); }, []);   // eslint-disable-line
 
@@ -165,9 +166,13 @@ export default function AnalisisLinea() {
     try { const c = await api("POST", `/analisis/lineas/${encodeURIComponent(linea)}/analizar`, { solicitado_por: quien, con_ia: true }); setCaso(c); cargar(); }
     catch (e) { setError(e.message); } finally { setAnalizando(null); }
   };
-  const abrirCaso = (id) => api("GET", `/analisis/casos/${id}`).then(setCaso).catch((e) => setError(e.message));
+  // la ficha del caso se muestra arriba de la tabla: llevar la vista hasta ella
+  const abrirCaso = (id) => api("GET", `/analisis/casos/${id}`)
+    .then((c) => { setCaso(c); window.scrollTo({ top: 0, behavior: "smooth" }); })
+    .catch((e) => setError(e.message));
 
   const rojos = (data?.lineas || []).filter((l) => l.semaforo === "rojo").length;
+  const casosDe = (linea) => casos.filter((c) => c.linea === linea);
   return (
     <div style={st.wrap}>
       <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Análisis de Línea</h2>
@@ -186,34 +191,40 @@ export default function AnalisisLinea() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>{["Línea", "Estado", "Por qué", "Carga próx. 3 sem", "Demostrada", "Semanas", ""].map((h) => <th key={h} style={st.th}>{h}</th>)}</tr></thead>
             <tbody>{data.lineas.map((l) => (
-              <tr key={l.linea}>
+              <React.Fragment key={l.linea}>
+              <tr>
                 <td style={{ ...st.td, fontWeight: 700 }}>{l.linea}</td>
                 <td style={st.td}><span style={st.pill(SEM[l.semaforo][0], SEM[l.semaforo][1])}>{SEM[l.semaforo][2]}</span></td>
                 <td style={{ ...st.td, fontSize: 12, color: C.gray, maxWidth: 320 }}>{l.motivos.join(" ") || "—"}</td>
                 <td style={{ ...st.td, fontWeight: 700 }}>{pct(l.max_carga_requerida_3sem)}</td>
                 <td style={st.td}>{pct(l.capacidad_demostrada?.top3)}</td>
                 <td style={{ ...st.td, minWidth: 220 }}><Semanas semanas={l.semanas} demostrada={l.capacidad_demostrada?.top3} /></td>
-                <td style={st.td}>{l.semaforo !== "verde" && (
-                  <button style={st.btnPri} disabled={!!analizando} onClick={() => analizar(l.linea)}>Analizar</button>)}</td>
-              </tr>))}</tbody>
+                <td style={{ ...st.td, whiteSpace: "nowrap" }}>
+                  {l.semaforo !== "verde" && (
+                    <button style={st.btnPri} disabled={!!analizando} onClick={() => analizar(l.linea)}>Analizar</button>)}
+                  {casosDe(l.linea).length > 0 && (
+                    <button style={{ ...st.btn, marginLeft: 6 }} onClick={() => setAbiertas({ ...abiertas, [l.linea]: !abiertas[l.linea] })}
+                            title="Ver los análisis anteriores de esta línea">
+                      {abiertas[l.linea] ? "▲" : "▼"} Análisis ({casosDe(l.linea).length})
+                    </button>)}
+                </td>
+              </tr>
+              {abiertas[l.linea] && (
+                <tr><td colSpan={7} style={{ ...st.td, background: C.grayLt, padding: "6px 12px" }}>
+                  {casosDe(l.linea).map((c) => (
+                    <div key={c.id} onClick={() => abrirCaso(c.id)}
+                         style={{ display: "flex", gap: 10, padding: "5px 6px", cursor: "pointer", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+                      <b style={{ minWidth: 34 }}>#{c.id}</b>
+                      <span style={{ minWidth: 92, color: C.gray }}>{new Date(c.creado_en).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })}</span>
+                      <span style={{ minWidth: 80 }}>{c.decision || "pendiente"}</span>
+                      <span style={{ color: C.gray, flex: 1 }}>{(c.resumen || c.estado || "").slice(0, 200)}{(c.resumen || "").length > 200 ? "…" : ""}</span>
+                    </div>))}
+                </td></tr>)}
+              </React.Fragment>))}</tbody>
           </table>
         </div>
       )}
 
-      {casos.length > 0 && (
-        <div style={st.card}>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Análisis recientes</div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>{["#", "Fecha", "Línea", "Estado", "Decisión", "Resumen"].map((h) => <th key={h} style={st.th}>{h}</th>)}</tr></thead>
-            <tbody>{casos.map((c) => (
-              <tr key={c.id} onClick={() => abrirCaso(c.id)} style={{ cursor: "pointer" }}>
-                <td style={st.td}>{c.id}</td><td style={st.td}>{ddmm(String(c.creado_en).slice(0, 10))}</td><td style={st.td}><b>{c.linea}</b></td>
-                <td style={st.td}>{c.estado}</td><td style={st.td}>{c.decision || "pendiente"}</td>
-                <td style={{ ...st.td, color: C.gray, fontSize: 12 }}>{(c.resumen || "").slice(0, 160)}{(c.resumen || "").length > 160 ? "…" : ""}</td>
-              </tr>))}</tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }
