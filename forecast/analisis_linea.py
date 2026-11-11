@@ -72,7 +72,8 @@ def capacidad_demostrada(hoy: date) -> dict:
 
 
 def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, sku_lineas: list,
-                   sku_params: dict, semanas: int = 6, demostrada: Optional[dict] = None) -> dict:
+                   sku_params: dict, semanas: int = 6, demostrada: Optional[dict] = None,
+                   entradas: Optional[list] = None) -> dict:
     """Núcleo puro (sin BD): recibe las piezas del snapshot del plan y los parámetros."""
     fechas = sorted({f for dd in detalle.values() for f in dd})
     if not fechas:
@@ -138,6 +139,25 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
         tipo = "mto" if p.get("mto") else ("inmediato" if dias < DIAS_INMEDIATO else "capacidad")
         q_por_linea[lin][tipo].append(item)
 
+    # OF APROBADAS (entradas_fijas): uso_linea solo cuenta las OF tentativas del solver; las aprobadas
+    # también ocupan línea (p. ej. el día en curso). El snapshot no guarda el SKU de la aprobada: se
+    # completa desde mrp_ordenes por numero_of (_cargar_desde_bd). Si falta, se usa el u/caja mediano
+    # de la línea (aproximación).
+    upc_linea = {}
+    for lin_, skus_ in skus_linea.items():
+        v_ = sorted(float((sku_params.get(x) or {}).get("u_por_caja") or 1) for x in skus_)
+        upc_linea[lin_] = v_[len(v_) // 2] if v_ else 1.0
+    h_aprob = defaultdict(lambda: defaultdict(float))     # linea -> fecha -> horas
+    for e in entradas or []:
+        lin_, f_ = e.get("linea"), e.get("fecha_lanzamiento")
+        L_ = lineas.get(lin_)
+        if not lin_ or not f_ or L_ is None or not float(L_.get("velocidad_u_hr") or 0):
+            continue
+        sku_ = e.get("sku")
+        upc_ = float((sku_params.get(sku_) or {}).get("u_por_caja") or 0) if sku_ else 0.0
+        vel_ = float(L_["velocidad_u_hr"]) * (factor.get((sku_, lin_), 1.0) if sku_ else 1.0)
+        h_aprob[lin_][f_] += float(e.get("cantidad_cajas") or 0) * (upc_ or upc_linea.get(lin_, 1.0)) / vel_
+
     salida = []
     for lin, L in sorted(lineas.items()):
         if not L.get("activa", True):
@@ -152,7 +172,9 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
             habiles = [d for d in dias if d.weekday() < dias_sem and d >= hoy]
             cap_h = h_dia * len(habiles)
             h_req = req[lin].get(ls, 0.0)
-            h_prog = sum(float(uso.get(d.isoformat(), 0) or 0) / 100.0 * h_dia for d in dias if d >= hoy)
+            h_prog = sum(min(h_dia * 1.0 if d.weekday() < dias_sem else h_dia,
+                             float(uso.get(d.isoformat(), 0) or 0) / 100.0 * h_dia + h_aprob[lin].get(d.isoformat(), 0.0))
+                         for d in dias if d >= hoy)
             filas.append({
                 "semana": ls.isoformat(), "semana_iso": ls.isocalendar()[1], "dias_habiles": len(habiles),
                 "horas_nominales": round(cap_h, 1), "horas_requeridas": round(h_req, 1),
@@ -204,9 +226,16 @@ def _cargar_desde_bd(c):
     if plan is None:
         raise HTTPException(503, "No hay plan vigente.")
     piezas = {}
-    for k in ("detalle_diario", "uso_linea", "alertas"):
+    for k in ("detalle_diario", "uso_linea", "alertas", "entradas_fijas"):
         piezas[k] = c.execute(sa.text("SELECT snapshot->:k FROM mrp_planes WHERE id = :i"),
                               {"k": k, "i": plan.id}).scalar() or {}
+    # completar el SKU de cada OF aprobada (el snapshot no lo trae) desde mrp_ordenes
+    ofs = [e.get("numero_of") for e in piezas.get("entradas_fijas") or [] if e.get("numero_of")]
+    if ofs:
+        sku_of = {r.numero_of: r.sku for r in c.execute(sa.text(
+            "SELECT numero_of, sku FROM mrp_ordenes WHERE numero_of = ANY(:o)"), {"o": ofs})}
+        for e in piezas["entradas_fijas"]:
+            e["sku"] = sku_of.get(e.get("numero_of"))
     lineas = {r.codigo: dict(r._mapping) for r in c.execute(sa.text("SELECT * FROM mrp_lineas"))}
     sku_lineas = [dict(r._mapping) for r in c.execute(sa.text("SELECT sku, linea, preferida, factor_velocidad FROM mrp_sku_lineas"))]
     sku_params = {r.sku: dict(r._mapping) for r in c.execute(sa.text(
@@ -224,7 +253,7 @@ def carga_lineas(semanas: int = Query(6, ge=1, le=8), linea: Optional[str] = Non
     except Exception:
         demo = {}
     r = calcular_carga(piezas["detalle_diario"], piezas["uso_linea"], piezas["alertas"], lineas,
-                       sku_lineas, sku_params, semanas, demo)
+                       sku_lineas, sku_params, semanas, demo, piezas.get("entradas_fijas"))
     if linea:
         r["lineas"] = [x for x in r["lineas"] if x["linea"] == linea]
     r["plan"] = {"id": plan.id, "creado": plan.created_at.isoformat()}

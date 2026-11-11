@@ -99,14 +99,24 @@ def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas
                        "cap_bodega_u": p.get("cap_bodega_u"), "ss_dias": p.get("ss_dias")})
     deficit_h = round(sum(x["deficit_h"] or 0 for x in skus_q), 1)
 
-    # Fragmentación: horas libres en días hábiles con algo programado, que no alcanzan para el batch
+    # Fragmentación: horas libres en días hábiles con algo programado, que no alcanzan para el batch.
+    # Incluye las OF aprobadas (no están en uso_linea), con su SKU desde mrp_ordenes (o u/caja mediano si falta).
     uso = piezas["uso_linea"].get(linea, {}) or {}
+    _upcs = sorted(float((params.get(r["sku"]) or {}).get("u_por_caja") or 1) for r in sku_lineas if r["linea"] == linea)
+    _upc_med = _upcs[len(_upcs) // 2] if _upcs else 1.0
+    h_aprob_dia = defaultdict(float)
+    for e in piezas.get("entradas_fijas") or []:
+        if e.get("linea") == linea and e.get("fecha_lanzamiento") and vel_l:
+            sk = e.get("sku")
+            upc_e = float((params.get(sk) or {}).get("u_por_caja") or 0) if sk else 0.0
+            vel_e = vel(sk) if sk else vel_l
+            h_aprob_dia[e["fecha_lanzamiento"]] += float(e.get("cantidad_cajas") or 0) * (upc_e or _upc_med) / (vel_e or vel_l)
     batch_q = min([x["batch_h"] for x in skus_q if x["batch_h"]] or [h_dia])
     restos, restos_inutiles, dias_libres = 0.0, 0.0, 0
     d = hoy
     while d <= fin:
         if d.weekday() < int(L["dias_semana"] or 5):
-            u = float(uso.get(d.isoformat(), 0) or 0) / 100.0
+            u = min(1.0, float(uso.get(d.isoformat(), 0) or 0) / 100.0 + h_aprob_dia.get(d.isoformat(), 0.0) / (h_dia or 1))
             libre = max(0.0, 1 - u) * h_dia
             if u <= 0.01:
                 dias_libres += 1
@@ -325,7 +335,7 @@ def analizar_linea(linea: str, body: SolicitudAnalisis):
         except Exception:
             demo = {}
         carga = _al.calcular_carga(piezas["detalle_diario"], piezas["uso_linea"], piezas["alertas"], lineas,
-                                   sku_lineas, params, 6, demo)
+                                   sku_lineas, params, 6, demo, piezas.get("entradas_fijas"))
         diag = diagnosticar(linea, carga, piezas, lineas, sku_lineas, params)
         with _engine.connect() as c:
             apr = _aprendizaje(c, linea)

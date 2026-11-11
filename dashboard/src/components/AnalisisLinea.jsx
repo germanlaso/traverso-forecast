@@ -1,0 +1,219 @@
+// AnalisisLinea.jsx — Análisis de Línea (MVP 1).
+// 1) Semáforo de líneas: carga requerida vs programada vs demostrada (GET /analisis/lineas)
+// 2) "Analizar línea": diagnóstico + palancas en orden de esfuerzo + recomendación IA (POST .../analizar)
+// 3) Ficha del caso y decisión (aceptar / parcial / descartar) con PIN; los cambios de parámetros
+//    propuestos van al panel de parámetros como recomendaciones. Nada se aplica solo.
+import React, { useEffect, useState } from "react";
+
+const API = process.env.REACT_APP_API_BASE || "";
+const KEY_EDITOR = "params_editor";
+const C = {
+  teal: "#1D9E75", tealLt: "#E1F5EE", tealMid: "#0F6E56", blue: "#185FA5", blueLt: "#E6F1FB",
+  purple: "#534AB7", purpleLt: "#EEEDFE", amber: "#EF9F27", amberLt: "#FAEEDA", amberDk: "#854F0B",
+  red: "#E24B4A", redLt: "#FCEBEB", redDk: "#A32D2D", gray: "#5F5E5A", grayLt: "#F1EFE8",
+  border: "#D3D1C7", text: "#2C2C2A", muted: "#888780",
+};
+const SEM = { rojo: [C.redLt, C.redDk, "No cumple"], ambar: [C.amberLt, C.amberDk, "En riesgo"], verde: [C.tealLt, C.tealMid, "OK"] };
+const PALANCA = { parametros: "Parámetros", turnos: "Turnos", linea_alternativa: "Línea alternativa", ampliacion: "Ampliación", forecast: "Forecast", otro: "Otro" };
+const pct = (v) => (v == null ? "–" : `${Math.round(v * 100)}%`);
+const h1 = (v) => (v == null ? "–" : Number(v).toLocaleString("es-CL", { maximumFractionDigits: 1 }));
+const ddmm = (s) => (s ? `${s.slice(8, 10)}/${s.slice(5, 7)}` : "");
+
+const st = {
+  wrap: { padding: 16, fontFamily: "Arial, sans-serif", color: C.text },
+  card: { background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, marginBottom: 12 },
+  pill: (bg, col) => ({ display: "inline-block", fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 10, background: bg, color: col, whiteSpace: "nowrap" }),
+  btn: { padding: "6px 12px", border: `1px solid ${C.border}`, borderRadius: 6, background: "#fff", cursor: "pointer", fontSize: 12.5 },
+  btnPri: { padding: "7px 14px", border: "none", borderRadius: 6, background: C.teal, color: "#fff", cursor: "pointer", fontSize: 12.5, fontWeight: 700 },
+  th: { textAlign: "left", fontSize: 11, color: C.muted, padding: "5px 8px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" },
+  td: { fontSize: 12.5, padding: "6px 8px", borderBottom: `1px solid ${C.grayLt}`, verticalAlign: "top" },
+  sec: { fontSize: 11, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: .4, margin: "14px 0 6px" },
+  input: { padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 13, width: "100%", boxSizing: "border-box" },
+};
+
+async function api(method, path, body) {
+  const r = await fetch(`${API}${path}`, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  let d = null; try { d = await r.json(); } catch { /* sin cuerpo */ }
+  if (!r.ok) throw new Error(typeof d?.detail === "string" ? d.detail : d?.detail?.mensaje || `HTTP ${r.status}`);
+  return d;
+}
+
+// Mini gráfico por semana: barra = carga requerida, marca = uso programado, línea = 100%
+function Semanas({ semanas, demostrada }) {
+  const W = 300, H = 46, n = semanas.length, bw = W / n, max = 1.6;
+  const y = (v) => H - 6 - Math.min(v, max) / max * (H - 12);
+  return (
+    <svg viewBox={`0 0 ${W} ${H + 12}`} width="100%" style={{ maxWidth: 320 }}>
+      <line x1={0} x2={W} y1={y(1)} y2={y(1)} stroke={C.red} strokeDasharray="3 3" />
+      {demostrada && <line x1={0} x2={W} y1={y(demostrada)} y2={y(demostrada)} stroke={C.teal} strokeDasharray="2 3" />}
+      {semanas.map((s, i) => {
+        const v = s.carga_requerida || 0, col = v > 0.95 ? C.red : v > 0.85 ? C.amber : C.teal;
+        return (
+          <g key={s.semana}>
+            <title>{`Sem ${s.semana_iso}: requerida ${pct(s.carga_requerida)} · programada ${pct(s.uso_programado)}`}</title>
+            <rect x={i * bw + bw * .2} y={y(v)} width={bw * .6} height={H - 6 - y(v)} fill={col} opacity={.75} rx={2} />
+            <rect x={i * bw + bw * .12} y={y(s.uso_programado || 0) - 1} width={bw * .76} height={2.5} fill={C.text} />
+            <text x={i * bw + bw / 2} y={H + 9} fontSize={9} textAnchor="middle" fill={C.muted}>S{s.semana_iso}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function Caso({ caso, onCerrar, onDecidido }) {
+  const r = caso.recomendacion || {}, dg = caso.diagnostico || {}, pal = caso.escenarios || [];
+  const [editor, setEditor] = useState(() => { try { return localStorage.getItem(KEY_EDITOR) || ""; } catch { return ""; } });
+  const [pin, setPin] = useState(""), [motivo, setMotivo] = useState(""), [msg, setMsg] = useState(null), [enviando, setEnviando] = useState(false);
+  const decidir = async (decision) => {
+    setMsg(null); setEnviando(true);
+    try {
+      const d = await api("POST", `/analisis/casos/${caso.id}/decision`, { decision, motivo, editor, pin, enviar_al_panel: true });
+      try { localStorage.setItem(KEY_EDITOR, editor.trim()); } catch { /* sin storage */ }
+      setMsg({ ok: true, t: `Decisión registrada (${decision}). ${d.recomendaciones_creadas ? `${d.recomendaciones_creadas} cambio(s) de parámetros enviados al panel de Parámetros.` : ""}` });
+      onDecidido && onDecidido();
+    } catch (e) { setMsg({ ok: false, t: e.message }); } finally { setEnviando(false); }
+  };
+  const decidido = !!caso.decision;
+  return (
+    <div style={{ ...st.card, borderColor: C.purple, borderWidth: 2 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: .4 }}>Caso #{caso.id} · {caso.linea} · {new Date(caso.creado_en).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })} · {caso.solicitado_por}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, margin: "4px 0" }}>{r.causa_principal || "Diagnóstico"}</div>
+        </div>
+        <span onClick={onCerrar} style={{ cursor: "pointer", fontSize: 18, color: C.gray }} title="Cerrar">✕</span>
+      </div>
+      {caso.estado === "error" && <div style={{ color: C.redDk }}>El análisis falló: {caso.error}</div>}
+      {r.resumen && <p style={{ fontSize: 13.5, margin: "6px 0 10px" }}>{r.resumen}</p>}
+      {r.alerta_forecast && (
+        <div style={{ background: C.amberLt, color: C.amberDk, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 10 }}>
+          <b>Revisar el forecast:</b> {r.alerta_forecast}</div>
+      )}
+
+      <div style={st.sec}>Acciones recomendadas (en orden de esfuerzo)</div>
+      {(r.acciones || []).map((a) => (
+        <div key={a.orden} style={{ display: "flex", gap: 10, padding: "8px 10px", border: `1px solid ${C.grayLt}`, borderRadius: 8, marginBottom: 6 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.purple, minWidth: 18 }}>{a.orden}</div>
+          <div style={{ flex: 1, fontSize: 12.5 }}>
+            <span style={st.pill(C.purpleLt, C.purple)}>{PALANCA[a.palanca] || a.palanca}</span>
+            <div style={{ fontWeight: 700, margin: "4px 0 2px" }}>{a.accion}</div>
+            <div style={{ color: C.gray }}><b>Efecto:</b> {a.efecto_esperado} · <b>Costo o riesgo:</b> {a.costo_o_riesgo}</div>
+            {(a.cambios_parametros || []).length > 0 && (
+              <div style={{ color: C.muted, marginTop: 3 }}>Cambios propuestos: {a.cambios_parametros.map((c) => `${c.sku} ${c.campo}=${c.valor}`).join(" · ")}</div>
+            )}
+          </div>
+        </div>
+      ))}
+      {r.pregunta_para_produccion && <div style={{ fontSize: 12.5, background: C.blueLt, color: C.blue, borderRadius: 8, padding: "8px 10px", marginTop: 6 }}><b>Para Producción:</b> {r.pregunta_para_produccion}</div>}
+
+      <details style={{ marginTop: 10 }}>
+        <summary style={{ cursor: "pointer", fontSize: 12.5, color: C.gray }}>Ver detalle del diagnóstico (causas, palancas y evidencia)</summary>
+        <div style={st.sec}>Causas detectadas</div>
+        {(dg.causas || []).map((c) => <div key={c.codigo} style={{ fontSize: 12.5, marginBottom: 4 }}><b>{c.titulo}.</b> <span style={{ color: C.gray }}>{c.evidencia}</span></div>)}
+        <div style={st.sec}>Palancas · necesidad {h1(dg.evidencia?.necesidad_h_horizonte)} h en {dg.evidencia?.semanas_horizonte} semanas</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr>{["Nivel", "Palanca", "Aporte (h)", "Acumulado (h)", "¿Alcanza?", "Detalle"].map((h) => <th key={h} style={st.th}>{h}</th>)}</tr></thead>
+          <tbody>{pal.map((p) => (
+            <tr key={p.nivel} style={{ background: dg.primera_palanca_suficiente === p.nivel ? C.tealLt : "transparent" }}>
+              <td style={st.td}>{p.nivel}</td><td style={st.td}><b>{p.titulo}</b></td>
+              <td style={st.td}>{h1(p.aporte_h)}</td><td style={st.td}>{h1(p.acumulado_h)}</td>
+              <td style={st.td}>{p.cubre_acumulado ? "✓" : "—"}</td>
+              <td style={{ ...st.td, color: C.gray }}>{p.equivale_a ? `${p.equivale_a}. ` : ""}{(p.candidatas || []).map((c) => `${c.linea} (${h1(c.horas_libres_sem)} h/sem, ${c.estado})`).join(" · ")}{p.candidatas?.length ? ". " : ""}{p.nota}</td>
+            </tr>))}</tbody>
+        </table>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>{dg.metodo}{r._meta ? ` · IA: ${r._meta.modelo}, ${r._meta.segundos} s, US$ ${r._meta.costo_usd}` : ""}</div>
+      </details>
+
+      <div style={st.sec}>Tu decisión</div>
+      {decidido ? (
+        <div style={{ fontSize: 12.5 }}><b>{caso.decision}</b> por {caso.decision_por}: {caso.decision_motivo}</div>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 2fr", gap: 8 }}>
+            <input style={st.input} placeholder="Tu nombre" value={editor} onChange={(e) => setEditor(e.target.value)} />
+            <input style={st.input} placeholder="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} />
+            <input style={st.input} placeholder="Motivo (también si descartas: el sistema aprende de eso)" value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button style={st.btnPri} disabled={enviando} onClick={() => decidir("aceptada")}>Aceptar</button>
+            <button style={st.btn} disabled={enviando} onClick={() => decidir("parcial")}>Aceptar en parte</button>
+            <button style={{ ...st.btn, color: C.redDk }} disabled={enviando} onClick={() => decidir("descartada")}>Descartar</button>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Aceptar no aplica cambios: los de parámetros quedan como recomendaciones en Herramientas → Parámetros.</div>
+        </>
+      )}
+      {msg && <div style={{ marginTop: 8, fontSize: 12.5, color: msg.ok ? C.tealMid : C.redDk }}>{msg.t}</div>}
+    </div>
+  );
+}
+
+export default function AnalisisLinea() {
+  const [data, setData] = useState(null), [error, setError] = useState(null);
+  const [analizando, setAnalizando] = useState(null), [caso, setCaso] = useState(null), [casos, setCasos] = useState([]);
+  const cargar = () => {
+    api("GET", "/analisis/lineas?semanas=6").then(setData).catch((e) => setError(e.message));
+    api("GET", "/analisis/casos?limit=15").then((d) => setCasos(d.casos || [])).catch(() => {});
+  };
+  useEffect(() => { cargar(); }, []);   // eslint-disable-line
+
+  const analizar = async (linea) => {
+    let quien = ""; try { quien = localStorage.getItem(KEY_EDITOR) || ""; } catch { /* */ }
+    if (!quien) quien = window.prompt("¿Quién solicita el análisis?") || "";
+    if (quien.trim().length < 3) return;
+    setAnalizando(linea); setCaso(null); setError(null);
+    try { const c = await api("POST", `/analisis/lineas/${encodeURIComponent(linea)}/analizar`, { solicitado_por: quien, con_ia: true }); setCaso(c); cargar(); }
+    catch (e) { setError(e.message); } finally { setAnalizando(null); }
+  };
+  const abrirCaso = (id) => api("GET", `/analisis/casos/${id}`).then(setCaso).catch((e) => setError(e.message));
+
+  const rojos = (data?.lineas || []).filter((l) => l.semaforo === "rojo").length;
+  return (
+    <div style={st.wrap}>
+      <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Análisis de Línea</h2>
+      <p style={{ margin: "0 0 12px", fontSize: 12.5, color: C.gray }}>
+        ¿Puede cada línea cumplir lo que viene? <b>Barra</b> = carga requerida por la demanda · <b>marca negra</b> = lo programado en el plan ·
+        <span style={{ color: C.red }}> línea roja</span> = capacidad nominal · <span style={{ color: C.teal }}>línea verde</span> = capacidad demostrada.
+        {data && ` Plan #${data.plan?.id}.`}
+      </p>
+      {error && <div style={{ ...st.card, background: C.redLt, color: C.redDk }}>{error}</div>}
+      {analizando && <div style={{ ...st.card, background: C.purpleLt, color: C.purple }}>Analizando <b>{analizando}</b>: diagnóstico, palancas y recomendación IA (≈1 minuto)…</div>}
+      {caso && <Caso caso={caso} onCerrar={() => setCaso(null)} onDecidido={() => abrirCaso(caso.id)} />}
+
+      {!data ? <div style={st.card}>Calculando carga por línea…</div> : (
+        <div style={st.card}>
+          <div style={{ fontSize: 13, marginBottom: 8 }}><b>{rojos}</b> línea(s) que no están pudiendo cumplir en las próximas 3 semanas.</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["Línea", "Estado", "Por qué", "Carga próx. 3 sem", "Demostrada", "Semanas", ""].map((h) => <th key={h} style={st.th}>{h}</th>)}</tr></thead>
+            <tbody>{data.lineas.map((l) => (
+              <tr key={l.linea}>
+                <td style={{ ...st.td, fontWeight: 700 }}>{l.linea}</td>
+                <td style={st.td}><span style={st.pill(SEM[l.semaforo][0], SEM[l.semaforo][1])}>{SEM[l.semaforo][2]}</span></td>
+                <td style={{ ...st.td, fontSize: 12, color: C.gray, maxWidth: 320 }}>{l.motivos.join(" ") || "—"}</td>
+                <td style={{ ...st.td, fontWeight: 700 }}>{pct(l.max_carga_requerida_3sem)}</td>
+                <td style={st.td}>{pct(l.capacidad_demostrada?.top3)}</td>
+                <td style={{ ...st.td, minWidth: 220 }}><Semanas semanas={l.semanas} demostrada={l.capacidad_demostrada?.top3} /></td>
+                <td style={st.td}>{l.semaforo !== "verde" && (
+                  <button style={st.btnPri} disabled={!!analizando} onClick={() => analizar(l.linea)}>Analizar</button>)}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+      )}
+
+      {casos.length > 0 && (
+        <div style={st.card}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Análisis recientes</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{["#", "Fecha", "Línea", "Estado", "Decisión", "Resumen"].map((h) => <th key={h} style={st.th}>{h}</th>)}</tr></thead>
+            <tbody>{casos.map((c) => (
+              <tr key={c.id} onClick={() => abrirCaso(c.id)} style={{ cursor: "pointer" }}>
+                <td style={st.td}>{c.id}</td><td style={st.td}>{ddmm(String(c.creado_en).slice(0, 10))}</td><td style={st.td}><b>{c.linea}</b></td>
+                <td style={st.td}>{c.estado}</td><td style={st.td}>{c.decision || "pendiente"}</td>
+                <td style={{ ...st.td, color: C.gray, fontSize: 12 }}>{(c.resumen || "").slice(0, 160)}{(c.resumen || "").length > 160 ? "…" : ""}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
