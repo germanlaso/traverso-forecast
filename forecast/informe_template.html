@@ -37,7 +37,10 @@ section.panel{display:none}
 section.panel.on{display:block}
 h2{font-size:19px;margin:0 0 4px}
 h3{font-size:15px;margin:0 0 2px}
-.lead{color:var(--soft);margin:0 0 14px;max-width:920px}
+.lead{color:var(--soft);margin:0 0 14px}
+@media print{.lead{max-width:920px}}
+.grupo{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:6px 0 6px}
+.vacio{color:var(--muted);font-size:12.5px;padding:10px 4px;font-style:italic}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px}
 .cap{font-size:12px;color:var(--muted);margin:2px 0 10px}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(480px,100%),1fr));gap:16px}
@@ -144,12 +147,12 @@ footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid 
   </div>
   <div class="grid2">
     <div class="card">
-      <h3>Programado SAP vs producido, por semana</h3>
+      <h3 id="t-semanas">Programado SAP vs producido real SAP, por semana</h3>
       <p class="cap">Cajas (barras) y cumplimiento real ÷ SAP (línea), últimas semanas cerradas.</p>
       <div id="ch-semanas"></div>
     </div>
     <div class="card">
-      <h3>Uso de línea proyectado, próximas 4 semanas</h3>
+      <h3 id="t-uso">Uso de línea proyectado</h3>
       <p class="cap" id="cap-uso"></p>
       <div id="ch-uso"></div>
     </div>
@@ -210,23 +213,23 @@ footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid 
   <p class="lead" id="lead-ocup"></p>
   <div class="card">
     <h3 id="ft-title">Producción fuera del turno nominal</h3>
-    <p class="cap">Días con Terminal Report en sábado, domingo o festivo, y días con más de 110% de las horas de un turno. Un día con más de 24 h-eq indica que el Terminal Report agrupó producción de varios días.</p>
+    <p class="cap" id="cap-ft">Producción real SAP (Terminal Report) en sábado, domingo o festivo, y días con más de 110% de las horas del día más largo de la línea. Un día con más de 24 h-eq indica que el Terminal Report agrupó producción de varios días.</p>
     <div class="scroll"><table id="t-ft"></table></div>
   </div>
   <div class="card">
-    <h3>Capacidad demostrada vs capacidad parametrizada</h3>
-    <p class="cap"><b>Qué muestra:</b> cuánto produjo cada línea en sus mejores semanas, medido contra la capacidad con que la planifica el sistema. <b>100%</b> = capacidad nominal. La <b>barra</b> es el promedio de sus 3 mejores semanas y el <b>círculo</b>, su mejor semana. <b>Sobre 100% (ámbar):</b> la línea produjo más de lo que el sistema cree posible, en general por extensiones de turno o trabajo en fin de semana o festivo.</p>
+    <h3 id="t-demo">Capacidad demostrada vs capacidad parametrizada</h3>
+    <p class="cap"><b>Qué muestra:</b> cuánto produjo realmente cada línea (<b>producción real SAP, Terminal Report</b>) en sus mejores semanas, medido contra la capacidad con que la planifica el sistema. <b>100%</b> = capacidad nominal. La <b>barra</b> es el promedio de sus 3 mejores semanas y el <b>círculo</b>, su mejor semana. <b>Sobre 100% (ámbar):</b> la línea produjo más de lo que el sistema cree posible, en general por extensiones de turno o trabajo en fin de semana o festivo.</p>
     <div class="legend"><span><i style="background:var(--teal)"></i>Promedio 3 mejores semanas (≤105%)</span><span><i style="background:var(--amber)"></i>Promedio 3 mejores semanas (&gt;105%)</span><span><i style="background:var(--card);border:2px solid var(--teal-dk);border-radius:50%"></i>Mejor semana</span><span><i style="background:var(--red);width:2px"></i>100% = capacidad nominal</span></div>
     <div id="ch-demo"></div>
   </div>
   <div class="grid2">
     <div class="card">
       <h3>Saturadas vs holgadas</h3>
-      <p class="cap">Cada punto es una línea. <b>Eje horizontal:</b> ocupación real del período (lo que pasó). <b>Eje vertical:</b> uso que proyecta el plan para las próximas 4 semanas (lo que viene). <b>Zona roja:</b> vienen saturadas y seguirán saturadas. <b>Zona verde:</b> holgadas en ambos períodos.</p>
+      <p class="cap">Cada punto es una línea. <b>Eje horizontal:</b> ocupación real = producción real SAP (Terminal Report) ÷ capacidad nominal, en las semanas de tendencia (lo que pasó). <b>Eje vertical:</b> lo que la demanda (forecast + OV) le exige a la línea en las próximas 4 semanas del plan vigente (lo que viene). <b>Zona roja:</b> vienen saturadas y seguirán saturadas. <b>Zona verde:</b> holgadas en ambos períodos.</p>
       <div id="ch-scatter"></div>
     </div>
     <div class="card">
-      <h3>Líneas con bitácora</h3>
+      <h3>Líneas con bitácora · tendencia</h3>
       <p class="cap">Eficiencia = producción ÷ horas de funcionamiento, solo en días con registro. Cobertura = días con registro ÷ días laborables.</p>
       <div class="scroll"><table id="t-l1"></table></div>
     </div>
@@ -239,7 +242,7 @@ footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid 
   <p class="lead">Propuestas para <b>analizar con Producción</b>, no cambios a aplicar. Las recomendaciones vienen del panel de parámetros (abiertas), los casos del Análisis de Línea y la evaluación automática de las intervenciones.</p>
   <div class="card rec">
     <h3><span class="pri a">Capacidad</span>Líneas que producen sobre su capacidad parametrizada</h3>
-    <p class="cap">Promedio de las 3 mejores semanas sobre 105%: el plan ve menos capacidad de la que la línea demuestra.</p>
+    <p class="cap" id="cap-capnom">Promedio de las 3 mejores semanas de producción real SAP sobre 105% de la capacidad nominal: el plan ve menos capacidad de la que la línea demuestra.</p>
     <div class="scroll"><table id="t-capnom"></table></div>
   </div>
   <div class="card rec">
@@ -253,12 +256,12 @@ footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid 
   </div>
   <div class="grid2">
     <div class="card">
-      <h3>Casos de Análisis de Línea de la semana</h3>
+      <h3>Casos de Análisis de Línea · semana evaluada</h3>
       <div class="scroll"><table id="t-casos"></table></div>
       <p class="cap" id="cap-pend"></p>
     </div>
     <div class="card">
-      <h3>Cambios de parámetros e intervenciones evaluadas</h3>
+      <h3>Cambios de parámetros e intervenciones evaluadas · semana evaluada</h3>
       <div class="scroll"><table id="t-cambios"></table></div>
       <div class="scroll" style="margin-top:10px"><table id="t-interv"></table></div>
     </div>
@@ -310,20 +313,22 @@ function hover(n, html){ n.addEventListener('mousemove', e=>showTip(e, html)); n
 // ---------- cabecera y textos (datos + lectura IA) ----------
 const IA = D.ia || {}; const LEC = IA.lecturas || {};
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-document.getElementById('periodo').textContent = D.meta.periodo;
+document.getElementById('periodo').innerHTML = `<b>Semana evaluada:</b> ${D.meta.sem_eval} · <b>Tendencias:</b> ${D.meta.periodo_corto} · <b>Riesgo:</b> ${D.meta.plan_label}`;
 document.getElementById('meta').innerHTML = [D.meta.plan, 'Horizonte de riesgo: '+D.meta.horizonte, 'Generado: '+D.meta.generado].map(t=>`<span class="chip">${t}</span>`).join('');
 const K = D.kpi;
 const sat = D.lineas.filter(l=>l.fut>=0.845).map(l=>l.linea);
 document.getElementById('lead').innerHTML = IA.resumen_ejecutivo ? esc(IA.resumen_ejecutivo)
   : `El plan vigente proyecta <b>${K.quiebres} SKU con quiebre</b> y <b>${K.bajo_ss} SKU bajo stock de seguridad</b> en las próximas 4 semanas. El cumplimiento de la última semana fue <b>${pct(K.cumpl_ult,1)}</b> (período: ${pct(K.cumpl,1)}).`;
 document.getElementById('lead-riesgo').innerHTML = esc(LEC.riesgo || 'Los quiebres que importan son los que aparecen después de la primera semana en líneas saturadas: ahí el plan ya incluye las OF tentativas del solver y aun así no alcanza. Los de los primeros días responden a pedidos comprometidos sobre el stock actual.');
-document.getElementById('lead-cumpl').innerHTML = `Cumplimiento del período: <b>${pct(K.cumpl,1)}</b> · última semana: <b>${pct(K.cumpl_ult,1)}</b>. ` + esc(LEC.cumplimiento || '');
-document.getElementById('lead-ocup').innerHTML = `Ocupación real del período: <b>${pct(K.ocR,1)}</b> de las horas nominales (programada: ${pct(K.ocP,1)}). ` + esc(LEC.ocupacion || '');
-document.getElementById('cap-uso').innerHTML = `<b>Qué muestra:</b> las horas que el plan vigente asignó a cada línea en los días hábiles del ${D.meta.horizonte}, como % de su capacidad nominal. <b>Rojo ≥85%:</b> saturada. <b>Ámbar 70–85%</b> y <b>verde &lt;70%</b>. La <b>marca negra</b> es la ocupación real del período.`;
+document.getElementById('lead-cumpl').innerHTML = `Cumplimiento = producción real SAP (Terminal Report) ÷ programado SAP. <b>${D.meta.sem_eval}: ${pct(K.cumpl_ult,1)}</b> · ${D.meta.periodo_corto}: ${pct(K.cumpl,1)}. ` + esc(LEC.cumplimiento || '');
+document.getElementById('lead-ocup').innerHTML = `<b>Ocupación real</b> = producción real SAP (Terminal Report) en horas-equivalentes ÷ horas nominales. <b>${D.meta.sem_eval}: ${pct(K.ocR_ult,1)}</b> · ${D.meta.periodo_corto}: ${pct(K.ocR,1)} (programada SAP: ${pct(K.ocP,1)}). ` + esc(LEC.ocupacion || '');
+document.getElementById('cap-uso').innerHTML = `<b>Barra</b> = <b>programado</b> en el plan vigente (OF sugeridas + aprobadas) del ${D.meta.horizonte}, como % de la capacidad nominal (rojo ≥85%, ámbar 70–85%, verde &lt;70%). <b style="color:var(--red-dk)">▼ Requerido</b> = lo que la demanda exige (forecast + OV) en ese mismo horizonte. <b>Marca negra</b> = <b>ocupación real</b> de ${D.meta.periodo_corto} (producción real SAP), como referencia de lo que hizo la línea.`;
 document.getElementById('cap-quiebres').innerHTML = `Faltante hoy = informe Faltantes del ${D.meta.faltantes_fecha || '–'}. MTO = fabricación a pedido: se gestiona por la orden del cliente, no por parámetros.`;
+document.getElementById('t-semanas').textContent = `Programado SAP vs producido real SAP · ${D.meta.periodo_corto}`;
+document.getElementById('t-uso').textContent = `Uso de línea: programado vs requerido · ${D.meta.plan_label}`;
 document.getElementById('evol-title').textContent = `Evolución: ${D.meta.tramo_ini} vs ${D.meta.tramo_fin}`;
 document.getElementById('desv-title').textContent = `Mayores desvíos por SKU · ${D.meta.periodo_corto}`;
-document.getElementById('ft-title').textContent = `Producción fuera del turno nominal · ${D.meta.periodo_corto}`;
+document.getElementById('ft-title').textContent = `Producción real fuera de la jornada nominal · ${D.meta.periodo_corto}`;
 document.getElementById('cap-fuentes').innerHTML = `Fuentes: plan vigente ${D.meta.plan_id}, <code>mrp_of_sap</code> (Terminal Report), bitácora de eventos por línea, parámetros y casos de la app. Lectura IA: ${IA.disponible ? esc((IA._meta||{}).modelo||'') + ', US$ ' + ((IA._meta||{}).costo_usd ?? '–') : 'no disponible'}.`;
 document.getElementById('footer').textContent = `Informe generado automáticamente el ${D.meta.generado} · Sistema de Planificación de Producción · Traverso S.A. Las cifras provienen del motor de KPIs y del plan vigente; la lectura y las recomendaciones son de IA y deben validarse con Producción.`;
 
@@ -343,16 +348,24 @@ function spark(vals, color){
   return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.8"/></svg>`;
 }
 const S = D.semanas;
-const kpis = [
-  {l:'Cumplimiento última semana', v:pct(K.cumpl_ult,1), n:`real ÷ SAP · período ${pct(K.cumpl,1)}`, sp:S.map(s=>s.cumpl), c:'--blue', cls:''},
-  {l:'Adopción app', v:pct(K.adop,1), n:'del programa SAP con OF de la app', cls:'good'},
-  {l:'Ocupación real', v:pct(K.ocR,1), n:`programada: ${pct(K.ocP,1)}`, sp:S.map(s=>s.ocR), c:'--teal', cls:''},
-  {l:'SKU con quiebre', v:K.quiebres, n:`proyectados próx. 4 semanas (${K.quiebres_mto} MTO, fabricación a pedido)`, cls:'bad'},
-  {l:'SKU bajo SS', v:K.bajo_ss, n:'bajo su SS (stock de seguridad), próx. 4 semanas', cls:'warn'},
-  {l:'Líneas ≥85% uso', v:sat.length, n:sat.join(' · ') || '–', cls:'warn'},
-  {l:'Faltantes', v:K.faltantes_hoy, n:`SKU · ${num(K.faltantes_cj)} cj (corte ${D.meta.faltantes_fecha || '–'})`, cls:'bad'},
+const SE = D.meta.sem_eval, PL = D.meta.plan_label;
+const dlt = (a,b)=> (a==null||b==null) ? '' : ` · ${a>=b?'+':''}${((a-b)*100).toFixed(1).replace('.',',')} pts vs promedio de las 8 semanas anteriores`;
+const grupos = [
+  {g:`Semana evaluada · ${SE}`, k:[
+    {l:'Cumplimiento', v:pct(K.cumpl_ult,1), n:`producción real SAP ÷ programado SAP${dlt(K.cumpl_ult,K.cumpl_prev)}`, sp:S.map(s=>s.cumpl), c:'--blue', cls:''},
+    {l:'Adopción app', v:pct(K.adop_ult,1), n:`cajas SAP de SKU con OF de la app en la misma semana · tendencia ${D.meta.periodo_corto}: ${pct(K.adop_per,1)}`, cls:'good'},
+    {l:'Ocupación real', v:pct(K.ocR_ult,1), n:`producción real SAP (Terminal Report) ÷ horas nominales · programada SAP: ${pct(K.ocP_ult,1)}${dlt(K.ocR_ult,K.ocR_prev)}`, sp:S.map(s=>s.ocR), c:'--teal', cls:''},
+  ]},
+  {g:`Plan vigente · ${PL}`, k:[
+    {l:'SKU con quiebre', v:K.quiebres, n:`proyectados (${K.quiebres_mto} MTO, fabricación a pedido)`, cls:'bad'},
+    {l:'SKU bajo SS', v:K.bajo_ss, n:'bajo su SS (stock de seguridad)', cls:'warn'},
+    {l:'Líneas con requerido ≥ 95%', v:D.lineas.filter(l=>l.req>=0.95).length, n:D.lineas.filter(l=>l.req>=0.95).map(l=>l.linea).join(' · ')||'–', cls:'warn'},
+  ]},
+  {g:`Faltantes · corte ${D.meta.faltantes_fecha || '–'}`, k:[
+    {l:'Faltantes', v:K.faltantes_hoy, n:`SKU · ${num(K.faltantes_cj)} cj no entregadas por falta de stock`, cls:'bad'},
+  ]},
 ];
-document.getElementById('kpis').innerHTML = kpis.map(k=>`<div class="kpi ${k.cls}"><div class="l">${k.l}</div><div class="v">${k.v}</div><div class="n">${k.n}</div>${k.sp?spark(k.sp, css(k.c)):''}</div>`).join('');
+document.getElementById('kpis').outerHTML = grupos.map(g=>`<div class="grupo">${g.g}</div><div class="kpis">`+g.k.map(k=>`<div class="kpi ${k.cls}"><div class="l">${k.l}</div><div class="v">${k.v}</div><div class="n">${k.n}</div>${k.sp?spark(k.sp, css(k.c)):''}</div>`).join('')+'</div>').join('');
 
 // ---------- alertas y recomendaciones (IA) ----------
 const SEV = {critica:['c','Crítica'], alta:['h','Alta'], media:['m','Media']};
@@ -384,37 +397,45 @@ document.getElementById('cap-ia').textContent = 'Recomendaciones de la IA a part
   pts.forEach((p,i)=>{ const c=el('circle',{cx:p[0],cy:p[1],r:3.5,fill:css('--card'),stroke:css('--amber'),'stroke-width':2},s); hover(c,`Sem ${S[i].sem}: ${pct(S[i].cumpl,1)}`); text(s,p[0],p[1]-8,pct(S[i].cumpl),{anchor:'middle',size:9.5,fill:css('--amber-dk'),bold:true}); });
   const lg=el('g',{},s); [['SAP','--blue'],['Real','--teal'],['Cumplimiento','--amber']].forEach((q,i)=>{ el('rect',{x:m.l+i*95,y:H-10,width:10,height:10,fill:css(q[1]),rx:2},lg); text(lg,m.l+14+i*95,H-1,q[0],{size:10.5,fill:css('--soft')}); });
 })();
-// ---------- chart: uso proyectado ----------
+// ---------- chart: uso proyectado (programado, requerido y real) ----------
 (function(){
-  const L=D.lineas, W=560, rh=17, m={l:96,r:46,t:20,b:8}, H=m.t+L.length*rh+m.b, iw=W-m.l-m.r;
-  const s=svg(W,H,'ch-uso'); const X=v=>m.l+Math.min(v,1.25)/1.25*iw;
-  [0,0.4,0.85,1].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:v===0.85?css('--red'):css('--grid'),'stroke-dasharray':v===0.85?'4 3':''},s); text(s,X(v),m.t-9,pct(v),{anchor:'middle',size:9.5,fill:v===0.85?css('--red-dk'):css('--muted')}); });
+  const L=D.lineas, W=560, rh=17, m={l:96,r:52,t:20,b:26}, H=m.t+L.length*rh+m.b, iw=W-m.l-m.r;
+  const s=svg(W,H,'ch-uso'); const X=v=>m.l+Math.min(v,1.5)/1.5*iw;
+  [0,0.5,0.85,1,1.5].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t-6,y2:H-m.b,stroke:v===0.85?css('--red'):css('--grid'),'stroke-dasharray':v===0.85?'4 3':''},s); text(s,X(v),m.t-9,pct(v),{anchor:'middle',size:9.5,fill:v===0.85?css('--red-dk'):css('--muted')}); });
   L.forEach((l,i)=>{
     const y=m.t+i*rh; const col=l.fut>=0.845?css('--red'):l.fut>=0.7?css('--amber'):css('--teal');
     text(s,m.l-6,y+rh/2+3,l.linea,{anchor:'end',size:10.5,fill:css('--ink')});
-    const r=el('rect',{x:m.l,y:y+3,width:X(l.fut)-m.l,height:rh-6,fill:col,rx:2,opacity:.9},s);
+    const r=el('rect',{x:m.l,y:y+3,width:Math.max(0,X(l.fut)-m.l),height:rh-6,fill:col,rx:2,opacity:.9},s);
     const mk=el('rect',{x:X(l.ocR)-1.5,y:y+1,width:3,height:rh-2,fill:css('--ink')},s);
-    text(s,X(l.fut)+4,y+rh/2+3,pct(l.fut),{size:9.5,fill:css('--soft')});
-    const tt=`<b>${l.linea}</b> (${l.cat})<br>Uso proyectado: ${pct(l.fut)} · ${l.d95} de ${D.meta.dias_fut} días ≥95%<br>Ocupación real del período: ${pct(l.ocR)}<br>Quiebres: ${l.q} · Bajo SS: ${l.ss}`;
-    hover(r,tt); hover(mk,tt);
+    const rq=el('path',{d:`M${X(l.req)-5},${y+1} L${X(l.req)+5},${y+1} L${X(l.req)},${y+8} Z`,fill:css('--red-dk')},s);
+    text(s,Math.max(X(l.fut),X(l.req),X(l.ocR))+6,y+rh/2+3,pct(l.fut),{size:9.5,fill:css('--soft')});
+    const tt=`<b>${l.linea}</b> (${l.cat})<br>Programado (OF sugeridas + aprobadas): ${pct(l.fut)}<br>Requerido por la demanda: ${pct(l.req)}<br>Ocupación real ${D.meta.periodo_corto} (SAP): ${pct(l.ocR)}<br>Quiebres: ${l.q} · Bajo SS: ${l.ss}`;
+    hover(r,tt); hover(mk,tt); hover(rq,tt);
   });
+  const lg=el('g',{},s), ly=H-8;
+  el('rect',{x:m.l,y:ly-8,width:12,height:8,fill:css('--teal')},lg); text(lg,m.l+16,ly,'Programado',{size:10});
+  el('path',{d:`M${m.l+95},${ly-8} L${m.l+105},${ly-8} L${m.l+100},${ly} Z`,fill:css('--red-dk')},lg); text(lg,m.l+110,ly,'Requerido',{size:10});
+  el('rect',{x:m.l+180,y:ly-9,width:3,height:10,fill:css('--ink')},lg); text(lg,m.l+188,ly,'Ocupación real SAP '+D.meta.periodo_corto,{size:10});
 })();
 // ---------- chart: mapa de quiebres ----------
 (function(){
-  const Q=D.quiebres.map(q=>({...q, cls: q.mto?'MTO':(q.def_cj<20?'Menor':q.tipo)}));
+  const Q=D.quiebres.filter(q=>q.linea && D.lineas.find(l=>l.linea===q.linea)).map(q=>({...q, cls: q.mto?'MTO':(q.def_cj<20?'Menor':q.tipo)}));
+  if(!Q.length){ document.getElementById('ch-quiebres').innerHTML='<div class="vacio">Sin quiebres proyectados en el plan vigente para las próximas 4 semanas.</div>'; return; }
   const lines=[...new Set(Q.map(q=>q.linea))].sort((a,b)=>(D.lineas.find(l=>l.linea===b).fut)-(D.lineas.find(l=>l.linea===a).fut));
   const W=1180, rh=44, m={l:150,r:20,t:28,b:30}, H=m.t+lines.length*rh+m.b, iw=W-m.l-m.r;
   const s=svg(W,H,'ch-quiebres'); const X=d=>m.l+(d+1.5)/30*iw;
-  for(let d=0; d<=27; d++){ const dt=new Date(2026,10,10+d); if(dt.getDay()===1 || d===0){ el('line',{x1:X(d),x2:X(d),y1:m.t-4,y2:H-m.b,stroke:css('--grid')},s); text(s,X(d),m.t-10,`${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`,{anchor:'middle',size:10}); } }
+  const P0=new Date(D.meta.inicio_plan+'T12:00:00');
+  const semIso=dt=>{ const t=new Date(Date.UTC(dt.getFullYear(),dt.getMonth(),dt.getDate())); const dn=(t.getUTCDay()+6)%7; t.setUTCDate(t.getUTCDate()-dn+3); const f=new Date(Date.UTC(t.getUTCFullYear(),0,4)); return 1+Math.round(((t-f)/864e5-3+((f.getUTCDay()+6)%7))/7); };
+  for(let d=0; d<=27; d++){ const dt=new Date(P0.getFullYear(),P0.getMonth(),P0.getDate()+d); if(dt.getDay()===1 || d===0){ el('line',{x1:X(d),x2:X(d),y1:m.t-4,y2:H-m.b,stroke:css('--grid')},s); text(s,X(d),m.t-10,`Sem ${semIso(dt)} · ${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`,{anchor:'middle',size:10}); } }
   el('rect',{x:X(-1.5),y:m.t-4,width:X(5.5)-X(-1.5),height:H-m.b-m.t+4,fill:css('--amber-lt'),opacity:.55},s);
-  text(s,X(2.75),H-m.b+16,'Semana 1: pedidos y recepciones',{anchor:'middle',size:10,fill:css('--amber-dk')});
-  text(s,X(16),H-m.b+16,'Semanas 2 a 4: capacidad',{anchor:'middle',size:10,fill:css('--red-dk')});
+  text(s,X(2.75),H-m.b+16,'Primeros 6 días: pedidos sobre stock',{anchor:'middle',size:10,fill:css('--amber-dk')});
+  text(s,X(16),H-m.b+16,'Desde el día 7: capacidad',{anchor:'middle',size:10,fill:css('--red-dk')});
   const colors={Capacidad:css('--red'),Inmediato:css('--amber'),Menor:css('--blue'),MTO:css('--muted')};
   lines.forEach((ln,i)=>{
     const y=m.t+i*rh+rh/2; const L=D.lineas.find(l=>l.linea===ln);
     el('line',{x1:m.l,x2:W-m.r,y1:y,y2:y,stroke:css('--grid'),'stroke-dasharray':'2 3'},s);
     text(s,m.l-8,y-1,ln,{anchor:'end',size:11.5,fill:css('--ink'),bold:true});
-    text(s,m.l-8,y+12,'uso '+pct(L.fut),{anchor:'end',size:9.5,fill:L.fut>=0.845?css('--red-dk'):css('--muted')});
+    text(s,m.l-8,y+12,'prog. '+pct(L.fut)+' · req. '+pct(L.req),{anchor:'end',size:9.5,fill:L.fut>=0.845?css('--red-dk'):css('--muted')});
     const qs=Q.filter(q=>q.linea===ln);
     qs.forEach((q,j)=>{
       const r=Math.min(19, Math.max(4, Math.sqrt(q.def_cj)*0.7));
@@ -426,8 +447,9 @@ document.getElementById('cap-ia').textContent = 'Recomendaciones de la IA a part
   });
 })();
 // ---------- tablas ordenables ----------
-function table(id, cols, rows){
+function table(id, cols, rows, vacio){
   const t=document.getElementById(id); let sortK=null, asc=true;
+  if(!rows || !rows.length){ t.outerHTML=`<div class="vacio">${vacio||'Sin datos para mostrar.'}</div>`; return; }
   function draw(){
     let r=[...rows]; if(sortK!=null){ const c=cols[sortK]; r.sort((a,b)=>{ const x=c.sv?c.sv(a):a[c.k], y=c.sv?c.sv(b):b[c.k]; return (x>y?1:x<y?-1:0)*(asc?1:-1); }); }
     t.innerHTML = '<tr>'+cols.map((c,i)=>`<th class="${c.num?'num':''}" data-i="${i}">${c.h}${sortK===i?(asc?' ▲':' ▼'):''}</th>`).join('')+'</tr>' +
@@ -442,12 +464,12 @@ table('t-quiebres', [
   {h:'Días',k:'dias',num:1},{h:'Demanda no cubierta máx. (cj)',k:'def_cj',num:1,f:x=>num(x.def_cj)},{h:'Disponible hoy (cj)',k:'disp_cj',num:1,f:x=>num(x.disp_cj)},
   {h:'Faltante hoy (cj)',k:'falt',num:1,f:x=>x.falt?num(x.falt):''},
   {h:'Tipo',k:'tipo',f:x=>{const c=x.mto?'MTO':(x.def_cj<20?'Menor':x.tipo); return `<span class="tag ${c}">${c}</span>`;}},
-], D.quiebres);
+], D.quiebres, 'Sin quiebres proyectados en el plan vigente para las próximas 4 semanas.');
 table('t-desvios', [
   {h:'SKU',k:'sku'},{h:'Producto',k:'desc'},{h:'Línea',k:'linea'},{h:'SAP cj',k:'sap',num:1,f:x=>num(x.sap)},
   {h:'Real cj',k:'real',num:1,f:x=>num(x.real)},{h:'No producido cj',k:'gap',num:1,sv:x=>x.sap-x.real,f:x=>num(x.sap-x.real)},
   {h:'Cumpl.',k:'cumpl',num:1,f:x=>pct(x.cumpl)},{h:'Semanas bajo 70%',k:'wb',num:1,f:x=>`${x.wb} de ${x.w}`},
-], D.desvios.slice(0,10));
+], D.desvios.slice(0,10), 'Sin desvíos: todo lo programado en SAP se produjo.');
 // ---------- heatmap ----------
 function heatColor(v, mode){
   if(v==null) return `background:transparent;color:${css('--muted')}`;
@@ -473,7 +495,7 @@ function drawHeat(mode){
   h+='<tr><td><b>Total</b></td>'+tot.map(v=>`<td class="h" style="${heatColor(v,mode)};font-weight:700">${pct(v)}</td>`).join('')+`<td class="h"></td><td class="h"></td></tr>`;
   t.innerHTML=h;
   document.getElementById('heat-title').textContent = mode==='cumpl'?'Cumplimiento real ÷ SAP':'Ocupación real (h-eq producidas ÷ h nominales)';
-  document.getElementById('heat-cap').textContent = mode==='cumpl'?'Cajas reales (Terminal Report) ÷ cajas programadas en SAP. "–" = sin programa SAP esa semana. Rojo < 70%, ámbar > 130%.':'Ámbar = sobre 105% de la capacidad nominal: producción mayor a lo parametrizado. '+D.meta.nota_nominal+'';
+  document.getElementById('heat-cap').textContent = mode==='cumpl'?'Producción real SAP (Terminal Report, cajas) ÷ cajas programadas en SAP. "–" = sin programa SAP esa semana. Rojo < 70%, ámbar > 130%.':'Producción real SAP (Terminal Report) en horas-equivalentes ÷ horas nominales. Ámbar = sobre 105%: producción mayor a lo parametrizado. '+D.meta.nota_nominal;
 }
 drawHeat('cumpl');
 document.querySelectorAll('#seg-heat button').forEach(b=>b.onclick=()=>{ document.querySelectorAll('#seg-heat button').forEach(x=>x.classList.toggle('on',x===b)); drawHeat(b.dataset.k); });
@@ -503,8 +525,9 @@ document.querySelectorAll('#seg-heat button').forEach(b=>b.onclick=()=>{ documen
     text(s,m.l-6,y+rh/2+3,l.linea,{anchor:'end',size:10.5,fill:css('--ink'),bold:over});
     const r=el('rect',{x:m.l,y:y+4,width:X(l.top3)-m.l,height:rh-8,fill:over?css('--amber'):css('--teal'),rx:2,opacity:.85},s);
     const c=el('circle',{cx:X(l.max_oc),cy:y+rh/2,r:4,fill:css('--card'),stroke:over?css('--red'):css('--teal-dk'),'stroke-width':2},s);
-    text(s,X(Math.max(l.max_oc,l.top3))+8,y+rh/2+3,`${pct(l.top3)} · máx ${pct(l.max_oc)}`,{size:9.5,fill:over?css('--amber-dk'):css('--muted'),bold:over});
-    const tt=`<b>${l.linea}</b><br>Promedio 3 mejores semanas: ${pct(l.top3)}<br>Máximo semanal: ${pct(l.max_oc)}<br>Parámetro: ${l.param}`; hover(r,tt); hover(c,tt);
+    if(X(l.top3)-m.l>44) text(s,X(l.top3)-5,y+rh/2+3,pct(l.top3),{anchor:'end',size:9.5,fill:'#fff',bold:true}); else text(s,X(l.top3)+4,y+rh/2+3,pct(l.top3),{size:9.5,fill:css('--soft')});
+    text(s,X(l.max_oc)+8,y+rh/2+3,'máx '+pct(l.max_oc),{size:9.5,fill:over?css('--amber-dk'):css('--muted'),bold:over});
+    const tt=`<b>${l.linea}</b> · producción real SAP, ${D.meta.ventana_cap}<br>Promedio 3 mejores semanas: ${pct(l.top3)}<br>Mejor semana: ${pct(l.max_oc)}<br>Capacidad nominal: ${l.param}`; hover(r,tt); hover(c,tt);
   });
   const lg=el('g',{},s);
 })();
@@ -515,26 +538,30 @@ document.querySelectorAll('#seg-heat button').forEach(b=>b.onclick=()=>{ documen
   el('rect',{x:X(0.85),y:Y(1.1),width:X(1.1)-X(0.85),height:Y(0.85)-Y(1.1),fill:css('--red-lt'),opacity:.7},s);
   el('rect',{x:X(0),y:Y(0.4),width:X(0.4)-X(0),height:Y(0)-Y(0.4),fill:css('--teal-lt'),opacity:.7},s);
   [0,0.25,0.5,0.75,1].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t,y2:m.t+ih,stroke:css('--grid')},s); el('line',{x1:m.l,x2:m.l+iw,y1:Y(v),y2:Y(v),stroke:css('--grid')},s); text(s,X(v),H-m.b+14,pct(v),{anchor:'middle',size:9.5}); text(s,m.l-6,Y(v)+3,pct(v),{anchor:'end',size:9.5}); });
-  text(s,m.l+iw/2,H-6,'Ocupación real '+D.meta.periodo_corto+' (lo que pasó)',{anchor:'middle',size:10.5,fill:css('--soft')});
-  const yt=text(s,12,m.t+ih/2,'Uso proyectado próx. 4 semanas (lo que viene)',{anchor:'middle',size:10.5,fill:css('--soft')}); yt.setAttribute('transform',`rotate(-90 12 ${m.t+ih/2})`);
+  text(s,m.l+iw/2,H-6,'Producción real SAP '+D.meta.periodo_corto+' ÷ capacidad nominal (lo que pasó)',{anchor:'middle',size:10.5,fill:css('--soft')});
+  const yt=text(s,12,m.t+ih/2,'Requerido por la demanda, próx. 4 semanas (lo que viene)',{anchor:'middle',size:10.5,fill:css('--soft')}); yt.setAttribute('transform',`rotate(-90 12 ${m.t+ih/2})`);
   text(s,X(1.08),Y(1.06),'saturadas',{anchor:'end',size:10,fill:css('--red-dk'),bold:true});
   text(s,X(0.02),Y(0.03),'holgadas',{size:10,fill:css('--teal-dk'),bold:true});
   L.forEach(l=>{
-    const col=l.fut>=0.845||l.ocR>=0.85?css('--red'):l.fut<0.4&&l.ocR<0.4?css('--teal'):css('--amber');
-    const c=el('circle',{cx:X(l.ocR),cy:Y(l.fut),r:6,fill:col,'fill-opacity':.8,stroke:css('--card'),'stroke-width':1.5},s);
-    hover(c,`<b>${l.linea}</b><br>Ocupación real: ${pct(l.ocR)}<br>Uso proyectado: ${pct(l.fut)}`);
-    text(s,X(l.ocR)+8,Y(l.fut)+3,l.linea,{size:9.5,fill:css('--soft')});
+    const col=l.req>=0.85||l.ocR>=0.85?css('--red'):l.req<0.4&&l.ocR<0.4?css('--teal'):css('--amber');
+    const c=el('circle',{cx:X(l.ocR),cy:Y(l.req),r:6,fill:col,'fill-opacity':.8,stroke:css('--card'),'stroke-width':1.5},s);
+    hover(c,`<b>${l.linea}</b><br>Ocupación real SAP ${D.meta.periodo_corto}: ${pct(l.ocR)}<br>Requerido por la demanda: ${pct(l.req)}<br>Programado (OF sugeridas + aprobadas): ${pct(l.fut)}`);
+    text(s,X(l.ocR)+8,Y(l.req)+3,l.linea,{size:9.5,fill:css('--soft')});
   });
 })();
 // ---------- tabla capacidad nominal ----------
 table('t-capnom', [
-  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Parámetro actual',k:'param'},
-  {h:'Máx. ocupación real',k:'max_oc',num:1,f:x=>pct(x.max_oc)},{h:'Prom. 3 mejores sem.',k:'top3',num:1,f:x=>pct(x.top3)},
-  {h:'Uso proyectado',k:'fut',num:1,f:x=>pct(x.fut)},{h:'Quiebres proyectados',k:'q',num:1},
-], D.lineas.filter(l=>l.top3>1.05).sort((a,b)=>b.top3-a.top3));
+  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Capacidad nominal actual',k:'param'},
+  {h:'Mejor semana (real SAP)',k:'max_oc',num:1,f:x=>pct(x.max_oc)},{h:'Prom. 3 mejores sem. (real SAP)',k:'top3',num:1,f:x=>pct(x.top3)},
+  {h:'Programado próx. 4 sem',k:'fut',num:1,f:x=>pct(x.fut)},{h:'Requerido próx. 4 sem',k:'req',num:1,f:x=>pct(x.req)},
+  {h:'Quiebres proyectados',k:'q',num:1},
+], D.lineas.filter(l=>l.top3>1.05).sort((a,b)=>b.top3-a.top3), 'Ninguna línea produjo sobre su capacidad parametrizada en la ventana analizada.');
+
 // ---------- chart: cap bodega ----------
 (function(){
-  const C=D.cap_bodega, W=1180, rh=30, m={l:330,r:150,t:8,b:8}, H=m.t+C.length*rh+m.b, iw=W-m.l-m.r;
+  const C=D.cap_bodega;
+  if(!C.length){ document.getElementById('ch-capb').innerHTML='<div class="vacio">Sin alertas: todos los SKU tienen capacidad de bodega suficiente para batch mínimo + SS (stock de seguridad).</div>'; return; }
+  const W=1180, rh=30, m={l:330,r:150,t:8,b:8}, H=m.t+C.length*rh+m.b, iw=W-m.l-m.r;
   const mx=Math.max(...C.map(c=>Math.max(c.cap,c.need)))*1.05; const X=v=>m.l+v/mx*iw;
   const s=svg(W,H,'ch-capb');
   C.forEach((c,i)=>{
@@ -554,32 +581,34 @@ table('t-bit', [
   {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Cumpl. última sem.',k:'cumpl',num:1,f:x=>pct(x.cumpl)},
   {h:'Días con registro',k:'dias',num:1},{h:'Detención (h)',k:'det_h',num:1,f:x=>x.det_h==null?'–':x.det_h.toFixed(1).replace('.',',')},
   {h:'Lectura',k:'lectura',f:x=>`<span class="tag ${x.explicada?'Menor':'MTO'}">${x.explicada?'Con registro':'Sin registro'}</span> ${esc(x.lectura)}`},
-], D.bit_lineas);
-document.getElementById('cap-bit').textContent = `Líneas con registro en la bitácora: ${D.bit_lineas.filter(x=>x.explicada).length} de ${D.lineas.length}. Sin registro, una desviación queda por explicar.`;
+], D.bit_lineas, 'Sin datos de bitácora en la semana evaluada.');
+document.getElementById('cap-bit').textContent = `${D.meta.sem_eval}: líneas con registro en la bitácora: ${D.bit_lineas.filter(x=>x.explicada).length} de ${D.lineas.length}. Cumplimiento = producción real SAP ÷ programado SAP. Sin registro, una desviación queda por explicar.`;
+document.getElementById('cap-ft').insertAdjacentHTML('beforeend', ' ' + D.meta.nota_horas);
+document.getElementById('t-demo').textContent = `Capacidad demostrada (producción real SAP, ${D.meta.ventana_cap}) vs capacidad parametrizada`;
 table('t-ft', [
-  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Turno param.',k:'turno',num:1,f:x=>x.turno},
+  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Horas por semana (plan)',k:'h_sem',num:1,f:x=>x.h_sem.toFixed(0)+' h'},{h:'Día más largo',k:'h_dia',num:1,f:x=>x.h_dia.toFixed(0)+' h'},
   {h:'Días fin de semana / festivo',k:'dias_fs',num:1},{h:'h-eq esos días',k:'h_fs',num:1,f:x=>num(x.h_fs)},
-  {h:'Días sobre 110% del turno',k:'dias_sobre',num:1},{h:'Máximo en un día',k:'max_h',num:1,f:x=>x.max_h.toFixed(1).replace('.',',')+' h'},
-], D.fuera_turno);
+  {h:'Días sobre 110% del día más largo',k:'dias_sobre',num:1},{h:'Máximo en un día',k:'max_h',num:1,f:x=>x.max_h.toFixed(1).replace('.',',')+' h'},
+], D.fuera_turno, 'Ninguna línea produjo en fines de semana, festivos ni sobre su jornada en el período.');
 table('t-l1', [
-  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Ocupación real',k:'ocR',num:1,f:x=>pct(x.ocR)},
+  {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Ocupación real (SAP)',k:'ocR',num:1,f:x=>pct(x.ocR)},
   {h:'Eficiencia',k:'efic',num:1,f:x=>pct(x.efic)},{h:'Cobertura bitácora',k:'cob',num:1,f:x=>pct(x.cob)},
-], D.lineas_bitacora);
+], D.lineas_bitacora, 'Ninguna línea tiene registro en la bitácora en el período.');
 table('t-recos', [
   {h:'Prioridad',k:'prioridad'},{h:'Qué',k:'campo'},{h:'Dónde',k:'donde'},{h:'Vigente',k:'vigente',num:1,f:x=>num(x.vigente)},
   {h:'Sugerido',k:'sugerido',num:1,f:x=>x.sugerido==null?'–':num(x.sugerido)},{h:'Fuente',k:'fuente'},{h:'Motivo',k:'motivo',f:x=>`<span class="cap">${esc(x.motivo)}</span>`},
-], D.recos);
+], D.recos, 'Sin recomendaciones abiertas en el panel de parámetros.');
 table('t-casos', [
   {h:'Caso',k:'id',f:x=>'#'+x.id},{h:'Línea',k:'linea'},{h:'Origen',k:'origen'},{h:'Decisión',k:'decision',f:x=>x.decision||'pendiente'},
   {h:'Causa principal',k:'causa',f:x=>`<span class="cap">${esc(x.causa||'')}</span>`},
-], D.casos);
+], D.casos, 'Sin casos de Análisis de Línea en la semana evaluada.');
 document.getElementById('cap-pend').textContent = `Acciones aceptadas pendientes de ejecutar: ${D.acciones_pendientes}.`;
 table('t-cambios', [
   {h:'Parámetro cambiado (semana)',k:'campo'},{h:'Cambios',k:'n',num:1},{h:'SKU o líneas',k:'elementos',num:1},{h:'Quién',k:'editores'},
-], D.cambios);
+], D.cambios, 'Sin cambios de parámetros en la semana evaluada.');
 table('t-interv', [
   {h:'Intervención evaluada',k:'palanca'},{h:'Línea',k:'linea'},{h:'Veredicto',k:'veredicto'},{h:'Lección',k:'aprendizaje',f:x=>`<span class="cap">${esc(x.aprendizaje||'')}</span>`},
-], D.interv);
+], D.interv, 'Sin intervenciones evaluadas en la semana evaluada.');
 document.getElementById('t-calidad').innerHTML = '<tr><th>Tema</th><th>Situación</th></tr>' + D.calidad.map(c=>`<tr><td>${esc(c[0])}</td><td>${esc(c[1])}</td></tr>`).join('');
 
 </script>

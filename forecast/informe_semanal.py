@@ -45,6 +45,7 @@ def _lunes_anterior(hoy: date) -> date:
 
 # ── 1. Datos (mismo esquema que el informe interactivo Sem 37–45) ───────────────
 SEMANAS_PERIODO = 9
+SEMANAS_CAPACIDAD = 12      # capacidad demostrada: misma ventana que el conocimiento empírico
 DIAS_INMEDIATO = 6
 ETIQ_CAMPO = {"batch_min_u": "Batch mínimo", "cap_bodega_u": "Cap. bodega", "factor_velocidad": "Factor de velocidad",
               "turnos_dia": "Turnos", "velocidad_u_hr": "Velocidad de línea"}
@@ -65,8 +66,9 @@ def compilar(lunes: date) -> dict:
     import mrp as _mrp
     ult_dom = lunes + timedelta(days=6)
     semanas = [lunes - timedelta(days=7 * i) for i in range(SEMANAS_PERIODO - 1, -1, -1)]
+    semanas_cap = [lunes - timedelta(days=7 * i) for i in range(SEMANAS_CAPACIDAD - 1, -1, -1)]
     ini = semanas[0]
-    kp = {s_: _k.calcular_semana(s_) for s_ in semanas}
+    kp = {s_: _k.calcular_semana(s_) for s_ in semanas_cap}
     per = _k.calcular_periodo(ini, ult_dom)
     nsem = len(semanas)
 
@@ -98,18 +100,15 @@ def compilar(lunes: date) -> dict:
             if r.get("preferida") or r["sku"] not in pref:
                 pref[r["sku"]] = r["linea"] if r.get("preferida") else pref.get(r["sku"], r["linea"])
 
-        # ── uso proyectado por línea (próximas 4 semanas, días hábiles) ──
-        fut, d95, dias_fut = {}, {}, 0
-        for cod, L in lin_p.items():
-            vals = []
-            d = hoy_plan
-            while d < fin_fut:
-                if _al.horas_dia_linea(L, d) > 0:
-                    vals.append(float((piezas["uso_linea"].get(cod) or {}).get(d.isoformat(), 0) or 0) / 100.0)
-                d += timedelta(days=1)
-            fut[cod] = sum(vals) / len(vals) if vals else 0.0
-            d95[cod] = sum(1 for v in vals if v >= 0.95)
-            dias_fut = max(dias_fut, len(vals))
+        # ── próximas 4 semanas: PROGRAMADO (OF sugeridas + aprobadas) y REQUERIDO (demanda), mismo
+        #    cálculo que el semáforo del Análisis de Línea, en % de la capacidad nominal ──
+        fut, req, d95, dias_fut = {}, {}, {}, 0
+        for x in carga["lineas"]:
+            hn = sum(f["horas_nominales"] for f in x["semanas"]) or 0
+            fut[x["linea"]] = (sum(f["horas_programadas"] for f in x["semanas"]) / hn) if hn else 0.0
+            req[x["linea"]] = (sum(f["horas_requeridas"] for f in x["semanas"]) / hn) if hn else 0.0
+            d95[x["linea"]] = 0
+            dias_fut = max(dias_fut, sum(f["dias_habiles"] for f in x["semanas"]))
 
         # ── alertas del plan: quiebres y bajo SS (4 semanas) ──
         q = defaultdict(lambda: {"dias": 0, "def_u": 0.0, "primer": None})
@@ -194,18 +193,24 @@ def compilar(lunes: date) -> dict:
             return _div(rr, ss_)
         pl = per_l.get(cod) or {}
         ocs = [v for v in oc if v is not None]
-        top = sorted(ocs)[-3:]
-        tc = _mrp._normalizar_turnos_config(L.get("turnos_config")) if L.get("_tc") else None
+        # capacidad demostrada: mejores semanas y máximo en la MISMA ventana (12 semanas, real SAP)
+        oc12 = [v for v in (next((x["kpi"]["ocupacion_real"] for x in kp[s_]["lineas"] if x["linea"] == cod), None)
+                            for s_ in semanas_cap) if v is not None]
+        top = sorted(oc12)[-3:]
+        tc = L.get("_tc")
+        h_sem = _cal.horas_semana_patron(tc, float(L.get("horas_turno") or 0), int(L.get("turnos_dia") or 1), int(L.get("dias_semana") or 5))
         if tc:
-            param = f"{len(tc)} turno(s) · {_cal.horas_semana_patron(tc):g} h/sem · {float(L.get('velocidad_u_hr') or 0):,.0f} u/h".replace(",", ".")
+            patron = "-".join(f"{sum(float(t['horas'][i]) for t in tc):g}" for i in range(5))
+            param = f"{h_sem:g} h/sem ({patron}) · {float(L.get('velocidad_u_hr') or 0):,.0f} u/h".replace(",", ".")
         else:
-            param = f"{L.get('turnos_dia')}×{float(L.get('horas_turno') or 0):g} h×{L.get('dias_semana')} d · {float(L.get('velocidad_u_hr') or 0):,.0f} u/h".replace(",", ".")
+            param = (f"{h_sem:g} h/sem ({L.get('turnos_dia')} turno × {float(L.get('horas_turno') or 0):g} h × {L.get('dias_semana')} días)"
+                     f" · {float(L.get('velocidad_u_hr') or 0):,.0f} u/h").replace(",", ".")
         lineas.append({"linea": cod, "cat": (pl.get("categoria") or "—"), "cumpl_sem": cs, "oc_sem": oc,
                        "ocR": (pl.get("kpi") or {}).get("ocupacion_real") or 0, "ocP": (pl.get("kpi") or {}).get("ocupacion_programada_sap") or 0,
                        "cumpl": (pl.get("kpi") or {}).get("cumplimiento_vs_sap"), "cumpl4": tramo(semanas[-4:]), "cumpl_ini": tramo(semanas[:4]),
-                       "fut": fut.get(cod, 0), "d95": d95.get(cod, 0),
+                       "fut": fut.get(cod, 0), "req": req.get(cod, 0), "d95": d95.get(cod, 0), "h_sem": h_sem,
                        "q": sum(1 for x in quiebres if x["linea"] == cod), "ss": sum(1 for s_ in bajo_ss if pref.get(s_) == cod),
-                       "max_oc": max(ocs) if ocs else 0, "top3": (demo.get(cod) or {}).get("top3") or (sum(top) / len(top) if top else 0),
+                       "max_oc": max(oc12) if oc12 else 0, "top3": (sum(top) / len(top)) if top else 0,
                        "param": param,
                        "con_bit": bool(pl.get("con_bitacora")), "efic": (pl.get("kpi") or {}).get("eficiencia"),
                        "cob": pl.get("cobertura_bitacora")})
@@ -250,10 +255,12 @@ def compilar(lunes: date) -> dict:
         pdd = x.get("produccion_diaria_heq") or {}
         h_ref = max([_al.horas_dia_linea(L, ini + timedelta(days=i)) for i in range(7)] or [0]) or \
             float(L.get("horas_turno") or 0) * int(L.get("turnos_dia") or 1)
+        h_sem_l = _cal.horas_semana_patron(L.get("_tc"), float(L.get("horas_turno") or 0), int(L.get("turnos_dia") or 1),
+                                          int(L.get("dias_semana") or 5))
         fs = [(f, v) for f, v in pdd.items() if v > 0.5 and (date.fromisoformat(f).weekday() >= 5 or _cal.es_feriado(date.fromisoformat(f)))]
         sobre = [v for v in pdd.values() if h_ref and v > 1.1 * h_ref]
         if fs or sobre:
-            ft.append({"linea": x["linea"], "turno": f"{h_ref:g} h", "dias_fs": len(fs), "h_fs": round(sum(v for _, v in fs)),
+            ft.append({"linea": x["linea"], "h_sem": h_sem_l, "h_dia": h_ref, "dias_fs": len(fs), "h_fs": round(sum(v for _, v in fs)),
                        "dias_sobre": len(sobre), "max_h": max(pdd.values()) if pdd else 0})
     ft.sort(key=lambda z: -(z["dias_fs"] * 2 + z["dias_sobre"]))
 
@@ -280,8 +287,15 @@ def compilar(lunes: date) -> dict:
                ["Forecast", "Ver pestaña Precisión del forecast; SKU con poca historia pueden proyectar picos de lanzamiento."]]
     sem_ini, sem_fin = semanas[0].isocalendar()[1], semanas[-1].isocalendar()[1]
     cumpl_per = _div(sum(x["real"] or 0 for x in S), sum(x["sap"] or 0 for x in S))
+    prev = S[:-1]
+    nota_horas = ("Horas por semana según el calendario de capacidad (jornada 42 h) que usa el plan." if cal_on else
+                  "Horas por semana que usa hoy el plan (anteriores al cambio de jornada: el calendario de 42 h aún no está activo).")
     D = {
         "meta": {"periodo": f"Sem {sem_ini} a {sem_fin} · {_ddmm(ini)} al {_ddmm(ult_dom)}-{ult_dom.year} · foco en la Sem {sem_fin}",
+                 "sem_eval": f"Sem {sem_fin} ({_ddmm(lunes)} al {_ddmm(ult_dom)}-{ult_dom.year})",
+                 "plan_label": f"plan #{plan.id}, próximas 4 semanas ({_ddmm(hoy_plan)} al {_ddmm(fin_fut - timedelta(days=1))})",
+                 "inicio_plan": hoy_plan.isoformat(), "nota_horas": nota_horas,
+                 "ventana_cap": f"últimas {SEMANAS_CAPACIDAD} semanas (Sem {semanas_cap[0].isocalendar()[1]}–{sem_fin})",
                  "periodo_corto": f"Sem {sem_ini}–{sem_fin}", "generado": date.today().strftime("%d-%m-%Y"),
                  "plan": f"Plan vigente {plan.id} · {plan.created_at:%d-%m-%Y %H:%M}", "plan_id": plan.id,
                  "horizonte": f"{_ddmm(hoy_plan)} al {_ddmm(fin_fut - timedelta(days=1))}", "dias_fut": dias_fut,
@@ -292,6 +306,10 @@ def compilar(lunes: date) -> dict:
         "semanas": S,
         "kpi": {"sap": sum(x["sap"] or 0 for x in S), "real": sum(x["real"] or 0 for x in S), "app": sum(x["app"] or 0 for x in S),
                 "cumpl": cumpl_per, "cumpl_ult": S[-1]["cumpl"],
+                "cumpl_prev": _div(sum(x["real"] or 0 for x in prev), sum(x["sap"] or 0 for x in prev)),
+                "adop_ult": S[-1]["adop"], "adop_per": per["resumen"]["adopcion_app_sobre_sap"],
+                "ocR_ult": S[-1]["ocR"], "ocP_ult": S[-1]["ocP"],
+                "ocR_prev": _div(sum((x["ocR"] or 0) for x in prev), len(prev)),
                 "adop": _div(sum((x["adop"] or 0) * (x["sap"] or 0) for x in S), sum(x["sap"] or 0 for x in S)),
                 "ocR": _div(sum((x["ocR"] or 0) for x in S), nsem), "ocP": _div(sum((x["ocP"] or 0) for x in S), nsem),
                 "quiebres": len(quiebres), "quiebres_mto": sum(1 for x in quiebres if x["mto"]), "bajo_ss": len(bajo_ss),
@@ -315,7 +333,15 @@ SYSTEM_IA = """Eres el analista de operaciones de Traverso (alimentos, Chile) y 
 producción para gerencia y planificación. Recibes datos ya calculados por el sistema (período de varias semanas con
 foco en la última semana cerrada, y el riesgo del plan vigente para las próximas 4 semanas).
 Reglas:
-- Usa SOLO las cifras de los datos; no recalcules ni inventes. Cita la semana o la línea de cada cifra.
+- Usa SOLO las cifras de los datos; no recalcules ni inventes.
+- PERÍODOS: cada cifra pertenece a uno de estos períodos y SIEMPRE debes decir cuál: "en la semana evaluada (Sem N)",
+  "en la tendencia (Sem A–B)", "en el plan vigente para las próximas 4 semanas" o "en el último corte de faltantes".
+  Nunca mezcles cifras de períodos distintos en una misma frase sin nombrar cada período.
+- FUENTES: "ocupación real" y "cumplimiento" vienen de la producción real reportada en SAP (Terminal Report): dilo así.
+  "Programado" = OF sugeridas + aprobadas del plan; "requerido" = lo que exige la demanda (forecast + OV).
+- UNIDADES: las cantidades son CAJAS (cj), nunca unidades.
+- Sin jerga del sistema: no uses nombres de campos (top3, fut, req, ocR...). Di, por ejemplo,
+  "en sus 3 mejores semanas produjo 154% de su capacidad nominal".
 - El objetivo supremo es evitar quiebres de stock.
 - Las recomendaciones son "analizar..." o "revisar...", nunca órdenes. Máximo 4, priorizadas por efecto en evitar quiebres.
 - Si una línea produce sobre su capacidad parametrizada (top3 > 1,05), lo más probable son extensiones de turno o fines de semana.
@@ -330,8 +356,24 @@ Responde SOLO con un JSON válido:
 
 def _para_ia(D: dict) -> dict:
     """Versión compacta para la IA (sin series largas que no aportan)."""
-    return {"meta": D["meta"], "kpi": D["kpi"], "semanas": D["semanas"],
-            "lineas": [{k: l[k] for k in ("linea", "cat", "cumpl", "cumpl4", "cumpl_ini", "ocR", "fut", "top3", "max_oc", "q", "ss", "param", "con_bit")}
+    M = D["meta"]
+    return {"periodos": {"semana_evaluada": M["sem_eval"], "tendencia": M["periodo_corto"], "riesgo": M["plan_label"],
+                         "capacidad_demostrada": M["ventana_cap"]},
+            "unidades": "cantidades en cajas (cj); porcentajes como fracción (0,886 = 88,6%)",
+            "kpi_semana_evaluada": {"cumplimiento": D["kpi"]["cumpl_ult"], "cumplimiento_8_semanas_anteriores": D["kpi"]["cumpl_prev"],
+                                    "adopcion_app": D["kpi"]["adop_ult"], "ocupacion_real_sap": D["kpi"]["ocR_ult"],
+                                    "ocupacion_programada_sap": D["kpi"]["ocP_ult"]},
+            "kpi_tendencia": {"cumplimiento": D["kpi"]["cumpl"], "adopcion_app": D["kpi"]["adop_per"], "ocupacion_real_sap": D["kpi"]["ocR"],
+                              "cajas_reales_sap": D["kpi"]["real"], "cajas_programadas_sap": D["kpi"]["sap"]},
+            "kpi_plan_riesgo": {"skus_con_quiebre": D["kpi"]["quiebres"], "de_ellos_mto": D["kpi"]["quiebres_mto"], "skus_bajo_ss": D["kpi"]["bajo_ss"]},
+            "faltantes_ultimo_corte": {"fecha": M["faltantes_fecha"], "skus": D["kpi"]["faltantes_hoy"], "cajas": D["kpi"]["faltantes_cj"]},
+            "semanas": D["semanas"],
+            "lineas": [{"linea": l["linea"], "categoria": l["cat"], "cumplimiento_semana_evaluada": (l["cumpl_sem"] or [None])[-1],
+                        "cumplimiento_tendencia": l["cumpl"], "cumplimiento_ultimas_4_semanas": l["cumpl4"],
+                        "cumplimiento_primeras_4_semanas": l["cumpl_ini"], "ocupacion_real_sap_tendencia": l["ocR"],
+                        "programado_proximas_4_semanas": l["fut"], "requerido_por_demanda_proximas_4_semanas": l["req"],
+                        "promedio_3_mejores_semanas_real_sap": l["top3"], "mejor_semana_real_sap": l["max_oc"],
+                        "capacidad_nominal": l["param"], "skus_con_quiebre": l["q"], "skus_bajo_ss": l["ss"], "tiene_bitacora": l["con_bit"]}
                        for l in D["lineas"]],
             "quiebres": D["quiebres"][:20], "desvios": D["desvios"][:10], "cap_bodega": D["cap_bodega"][:10],
             "fuera_turno": D["fuera_turno"], "recos": D["recos"][:15], "casos": D["casos"], "cambios": D["cambios"],
