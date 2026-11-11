@@ -48,7 +48,7 @@ def horas_dia_linea(L: dict, d: date) -> float:
     si no, horas_turno x turnos en días hábiles (sin feriados)."""
     import calendario as _cal
     return _cal.horas_linea_dia(d, float(L.get("horas_turno") or 0), int(L.get("turnos_dia") or 0),
-                                L.get("_tc"), L.get("_exc"))
+                                L.get("_tc"), L.get("_exc"), L.get("_bloq"))
 
 
 def _lunes(d: date) -> date:
@@ -268,6 +268,10 @@ def _cargar_desde_bd(c):
     lineas = {r.codigo: dict(r._mapping) for r in c.execute(sa.text("SELECT * FROM mrp_lineas"))}
     # (11-11-2026) calendario de capacidad (mismo criterio que el solver)
     import mrp as _mrp
+    # (11-11-2026) bloqueos a futuro de la bitácora (paradas planificadas / bloqueos programados)
+    _bq = _mrp.cargar_bloqueos_bitacora()
+    for cod, L in lineas.items():
+        L["_bloq"] = _bq.get(cod) or None
     if _mrp.capacidad_calendario_activa():
         excs = _mrp.cargar_excepciones_capacidad()
         for cod, L in lineas.items():

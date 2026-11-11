@@ -104,6 +104,7 @@ GROUP BY 1, 2, 3
 
 CATEGORIA_A_CAMPO = {
     "PARADA_PLANIFICADA": "parada_plan_h",
+    "BLOQUEO_PROGRAMADO": "parada_plan_h",   # (11-11-2026) cuenta como parada planificada
     "PARADA_NO_PLANIFICADA": "parada_noplan_h",
     "SIN_PROGRAMA": "sin_programa_h",
     "INFORMATIVO": None,

@@ -288,6 +288,7 @@ def horas_linea_dia(
     turnos_dia: int = 1,
     turnos_config: list | None = None,
     excepciones: dict | None = None,
+    bloqueos: dict | None = None,
 ) -> float:
     """
     (11-11-2026) Horas de producción de una línea en un día. FUENTE ÚNICA de la
@@ -301,7 +302,20 @@ def horas_linea_dia(
       3. turnos_config       -> suma de los turnos de horas[weekday]; cada turno tiene su
                                 patrón L..D (jornada legal 42 h: [9, 9, 8, 8, 8, 0, 0])
       4. legado              -> horas_turno x turnos_dia los días hábiles (lun-vie)
+    Después se RESTAN los bloqueos[fecha] (horas): paradas planificadas y bloqueos
+    programados anotados a futuro en la bitácora (11-11-2026). Mínimo 0.
     """
+    base = _horas_base(fecha, horas_turno, turnos_dia, turnos_config, excepciones)
+    if bloqueos:
+        b = bloqueos.get(fecha)
+        if b is None:
+            b = bloqueos.get(fecha.isoformat())
+        if b:
+            return max(0.0, base - float(b))
+    return base
+
+
+def _horas_base(fecha, horas_turno, turnos_dia, turnos_config, excepciones) -> float:
     if excepciones:
         h = excepciones.get(fecha)
         if h is None:
@@ -333,6 +347,7 @@ def capacidad_dia_unidades(
     turnos_dia: int,
     turnos_config: list | None = None,
     excepciones: dict | None = None,
+    bloqueos: dict | None = None,
 ) -> int:
     """
     Capacidad en unidades de una línea para un día específico.
@@ -345,11 +360,11 @@ def capacidad_dia_unidades(
     (11-11-2026) Sin turnos_config ni excepciones el comportamiento es IDÉNTICO al
     anterior (horas_turno x turnos_dia en días hábiles). Con ellos usa horas_linea_dia.
     """
-    if turnos_config is None and not excepciones:
+    if turnos_config is None and not excepciones and not bloqueos:
         if not es_habil(fecha):
             return 0
         return int(velocidad_u_hr * horas_turno * turnos_dia)
-    return int(velocidad_u_hr * horas_linea_dia(fecha, horas_turno, turnos_dia, turnos_config, excepciones))
+    return int(velocidad_u_hr * horas_linea_dia(fecha, horas_turno, turnos_dia, turnos_config, excepciones, bloqueos))
 
 
 # =============================================================================
@@ -439,6 +454,13 @@ if __name__ == "__main__":
     assert capacidad_dia_unidades(date(2026, 11, 18), 1000, 9, 1) == 9000, "legado sin cambios"
     assert capacidad_dia_unidades(date(2026, 11, 18), 1000, 9, 1, turnos_config=_p42) == 8000, "patrón"
     print("✓ Patrón 42 h, 2do turno y excepciones")
+    # (11-11-2026) bloqueos de la bitácora: restan horas, mínimo 0
+    assert horas_linea_dia(date(2026, 11, 18), turnos_config=_p42, bloqueos={date(2026, 11, 18): 3}) == 5.0, "bloqueo 3 h"
+    assert horas_linea_dia(date(2026, 11, 18), turnos_config=_p42, bloqueos={"2026-11-18": 10}) == 0.0, "bloqueo > día"
+    assert capacidad_dia_unidades(date(2026, 11, 18), 1000, 9, 1, bloqueos={date(2026, 11, 18): 2}) == 7000, "legado con bloqueo"
+    assert horas_linea_dia(date(2026, 11, 21), turnos_config=_p42, excepciones={date(2026, 11, 21): 8},
+                           bloqueos={date(2026, 11, 21): 1}) == 7.0, "sábado trabajado con bloqueo"
+    print("✓ Bloqueos programados de la bitácora")
 
     # Test 7: SS diario (suma de próximos ss_dias hábiles desde d inclusive)
     from calendario import calcular_ss_diario

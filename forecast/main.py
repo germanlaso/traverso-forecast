@@ -29,6 +29,7 @@ from params_edicion import router as params_edicion_router   # Edicion de parame
 from analisis_linea import router as analisis_linea_router   # Analisis de linea (carga requerida, semaforo)
 from analisis_diagnostico import router as analisis_diag_router   # Analisis de linea: diagnostico, palancas, IA, casos
 from conocimiento_empirico import router as aprendizaje_router   # Aprendizaje: conocimiento empirico e intervenciones
+from solver_cola import router as solver_cola_router   # Cola unica del solver (R17)
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
@@ -75,6 +76,7 @@ app.include_router(params_edicion_router)  # Edicion de parametros con PIN e his
 app.include_router(analisis_linea_router)  # Analisis de linea: carga requerida y semaforo
 app.include_router(analisis_diag_router)  # Analisis de linea: diagnostico, palancas, IA y casos
 app.include_router(aprendizaje_router)  # Aprendizaje: conocimiento empirico e intervenciones
+app.include_router(solver_cola_router)  # Cola unica del solver (R17)
 
 app.add_middleware(
     CORSMiddleware,
@@ -728,16 +730,21 @@ def generar_plan(req: PlanRequest = None):
                             f"[Plan] Stock rebajado por OV vencida: {len(comprometido)} SKU "
                             f"({sum(comprometido.values()):.0f} cj); {n_neg} quedan en disponible < 0."
                         )
-                ordenes, diag_opt = optimizar_plan(
-                    ordenes_mrp=ordenes,
-                    sku_params=sku_params,
-                    lineas=lineas,
-                    forecasts=forecasts,
-                    stocks_actuales=stocks_actuales,
-                    entradas_fijas=entradas_fijas,
-                    pedidos_abiertos=pedidos_abiertos,
-                    horizonte_semanas=req.horizonte_semanas,
-                )
+                # (11-11-2026) R17: cola única del solver. Desde la app no se espera más de
+                # 10 s: si hay otra corrida, SolverOcupado -> cae al except de abajo y se
+                # devuelve el plan MRP sin optimizar, con el motivo en diag.
+                from solver_cola import turno_solver
+                with turno_solver("plan_manual", "POST /plan desde la app", espera_max_s=10):
+                    ordenes, diag_opt = optimizar_plan(
+                        ordenes_mrp=ordenes,
+                        sku_params=sku_params,
+                        lineas=lineas,
+                        forecasts=forecasts,
+                        stocks_actuales=stocks_actuales,
+                        entradas_fijas=entradas_fijas,
+                        pedidos_abiertos=pedidos_abiertos,
+                        horizonte_semanas=req.horizonte_semanas,
+                    )
                 logger.info(f"[Plan] OR-Tools: {diag_opt.get('status')} "
                             f"t={diag_opt.get('tiempo_ms')}ms")
 
@@ -1515,6 +1522,8 @@ def get_mrp_params():
                                           for i in range(7)] if getattr(l, "turnos_config", None) else None),
                     "cap_u_excepciones": {f.isoformat() if hasattr(f, "isoformat") else str(f): round(l.velocidad_u_hr * float(h))
                                           for f, h in (getattr(l, "excepciones", None) or {}).items()},
+                    "horas_bloqueadas": {f.isoformat() if hasattr(f, "isoformat") else str(f): round(float(h), 2)
+                                         for f, h in (getattr(l, "bloqueos", None) or {}).items()},
                 }
                 for l in lineas.values()
             ],

@@ -20,8 +20,17 @@ const guardarUsuario = (v) => {
   try { localStorage.setItem(KEY_USUARIO, v); } catch { /* sin storage: no pasa nada */ }
 };
 
-const FORM_VACIO = { linea: '', tipo: '', duracion_min: '', sku: '', comentario: '' };
-const CATEGORIAS_FUTURAS = ['PARADA_PLANIFICADA', 'SIN_PROGRAMA'];   // mismo criterio que bitacora.py
+const FORM_VACIO = { linea: '', tipo: '', duracion_min: '', sku: '', comentario: '', maquina: '', hora_inicio: '', hora_fin: '' };
+// mismo criterio que bitacora.py: paradas planificadas y bloqueos programados restan horas al plan
+const CATEGORIAS_FUTURAS = ['PARADA_PLANIFICADA', 'BLOQUEO_PROGRAMADO', 'SIN_PROGRAMA'];
+// (11-11-2026) duración en minutos a partir del horario (cruza medianoche)
+function minutosEntre(hi, hf) {
+  if (!hi || !hf) return null;
+  const [a, b] = hi.split(':').map(Number), [c, d] = hf.split(':').map(Number);
+  let m = (c * 60 + d) - (a * 60 + b);
+  if (m <= 0) m += 1440;
+  return m;
+}
 
 const estilos = {
   wrap: { padding: 16, maxWidth: 1100 },
@@ -88,7 +97,8 @@ export default function BitacoraEventos() {
     setMsg(null);
     if (!usuario.trim()) return setMsg({ tipo: 'error', texto: 'Indica quién registra el evento.' });
     if (!form.linea || !form.tipo) return setMsg({ tipo: 'error', texto: 'Selecciona línea y tipo de evento.' });
-    if (pideDuracion && !form.duracion_min) return setMsg({ tipo: 'error', texto: 'Este tipo de evento requiere duración en minutos.' });
+    if (pideDuracion && !form.duracion_min && !minutosEntre(form.hora_inicio, form.hora_fin))
+      return setMsg({ tipo: 'error', texto: 'Indica la duración en minutos o el horario (inicio y fin).' });
 
     setGuardando(true);
     try {
@@ -100,6 +110,9 @@ export default function BitacoraEventos() {
         duracion_min: pideDuracion && form.duracion_min ? Number(form.duracion_min) : null,
         sku: form.sku || null,
         comentario: form.comentario || null,
+        maquina: form.maquina || null,
+        hora_inicio: form.hora_inicio || null,
+        hora_fin: form.hora_fin || null,
       });
       guardarUsuario(usuario.trim());
       setForm({ ...FORM_VACIO, linea: form.linea });   // mantiene la línea para cargas seguidas
@@ -158,6 +171,15 @@ export default function BitacoraEventos() {
           <label style={estilos.label}>SKU (opcional)
             <input style={estilos.input} value={form.sku} onChange={set('sku')} />
           </label>
+          <label style={estilos.label}>Máquina (opcional)
+            <input style={estilos.input} value={form.maquina} onChange={set('maquina')} placeholder="Ej.: llenadora, tapadora" />
+          </label>
+          <label style={estilos.label}>Hora inicio (opcional)
+            <input style={estilos.input} type="time" value={form.hora_inicio} onChange={set('hora_inicio')} />
+          </label>
+          <label style={estilos.label}>Hora fin (opcional){minutosEntre(form.hora_inicio, form.hora_fin) ? ` · ${minutosEntre(form.hora_inicio, form.hora_fin)} min` : ''}
+            <input style={estilos.input} type="time" value={form.hora_fin} onChange={set('hora_fin')} />
+          </label>
         </div>
         <label style={{ ...estilos.label, marginTop: 12 }}>Comentario (opcional)
           <textarea style={{ ...estilos.input, minHeight: 50 }} value={form.comentario} onChange={set('comentario')} />
@@ -185,7 +207,7 @@ export default function BitacoraEventos() {
             <table style={estilos.tabla}>
               <thead>
                 <tr>
-                  {['Fecha', 'Línea', 'Tipo', 'Min', 'SKU', 'Comentario', 'Registrado por', ''].map((h) => (
+                  {['Fecha', 'Línea', 'Tipo', 'Min', 'Horario', 'Máquina', 'SKU', 'Comentario', 'Registrado por', ''].map((h) => (
                     <th key={h} style={estilos.th}>{h}</th>
                   ))}
                 </tr>
@@ -197,6 +219,8 @@ export default function BitacoraEventos() {
                     <td style={estilos.td}>{ev.linea}</td>
                     <td style={estilos.td}>{ev.tipo_nombre}</td>
                     <td style={estilos.td}>{ev.duracion_min ?? ''}</td>
+                    <td style={estilos.td}>{ev.hora_inicio ? `${String(ev.hora_inicio).slice(0, 5)}–${String(ev.hora_fin || '').slice(0, 5)}` : ''}</td>
+                    <td style={estilos.td}>{ev.maquina ?? ''}</td>
                     <td style={estilos.td}>{ev.sku ?? ''}</td>
                     <td style={estilos.td}>{ev.comentario ?? ''}</td>
                     <td style={estilos.td}>{ev.registrado_por}</td>

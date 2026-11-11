@@ -21,8 +21,14 @@ for corrida in A B C; do
     B) CAL=1; LLENAR=0 ;;
     C) CAL=1; LLENAR=1 ;;
   esac
+  # el cron de producción parte a las 09:00 UTC: no iniciar una corrida (~95 min) después de las 07:20 UTC
+  AHORA=$(date -u +%H%M)
+  if [ "$AHORA" -ge 0720 ] && [ "$AHORA" -lt 1200 ]; then
+    echo "$(date -u +%FT%TZ) corrida $corrida OMITIDA: no alcanza a terminar antes del cron de las 09:00 UTC" >> /app/comp42.log
+    continue
+  fi
   echo "$(date -u +%FT%TZ) inicio corrida $corrida (CAPACIDAD_CALENDARIO=$CAL N2_LLENAR_TURNO=$LLENAR)" >> /app/comp42.log
-  CAPACIDAD_CALENDARIO=$CAL N2_LLENAR_TURNO=$LLENAR python3 -u /app/cron_plan.py --horizonte 8 --time-limit 1800 \
+  COLA_DESCRIPCION="comparacion 42h corrida $corrida" CAPACIDAD_CALENDARIO=$CAL N2_LLENAR_TURNO=$LLENAR python3 -u /app/cron_plan.py --horizonte 8 --time-limit 1800 \
       --no-promote --skip-refresh > /app/comp42_$corrida.log 2>&1
   echo "$(date -u +%FT%TZ) fin corrida $corrida: $(grep -o 'plan_id=[0-9]*' /app/comp42_$corrida.log | tail -1) | $(grep -o '\[CAPACIDAD\].*' /app/comp42_$corrida.log | tail -1)" >> /app/comp42.log
 done

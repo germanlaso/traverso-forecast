@@ -12,7 +12,7 @@ existir y estar activos; duración obligatoria si el tipo la requiere.
 Fechas futuras: solo categorías PARADA_PLANIFICADA y SIN_PROGRAMA, hasta 90 días
 (se anotan de antemano desde la grilla; cuentan en KPIs recién cuando se evalúa su semana).
 """
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from typing import Optional
 
 import sqlalchemy as sa
@@ -31,7 +31,10 @@ SQL_TIPOS = (
 
 router = APIRouter(prefix="/bitacora", tags=["bitacora"])
 
-CATEGORIAS_FUTURAS = ("PARADA_PLANIFICADA", "SIN_PROGRAMA")
+# (11-11-2026) Se pueden anotar a futuro: paradas planificadas, BLOQUEO PROGRAMADO y línea
+# disponible sin programa. Las dos primeras RESTAN horas al solver (mrp.cargar_bloqueos_bitacora);
+# "sin programa" no bloquea.
+CATEGORIAS_FUTURAS = ("PARADA_PLANIFICADA", "BLOQUEO_PROGRAMADO", "SIN_PROGRAMA")
 MAX_DIAS_FUTURO = 90
 
 
@@ -43,6 +46,10 @@ class EventoIn(BaseModel):
     duracion_min: Optional[int] = None
     sku: Optional[str] = None
     comentario: Optional[str] = None
+    # (11-11-2026) máquina y horario (opcionales). Con inicio y fin, la duración se calcula sola.
+    maquina: Optional[str] = None
+    hora_inicio: Optional[time] = None
+    hora_fin: Optional[time] = None
 
 
 class AnularIn(BaseModel):
@@ -79,6 +86,7 @@ def listar_eventos(
     sql = (
         "SELECT e.id, e.fecha, e.linea, e.tipo, t.nombre AS tipo_nombre, t.categoria, "
         "       e.duracion_min, e.sku, e.comentario, e.registrado_por, e.creado_en, "
+        "       e.maquina, e.hora_inicio, e.hora_fin, e.origen_detencion, "
         "       e.anulado, e.anulado_por, e.anulado_en "
         "FROM mrp_eventos_linea e JOIN mrp_eventos_tipos t ON t.codigo = e.tipo "
         "WHERE e.fecha BETWEEN :desde AND :hasta "
@@ -116,12 +124,21 @@ def crear_evento(ev: EventoIn):
 
         if ev.fecha > date.today():
             if tipo.categoria not in CATEGORIAS_FUTURAS:
-                raise HTTPException(422, "En fechas futuras solo se pueden registrar paradas "
-                                         "planificadas y línea disponible sin programa.")
+                raise HTTPException(422, "En fechas futuras solo se pueden registrar paradas planificadas, "
+                                         "bloqueos programados y línea disponible sin programa.")
             if ev.fecha > date.today() + timedelta(days=MAX_DIAS_FUTURO):
                 raise HTTPException(422, f"Solo se pueden anotar eventos hasta {MAX_DIAS_FUTURO} días adelante.")
 
         duracion = ev.duracion_min
+        if ev.hora_inicio and ev.hora_fin:
+            mins = (ev.hora_fin.hour * 60 + ev.hora_fin.minute) - (ev.hora_inicio.hour * 60 + ev.hora_inicio.minute)
+            if mins <= 0:
+                mins += 1440          # cruza medianoche
+            if duracion is None:
+                duracion = mins
+            elif abs(duracion - mins) > 1:
+                raise HTTPException(422, f"La duración ({duracion} min) no calza con el horario "
+                                         f"{ev.hora_inicio:%H:%M}-{ev.hora_fin:%H:%M} ({mins} min).")
         if tipo.requiere_duracion and not duracion:
             raise HTTPException(422, "Este tipo de evento requiere duración en minutos.")
         if duracion is not None and not (1 <= duracion <= 1440):
@@ -130,8 +147,8 @@ def crear_evento(ev: EventoIn):
         nuevo_id = c.execute(
             sa.text(
                 "INSERT INTO mrp_eventos_linea "
-                "(fecha, linea, tipo, duracion_min, sku, comentario, registrado_por) "
-                "VALUES (:fecha, :linea, :tipo, :dur, :sku, :com, :por) RETURNING id"
+                "(fecha, linea, tipo, duracion_min, sku, comentario, registrado_por, maquina, hora_inicio, hora_fin) "
+                "VALUES (:fecha, :linea, :tipo, :dur, :sku, :com, :por, :maq, :hi, :hf) RETURNING id"
             ),
             {
                 "fecha": ev.fecha,
@@ -141,6 +158,9 @@ def crear_evento(ev: EventoIn):
                 "sku": _limpiar(ev.sku),
                 "com": _limpiar(ev.comentario),
                 "por": registrado_por,
+                "maq": _limpiar(ev.maquina),
+                "hi": ev.hora_inicio,
+                "hf": ev.hora_fin,
             },
         ).scalar()
     return {"id": nuevo_id}

@@ -660,12 +660,14 @@ def optimizar_plan_v12_rich(
                 # (11-11-2026) calendario de capacidad: None = comportamiento anterior
                 turnos_config=lp.get("turnos_config"),
                 excepciones=lp.get("excepciones"),
+                bloqueos=lp.get("bloqueos"),       # (11-11-2026) bitácora: paradas/bloqueos programados
             )
 
     # (11-11-2026) Visibilidad del calendario de capacidad (fail-loud: que se vea en el log
     # si el solver está usando el patrón por día o el legado horas_turno x turnos_dia).
     _con_cal = [l for l, lp in lineas_params.items() if lp.get("turnos_config")]
     _con_exc = [l for l, lp in lineas_params.items() if lp.get("excepciones")]
+    _con_blq = {l: round(sum(lp["bloqueos"].values()), 1) for l, lp in lineas_params.items() if lp.get("bloqueos")}
     try:
         _lg = logging.getLogger("optimizer")
     except Exception:
@@ -673,6 +675,7 @@ def optimizar_plan_v12_rich(
     if _lg:
         _lg.info(f"[CAPACIDAD] calendario por dia: {len(_con_cal)}/{len(lineas_params)} lineas"
                  f" | con excepciones: {len(_con_exc)}"
+                 f" | bloqueos bitacora (h): {_con_blq or 0}"
                  + (" | LEGADO (horas_turno x turnos_dia)" if not _con_cal else ""))
 
     # ─── 5. Construir modelo CP-SAT ──────────────────────────────────────────
@@ -2707,6 +2710,7 @@ def optimizar_plan(
             # aca, el solver vuelve en silencio a horas_turno x turnos_dia). None = legado.
             "turnos_config": _attr(ln, "turnos_config", None),
             "excepciones": _attr(ln, "excepciones", None),
+            "bloqueos": _attr(ln, "bloqueos", None),
         }
 
     # ─── 3. sku_lineas — leerlas desde la BD (preferida + alternativas) ──────

@@ -45,6 +45,9 @@ class LineaProduccion:
     #   excepciones:   {date: horas_totales_del_dia}  (sábado trabajado, extensión, día sin producción)
     turnos_config: Optional[list] = None
     excepciones: Optional[dict] = None
+    # (11-11-2026) horas bloqueadas por día desde la bitácora (paradas planificadas y bloqueos
+    # programados a futuro): {date: horas}. Se restan a la capacidad del día.
+    bloqueos: Optional[dict] = None
 
     @property
     def horas_disponibles_semana(self):
@@ -162,6 +165,49 @@ def cargar_excepciones_capacidad() -> dict:
         return {}
 
 
+CATEGORIAS_BLOQUEO = ("PARADA_PLANIFICADA", "BLOQUEO_PROGRAMADO")
+
+
+def bloqueos_bitacora_activos() -> bool:
+    """(11-11-2026) Interruptor de los bloqueos de la bitácora en la capacidad del plan.
+    Variable BLOQUEOS_BITACORA=1/0 (fuerza) o mrp_params_config.bloqueos_bitacora ('on' por defecto)."""
+    import os as _os
+    v = _os.environ.get("BLOQUEOS_BITACORA")
+    if v is not None:
+        return v.strip() == "1"
+    try:
+        import sqlalchemy as _sa
+        from db_mrp import engine as _eng
+        with _eng.connect() as c:
+            r = c.execute(_sa.text("SELECT valor FROM mrp_params_config WHERE clave = 'bloqueos_bitacora'")).scalar()
+        return (r or "on").strip().lower() == "on"
+    except Exception:
+        return False
+
+
+def cargar_bloqueos_bitacora() -> dict:
+    """{linea: {date: horas}}: eventos de HOY en adelante de categoría PARADA_PLANIFICADA o
+    BLOQUEO_PROGRAMADO (no anulados), sumando minutos por línea y día. 'Línea disponible sin
+    programa' (SIN_PROGRAMA) NO bloquea. Ante error -> {} (capacidad sin bloqueos)."""
+    if not bloqueos_bitacora_activos():
+        return {}
+    try:
+        import sqlalchemy as _sa
+        from db_mrp import engine as _eng
+        out = {}
+        with _eng.connect() as c:
+            for r in c.execute(_sa.text("""
+                    SELECT e.linea, e.fecha, SUM(COALESCE(e.duracion_min, 0)) / 60.0 AS horas
+                    FROM mrp_eventos_linea e JOIN mrp_eventos_tipos t ON t.codigo = e.tipo
+                    WHERE NOT e.anulado AND e.fecha >= current_date AND t.categoria = ANY(:cats)
+                    GROUP BY e.linea, e.fecha"""), {"cats": list(CATEGORIAS_BLOQUEO)}):
+                if float(r.horas or 0) > 0:
+                    out.setdefault(r.linea, {})[r.fecha] = float(r.horas)
+        return out
+    except Exception:
+        return {}
+
+
 def load_params_from_db():
     """
     Carga parámetros MRP desde PostgreSQL.
@@ -171,6 +217,7 @@ def load_params_from_db():
 
     activo = capacidad_calendario_activa()
     excepciones = cargar_excepciones_capacidad() if activo else {}
+    bloqueos = cargar_bloqueos_bitacora()
     lineas = {}
     for row in get_all_lineas():
         codigo = row["codigo"]
@@ -184,6 +231,7 @@ def load_params_from_db():
             velocidad_u_hr = float(row.get("velocidad_u_hr", 0) or 0),
             turnos_config  = tc,
             excepciones    = (excepciones.get(codigo) or None) if activo else None,
+            bloqueos       = bloqueos.get(codigo) or None,
         )
 
     sku_params = {}

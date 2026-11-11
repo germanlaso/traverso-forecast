@@ -400,12 +400,18 @@ def main():
             log.info(f"[6/8] stock rebajado por OV vencida: {len(comprometido)} SKU "
                      f"({sum(comprometido.values()):.0f} cj); {n_neg} en disponible < 0.")
     log.info(f"[6/8] optimizando (OR-Tools)... | OV futuras(demanda): {len(pedidos_abiertos)} SKU con pedido")
-    ordenes_opt, diag = optimizar_plan(
-        ordenes_mrp=ordenes, sku_params=sku_params, lineas=lineas,
-        forecasts=forecasts, stocks_actuales=stocks_actuales,
-        entradas_fijas=entradas_fijas, pedidos_abiertos=pedidos_abiertos,
-        horizonte_semanas=args.horizonte,
-    )
+    # (11-11-2026) R17: cola única del solver. Si hay otra corrida (prueba, comparación,
+    # análisis programado), ESPERA su turno en vez de competir por la CPU.
+    from solver_cola import turno_solver
+    _tipo_cola = "prevuelo" if args.dry_run else ("prueba" if args.no_promote else "plan_cron")
+    _desc_cola = os.environ.get("COLA_DESCRIPCION") or f"cron_plan horizonte={args.horizonte} tl={args.time_limit}"
+    with turno_solver(_tipo_cola, _desc_cola):
+        ordenes_opt, diag = optimizar_plan(
+            ordenes_mrp=ordenes, sku_params=sku_params, lineas=lineas,
+            forecasts=forecasts, stocks_actuales=stocks_actuales,
+            entradas_fijas=entradas_fijas, pedidos_abiertos=pedidos_abiertos,
+            horizonte_semanas=args.horizonte,
+        )
     log.info(f"[6/8] solver: status={diag.get('status')} gap={diag.get('gap')} "
              f"t={diag.get('tiempo_ms')}ms")
 

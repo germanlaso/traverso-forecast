@@ -25,9 +25,21 @@ const COLOR_CATEGORIA = {
   PARADA_NO_PLANIFICADA: C.danger,
   SIN_PROGRAMA: C.amber,
   INFORMATIVO: C.gray,
+  BLOQUEO_PROGRAMADO: '#534AB7',
 };
-// En fechas futuras solo se anotan estas categorías (mismo criterio que bitacora.py)
-export const CATEGORIAS_FUTURAS = ['PARADA_PLANIFICADA', 'SIN_PROGRAMA'];
+// En fechas futuras solo se anotan estas categorías (mismo criterio que bitacora.py).
+// PARADA_PLANIFICADA y BLOQUEO_PROGRAMADO restan horas al plan; SIN_PROGRAMA no.
+export const CATEGORIAS_FUTURAS = ['PARADA_PLANIFICADA', 'BLOQUEO_PROGRAMADO', 'SIN_PROGRAMA'];
+export const CATEGORIAS_BLOQUEAN = ['PARADA_PLANIFICADA', 'BLOQUEO_PROGRAMADO'];
+// (11-11-2026) duración en minutos a partir del horario (cruza medianoche)
+function minutosEntre(hi, hf) {
+  if (!hi || !hf) return null;
+  const [a, b] = hi.split(':').map(Number), [c, d] = hf.split(':').map(Number);
+  let m = (c * 60 + d) - (a * 60 + b);
+  if (m <= 0) m += 1440;
+  return m;
+}
+
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
 const hoyLocal = () => {
@@ -69,7 +81,7 @@ export function useBitacoraConteo(desde, hasta) {
           const min = e.duracion_min || 0;
           m[k].n += 1;
           m[k].minutos += min;
-          if (e.categoria === 'PARADA_PLANIFICADA' || e.categoria === 'PARADA_NO_PLANIFICADA') m[k].min_detencion += min;
+          if (e.categoria === 'PARADA_PLANIFICADA' || e.categoria === 'PARADA_NO_PLANIFICADA' || e.categoria === 'BLOQUEO_PROGRAMADO') m[k].min_detencion += min;
           if (e.categoria === 'SIN_PROGRAMA') m[k].min_sin_programa += min;
           m[k].categorias.add(e.categoria);
         });
@@ -125,7 +137,7 @@ export function MinutosDetencion({ info }) {
 // ---------------------------------------------------------------------------
 // Modal
 // ---------------------------------------------------------------------------
-const FORM_VACIO = { tipo: '', duracion_min: '', sku: '', comentario: '' };
+const FORM_VACIO = { tipo: '', duracion_min: '', sku: '', comentario: '', maquina: '', hora_inicio: '', hora_fin: '' };
 
 export default function ModalBitacora({ fecha, linea, onClose, onCambio }) {
   const [tipos, setTipos] = useState([]);
@@ -168,13 +180,15 @@ export default function ModalBitacora({ fecha, linea, onClose, onCambio }) {
     setMsg(null);
     if (!usuario.trim()) return setMsg({ tipo: 'error', texto: 'Indica quién registra el evento.' });
     if (!form.tipo) return setMsg({ tipo: 'error', texto: 'Selecciona el tipo de evento.' });
-    if (pideDuracion && !form.duracion_min) return setMsg({ tipo: 'error', texto: 'Este tipo de evento requiere duración en minutos.' });
+    const minHorario = minutosEntre(form.hora_inicio, form.hora_fin);
+    if (pideDuracion && !form.duracion_min && !minHorario) return setMsg({ tipo: 'error', texto: 'Indica la duración en minutos o el horario (inicio y fin).' });
     setGuardando(true);
     try {
       await axios.post(`${API}/bitacora/eventos`, {
         fecha, linea, tipo: form.tipo, registrado_por: usuario.trim(),
         duracion_min: pideDuracion && form.duracion_min ? Number(form.duracion_min) : null,
         sku: form.sku || null, comentario: form.comentario || null,
+        maquina: form.maquina || null, hora_inicio: form.hora_inicio || null, hora_fin: form.hora_fin || null,
       });
       guardarUsuario(usuario.trim());
       setForm(FORM_VACIO);
@@ -237,7 +251,10 @@ export default function ModalBitacora({ fecha, linea, onClose, onCambio }) {
               borderRadius: 8, border: `1px solid ${C.grayLt}`, borderLeft: `4px solid ${COLOR_CATEGORIA[ev.categoria] || C.gray}`,
             }}>
               <div style={{ flex: 1, fontSize: 12 }}>
-                <div><strong>{ev.tipo_nombre}</strong>{ev.duracion_min ? ` · ${ev.duracion_min} min` : ''}{ev.sku ? ` · SKU ${ev.sku}` : ''}</div>
+                <div><strong>{ev.tipo_nombre}</strong>{ev.duracion_min ? ` · ${ev.duracion_min} min` : ''}
+                  {ev.hora_inicio ? ` · ${String(ev.hora_inicio).slice(0, 5)}–${String(ev.hora_fin || '').slice(0, 5)}` : ''}
+                  {ev.maquina ? ` · ${ev.maquina}` : ''}{ev.sku ? ` · SKU ${ev.sku}` : ''}
+                  {CATEGORIAS_BLOQUEAN.includes(ev.categoria) && ev.fecha > hoyLocal() && <span style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#534AB7' }}>bloquea horas del plan</span>}</div>
                 {ev.comentario && <div style={{ color: C.gray, marginTop: 2 }}>{ev.comentario}</div>}
                 <div style={{ color: C.textMuted, marginTop: 2 }}>Registrado por {ev.registrado_por}</div>
               </div>
@@ -254,8 +271,9 @@ export default function ModalBitacora({ fecha, linea, onClose, onCambio }) {
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{futuro ? 'Anotar evento planificado' : 'Registrar evento'}</div>
             {futuro && (
               <div style={{ fontSize: 12, background: C.amberLt, color: '#633806', borderRadius: 8, padding: '6px 10px', marginBottom: 10 }}>
-                Día futuro: solo se pueden anotar paradas planificadas (mantención, limpieza, cambio de formato) y
-                línea disponible sin programa. Si el plan cambia, anúlalo.
+                Día futuro: se pueden anotar paradas planificadas (mantención, limpieza, cambio de formato), bloqueos
+                programados (capacitación, inventario, auditoría) y línea disponible sin programa. Las paradas y los
+                bloqueos <b>restan esas horas al plan</b> desde la próxima corrida; "sin programa" no. Si cambia, anúlalo.
               </div>
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -269,13 +287,25 @@ export default function ModalBitacora({ fecha, linea, onClose, onCambio }) {
                 </select>
               </label>
               {pideDuracion && (
-                <label style={label}>Duración (min)
-                  <input style={input} type="number" min="1" max="1440" value={form.duracion_min} onChange={set('duracion_min')} />
+                <label style={label}>Duración (min){minutosEntre(form.hora_inicio, form.hora_fin) && !form.duracion_min ? ` · ${minutosEntre(form.hora_inicio, form.hora_fin)} por horario` : ''}
+                  <input style={input} type="number" min="1" max="1440" value={form.duracion_min} onChange={set('duracion_min')}
+                         placeholder={minutosEntre(form.hora_inicio, form.hora_fin) ? String(minutosEntre(form.hora_inicio, form.hora_fin)) : ''} />
                 </label>
               )}
               <label style={label}>SKU (opcional)
                 <input style={input} value={form.sku} onChange={set('sku')} />
               </label>
+              <label style={label}>Máquina (opcional)
+                <input style={input} value={form.maquina} onChange={set('maquina')} placeholder="Ej.: llenadora, tapadora" />
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <label style={label}>Hora inicio
+                  <input style={input} type="time" value={form.hora_inicio} onChange={set('hora_inicio')} />
+                </label>
+                <label style={label}>Hora fin
+                  <input style={input} type="time" value={form.hora_fin} onChange={set('hora_fin')} />
+                </label>
+              </div>
             </div>
             <label style={{ ...label, marginTop: 10 }}>Comentario (opcional)
               <textarea style={{ ...input, minHeight: 50 }} value={form.comentario} onChange={set('comentario')} />

@@ -38,7 +38,7 @@ function diasDesde(fechaDom,nSem){
 // (11-11-2026) Capacidad del día según el calendario de capacidad (patrón por día y turno,
 // jornada 42 h = 9-9-8-8-8, más excepciones por fecha). Si el backend no lo envía
 // (calendario apagado): capacidad semanal / 5, como antes.
-function capDiaDe(linea,fecha){
+function capDiaBase(linea,fecha){
   const exc=linea?.cap_u_excepciones?.[fecha];
   if(exc!=null) return exc;
   const arr=linea?.cap_u_dia_semana;
@@ -48,6 +48,14 @@ function capDiaDe(linea,fecha){
     return arr[(d.getDay()+6)%7];
   }
   return (linea?.cap_u_semana??0)/5;
+}
+// (11-11-2026) menos las horas bloqueadas a futuro en la bitácora (paradas planificadas y
+// bloqueos programados), igual que el solver.
+function capDiaDe(linea,fecha){
+  const base=capDiaBase(linea,fecha);
+  const hb=linea?.horas_bloqueadas?.[fecha];
+  const vel=linea?.velocidad_u_hr??((linea?.horas_disp_sem>0)?(linea.cap_u_semana/linea.horas_disp_sem):0);
+  return hb?Math.max(0,base-hb*vel):base;
 }
 function fmtN(n){return Math.round(n??0).toLocaleString("es-CL");}
 function fmtPct(n){return `${Math.round((n??0)*100)}%`;}
