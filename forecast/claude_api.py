@@ -67,13 +67,19 @@ def generar(system: str, usuario: str, max_tokens: int = 4000, modelo: str = Non
             req = urllib.request.Request(URL, data=cuerpo, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 data = json.loads(r.read().decode("utf-8"))
-            texto = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+            bloques = data.get("content", []) or []
+            texto = "".join(b.get("text", "") for b in bloques if b.get("type") == "text")
+            if not texto.strip() and data.get("stop_reason") == "max_tokens":
+                # el modelo usó el presupuesto en razonamiento interno antes de responder
+                raise ClaudeError(f"Respuesta vacía: se agotó max_tokens={max_tokens} "
+                                  f"(bloques: {[b.get('type') for b in bloques]}). Subir max_tokens.")
             u = data.get("usage", {}) or {}
             ti, to = u.get("input_tokens", 0), u.get("output_tokens", 0)
             pin, pout = PRECIOS.get(modelo, (0, 0))
             return {"texto": texto, "modelo": data.get("model", modelo), "tokens_in": ti, "tokens_out": to,
                     "costo_usd": round(ti / 1e6 * pin + to / 1e6 * pout, 4),
-                    "segundos": round(time.time() - t0, 1), "stop_reason": data.get("stop_reason")}
+                    "segundos": round(time.time() - t0, 1), "stop_reason": data.get("stop_reason"),
+                    "tipos_bloque": [b.get("type") for b in bloques]}
         except urllib.error.HTTPError as e:
             detalle = e.read().decode("utf-8", errors="replace")[:500]
             ultimo = ClaudeError(f"HTTP {e.code}: {detalle}")
@@ -96,8 +102,8 @@ if __name__ == "__main__":
     a = ap.parse_args()
     if a.test:
         r = generar("Responde en español, en una sola línea.",
-                    "Confirma que recibes este mensaje del sistema de planificación de Traverso.", max_tokens=60)
+                    "Confirma que recibes este mensaje del sistema de planificación de Traverso.", max_tokens=1000)
         print("OK |", r["modelo"], "|", r["texto"].strip(), "|", r["tokens_in"], "in /", r["tokens_out"], "out |",
-              f"US$ {r['costo_usd']}", "|", r["segundos"], "s")
+              f"US$ {r['costo_usd']}", "|", r["segundos"], "s |", r["stop_reason"], r["tipos_bloque"])
     else:
         ap.print_help()
