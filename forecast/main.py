@@ -28,6 +28,7 @@ from kpi_operacion import router as operacion_router   # KPIs semanales de opera
 from params_edicion import router as params_edicion_router   # Edicion de parametros (Fase 2)
 from analisis_linea import router as analisis_linea_router   # Analisis de linea (carga requerida, semaforo)
 from analisis_diagnostico import router as analisis_diag_router   # Analisis de linea: diagnostico, palancas, IA, casos
+from conocimiento_empirico import router as aprendizaje_router   # Aprendizaje: conocimiento empirico e intervenciones
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
@@ -73,6 +74,7 @@ app.include_router(operacion_router)  # KPIs semanales de operacion por linea
 app.include_router(params_edicion_router)  # Edicion de parametros con PIN e historial
 app.include_router(analisis_linea_router)  # Analisis de linea: carga requerida y semaforo
 app.include_router(analisis_diag_router)  # Analisis de linea: diagnostico, palancas, IA y casos
+app.include_router(aprendizaje_router)  # Aprendizaje: conocimiento empirico e intervenciones
 
 app.add_middleware(
     CORSMiddleware,

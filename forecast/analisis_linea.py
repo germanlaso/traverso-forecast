@@ -60,6 +60,17 @@ def capacidad_demostrada(hoy: date) -> dict:
     mediana y máximo, por línea. Es el 'dato empírico' frente a la capacidad nominal (teórica)."""
     if hoy in _CACHE_DEMO:
         return _CACHE_DEMO[hoy]
+    # (11-11-2026) primero el conocimiento empírico guardado (12 semanas, con confianza);
+    # si no está al día, se recalcula aquí con 8 semanas como antes.
+    try:
+        import conocimiento_empirico as _ce
+        guardado = _ce.leer_capacidad_demostrada()
+        if guardado:
+            _CACHE_DEMO.clear()
+            _CACHE_DEMO[hoy] = guardado
+            return guardado
+    except Exception:
+        pass
     import kpi_operacion as _k
     lunes = _lunes(hoy) - timedelta(days=7 * SEMANAS_DEMOSTRADA)
     serie = defaultdict(list)
