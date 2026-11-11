@@ -59,7 +59,8 @@ def _familia(codigo: str) -> str:
 
 
 # ── Diagnóstico + palancas (núcleo puro) ──────────────────────────────────────
-def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas: list, params: dict) -> dict:
+def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas: list, params: dict,
+                 senales: Optional[dict] = None) -> dict:
     ln = next((x for x in carga["lineas"] if x["linea"] == linea), None)
     if ln is None:
         raise ValueError(f"Línea sin datos: {linea}")
@@ -167,6 +168,18 @@ def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas
     if (ln.get("reposicion_ss") or {}).get("pct_capacidad_3sem", 0) > 0.3:
         causas.append({"codigo": "SS_ELEVADO", "titulo": "Reponer el SS exige mucha capacidad",
                        "evidencia": f"Reponer el SS (stock de seguridad) requiere {ln['reposicion_ss']['horas']} h = {ln['reposicion_ss']['pct_capacidad_3sem']:.0%} de 3 semanas de línea."})
+    # (11-11-2026) evaluación preliminar del forecast de los SKU en quiebre (senales_forecast.py)
+    sosp = [x for x in skus_q if (senales or {}).get(x["sku"], {}).get("forecast_sospechoso")]
+    for x in skus_q:
+        sf = (senales or {}).get(x["sku"])
+        if sf:
+            x["forecast"] = {k: sf.get(k) for k in ("historia_semanas", "venta_reciente_cj_sem", "forecast_prox_cj_sem",
+                                                     "ratio_forecast_vs_venta", "wmape_8s", "sesgo_8s", "forecast_sospechoso")}
+            x["forecast"]["senales"] = [s_["texto"] for s_ in sf.get("senales", [])]
+    if sosp:
+        causas.insert(0, {"codigo": "FORECAST", "titulo": "Posible origen en el forecast",
+                          "evidencia": "; ".join(f"{x['descripcion'] or x['sku']}: " + " ".join(s_["texto"] for s_ in senales[x["sku"]]["senales"])
+                                                 for x in sosp)})
     if skus_q and mc < _al.UMBRAL_AMBAR and not gruesos:
         causas.append({"codigo": "PRIORIDAD_SOLVER", "titulo": "Quiebre con capacidad disponible",
                        "evidencia": f"Carga {mc:.0%} pero hay quiebres: revisar prioridad o secuencia en el plan."})
@@ -266,6 +279,8 @@ Reglas:
   Si una palanca de menor esfuerzo basta, no recomiendes las de mayor esfuerzo como primera acción.
 - Si las señales sugieren que el problema puede venir del forecast (SKU nuevo, poca historia, picos de lanzamiento,
   forecast muy por encima de lo vendido), dilo explícitamente antes de proponer mover capacidad.
+  Las señales calculadas están en la causa "FORECAST" y en evidencia.skus_quiebre[].forecast (historia en semanas,
+  venta reciente vs forecast próximo, WMAPE y sesgo a 1 semana). Úsalas con sus cifras; si no hay señales, no inventes.
 - Usa lo aprendido (intervenciones evaluadas) cuando aplique, citándolo.
 - Lenguaje claro para un planificador o un jefe de producción, sin jerga técnica del sistema.
 - Si citas una semana con "parcial": true (la semana en curso), dilo así: "los N días hábiles que quedan
@@ -345,7 +360,18 @@ def analizar_linea(linea: str, body: SolicitudAnalisis):
             demo = {}
         carga = _al.calcular_carga(piezas["detalle_diario"], piezas["uso_linea"], piezas["alertas"], lineas,
                                    sku_lineas, params, 6, demo, piezas.get("entradas_fijas"))
-        diag = diagnosticar(linea, carga, piezas, lineas, sku_lineas, params)
+        # señales de forecast de los SKU en quiebre de la línea (si falla, el análisis sigue)
+        senales = {}
+        try:
+            import senales_forecast as _sf
+            ln_ = next((x for x in carga["lineas"] if x["linea"] == linea), {})
+            skus_ln = [q["sku"] for k in ("capacidad", "inmediato") for q in (ln_.get("quiebres") or {}).get(k, [])]
+            with _engine.connect() as c:
+                senales = _sf.senales_forecast(c, skus_ln, piezas["detalle_diario"], params)
+        except Exception as e:
+            senales = {"_error": str(e)[:300]}
+        diag = diagnosticar(linea, carga, piezas, lineas, sku_lineas, params,
+                            {k: v for k, v in senales.items() if not k.startswith("_")})
         with _engine.connect() as c:
             apr = _aprendizaje(c, linea)
         rec = recomendar_ia(diag, apr) if body.con_ia else {"disponible": False, "motivo": "Solicitado sin IA."}
