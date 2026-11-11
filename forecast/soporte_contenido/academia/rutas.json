@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "rutas": [
+    {"id": "fundamentos",    "titulo": "Fundamentos",    "publico": "Todos",                            "orden": 1, "modulos": []},
+    {"id": "planificador",   "titulo": "Planificador",   "publico": "Planificadores",                   "orden": 2, "modulos": []},
+    {"id": "produccion",     "titulo": "Producción",     "publico": "Producción (bitácora, casos)",     "orden": 3, "modulos": []},
+    {"id": "administracion", "titulo": "Administración", "publico": "Administración (parámetros, PIN)", "orden": 4, "modulos": []}
+  ]
+}
