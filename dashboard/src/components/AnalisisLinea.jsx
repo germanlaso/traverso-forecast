@@ -89,6 +89,18 @@ function Caso({ caso, onCerrar, onDecidido }) {
     } catch (e) { setMsg({ ok: false, t: e.message }); }
   };
   const accDe = (orden) => (caso.acciones || []).find((x) => x.orden === orden);
+  // (11-11-2026) validación nocturna con el solver (2 semillas, sin promover)
+  const [nivelVal, setNivelVal] = useState(dg.primera_palanca_suficiente && dg.primera_palanca_suficiente <= 3 ? dg.primera_palanca_suficiente : 2);
+  const validar = async () => {
+    setMsg(null);
+    try {
+      const d = await api("POST", `/analisis/casos/${caso.id}/validar`, { solicitado_por: editor || "planificador", nivel: nivelVal });
+      setMsg({ ok: true, t: `Validación #${d.id} programada (${d.descripcion}). ${d.aviso}` });
+      onDecidido && onDecidido();
+    } catch (e) { setMsg({ ok: false, t: e.message }); }
+  };
+  const VAL = { evita_quiebres: [C.tealLt, C.tealMid, "Evita quiebres"], empeora: [C.redLt, C.redDk, "Empeora"],
+                no_concluyente: [C.grayLt, C.gray, "No concluyente"] };
   const ESTADO_ACC = { aceptada: [C.amberLt, C.amberDk, "Pendiente"], hecha: [C.tealLt, C.tealMid, "Hecha"],
                        rechazada: [C.grayLt, C.gray, "No aceptada"], descartada: [C.grayLt, C.gray, "Descartada"] };
   const decidido = !!caso.decision;
@@ -158,6 +170,30 @@ function Caso({ caso, onCerrar, onDecidido }) {
         </table>
         <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>{dg.metodo}{r._meta ? ` · IA: ${r._meta.modelo}, ${r._meta.segundos} s, US$ ${r._meta.costo_usd}` : ""}</div>
       </details>
+
+      <div style={st.sec}>Validación con el solver</div>
+      <div style={{ fontSize: 12, color: C.gray, marginBottom: 6 }}>
+        El análisis estima las palancas con un modelo de horas. Para confirmarlas, el sistema puede correr esta noche el plan completo
+        con la palanca aplicada (sin cambiar nada real), con 2 semillas, y compararlo contra el plan sin cambios.</div>
+      {(caso.validaciones || []).map((v) => (
+        <div key={v.id} style={{ border: `1px solid ${C.grayLt}`, borderRadius: 8, padding: "7px 10px", marginBottom: 6, fontSize: 12.5 }}>
+          <b>#{v.id}</b> · palancas 1 a {v.nivel} · {v.descripcion} ·{" "}
+          {v.estado === "lista" && v.resultado?.veredicto
+            ? <span style={st.pill(...(VAL[v.resultado.veredicto] || VAL.no_concluyente).slice(0, 2))}>{(VAL[v.resultado.veredicto] || VAL.no_concluyente)[2]}</span>
+            : <span style={st.pill(C.blueLt, C.blue)}>{v.estado}</span>}
+          {v.resultado?.texto && <div style={{ color: C.gray, marginTop: 3 }}>{v.resultado.texto}
+            {v.resultado.consistente_entre_semillas === false && " Las semillas no coinciden: el efecto está dentro del ruido del solver."}</div>}
+          {v.estado === "programada" && <div style={{ color: C.muted, marginTop: 3 }}>Se ejecuta desde las 21:00, en la cola del solver.</div>}
+        </div>))}
+      {!(caso.validaciones || []).some((v) => ["programada", "ejecutando"].includes(v.estado)) && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+          <select style={{ ...st.input, width: 280 }} value={nivelVal} onChange={(e) => setNivelVal(Number(e.target.value))}>
+            <option value={1}>Palanca 1: parámetros</option>
+            <option value={2}>Palancas 1 y 2: parámetros + horas extra</option>
+            <option value={3}>Palancas 1 a 3: + línea alternativa (hipótesis)</option>
+          </select>
+          <button style={st.btn} onClick={validar}>Validar con solver esta noche</button>
+        </div>)}
 
       <div style={st.sec}>Tu decisión</div>
       {decidido ? (<>

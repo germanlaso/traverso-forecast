@@ -2728,6 +2728,13 @@ def optimizar_plan(
     except Exception as e:
         logger.warning(f"[optimizer] No pude leer mrp_sku_lineas: {e}")
 
+    # (11-11-2026) escenario de validación: pares SKU-línea alternativos en memoria
+    try:
+        import escenarios as _esc
+        _esc.aplicar_sku_lineas(sku_lineas_rich, set(lineas_params_rich))
+    except Exception as e:
+        logger.warning(f"[ESCENARIO] pares no aplicados: {e}")
+
     # Si la BD no tiene mrp_sku_lineas pobladas, fallback a línea_preferida
     if not sku_lineas_rich:
         for sku, sp in sku_params.items():

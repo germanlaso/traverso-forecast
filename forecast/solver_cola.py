@@ -82,6 +82,19 @@ def turno_solver(tipo: str, descripcion: str = "", solicitado_por: str = "sistem
                 ultimo_aviso = esperado
             time.sleep(INTERVALO_S)
         espera = time.time() - t0
+        # (11-11-2026) ventana: una corrida que obtuvo el turno tarde no debe cruzarse con el
+        # cron del plan. COLA_VENTANA_HASTA=HHMM (UTC): si ya pasó (antes de las 12:00 UTC), se
+        # devuelve el turno sin correr.
+        _hasta = os.environ.get("COLA_VENTANA_HASTA")
+        if _hasta:
+            _ahora = int(time.strftime("%H%M", time.gmtime()))
+            if int(_hasta) <= _ahora < 1200:
+                conn.execute(sa.text("SELECT pg_advisory_unlock(:k)"), {"k": LOCK_KEY})
+                if jid:
+                    conn.execute(sa.text("UPDATE mrp_solver_cola SET estado = 'cancelado', fin = now(), "
+                                         "detalle = 'Fuera de ventana' WHERE id = :i"), {"i": jid})
+                conn.commit()
+                raise SolverOcupado(f"Fuera de la ventana nocturna (después de las {_hasta} UTC): no se corre.")
         if jid:
             # con el lock en mano, nadie más corre: lo que figure 'ejecutando' quedó huérfano
             conn.execute(sa.text("UPDATE mrp_solver_cola SET estado = 'interrumpido', fin = now() "

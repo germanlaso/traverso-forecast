@@ -118,7 +118,21 @@ function CamposAuth({ auth }) {
 }
 
 // ── Recomendaciones ───────────────────────────────────────────────────────────
-function ListaRecos({ recos, onUsar, editables }) {
+// (11-11-2026) descartar una recomendación IA: pide el motivo (queda en la recomendación y,
+// si venía de un caso, cierra la acción y alimenta el aprendizaje)
+async function descartarReco(r, editor, pin) {
+  if (!(editor || "").trim() || (editor || "").trim().length < 3 || !pin || pin.length < 4)
+    throw new Error("Completa tu nombre y el PIN para descartar.");
+  const motivo = window.prompt(`¿Por qué descartas "${ETIQUETA_CAMPO[r.campo] || r.campo}" de ${r.clave}? (queda registrado)`);
+  if (motivo === null) return false;
+  if (motivo.trim().length < 5) throw new Error("El motivo debe tener al menos 5 caracteres.");
+  await api("POST", `/params/recomendaciones/${r.id}/estado`, { estado: "descartada", editor, pin, motivo });
+  try { localStorage.setItem(KEY_EDITOR, editor.trim()); } catch { /* sin storage */ }
+  return true;
+}
+
+function ListaRecos({ recos, onUsar, editables, auth, onDescartada }) {
+  const [err, setErr] = useState(null);
   if (!recos.length) return null;
   return (
     <div>
@@ -140,12 +154,19 @@ function ListaRecos({ recos, onUsar, editables }) {
               <div style={{ color: C.gray, marginTop: 3 }}>{r.motivo}</div>
               <div style={{ color: C.textMuted, fontSize: 10.5, marginTop: 2 }}>{r.fuente}</div>
             </div>
-            {usable && <button style={{ ...st.btn, borderColor: C.purple, color: C.purple, whiteSpace: "nowrap" }}
-                               onClick={() => onUsar(r)}>Usar sugerencia</button>}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {usable && <button style={{ ...st.btn, borderColor: C.purple, color: C.purple, whiteSpace: "nowrap" }}
+                                 onClick={() => onUsar(r)}>Usar sugerencia</button>}
+              {auth && <button style={{ ...st.btn, whiteSpace: "nowrap", fontSize: 11.5, padding: "4px 10px" }}
+                               onClick={async () => { setErr(null); try { if (await descartarReco(r, auth.editor, auth.pin)) onDescartada && onDescartada(r); } catch (e) { setErr(e.message); } }}>
+                Descartar</button>}
+            </div>
           </div>
         );
       })}
-      <div style={{ fontSize: 10.5, color: C.textMuted }}>"Usar sugerencia" solo completa el formulario: el cambio se guarda recién al confirmar.</div>
+      {err && <div style={{ fontSize: 12, color: C.redDk, marginBottom: 4 }}>{err}</div>}
+      <div style={{ fontSize: 10.5, color: C.textMuted }}>"Usar sugerencia" solo completa el formulario: el cambio se guarda recién al confirmar.
+        "Descartar" pide el motivo y usa el nombre y PIN de abajo.</div>
     </div>
   );
 }
@@ -344,7 +365,8 @@ export function ModalEditarSku({ item, linea, onClose, onGuardado }) {
             {!errores.length && advert.length > 0 && hayCambios && <div style={{ background: C.amberLt, color: C.amberDk, borderRadius: 8, padding: "8px 10px", marginTop: 8, fontSize: 12 }}>
               Se puede guardar, pero quedan {advert.length} advertencia(s): revísalas antes de confirmar.</div>}
 
-            <ListaRecos recos={recos} onUsar={usar} editables={["batch_min_u", "cap_bodega_u", "factor_velocidad"]} />
+            <ListaRecos recos={recos} onUsar={usar} editables={["batch_min_u", "cap_bodega_u", "factor_velocidad"]}
+                        auth={auth} onDescartada={(r) => { setRecos(recos.filter((x) => x.id !== r.id)); onGuardado && onGuardado(); }} />
 
             <div style={st.sec}>Confirmar</div>
             <CamposAuth auth={auth} />
@@ -379,6 +401,8 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
   const ini = useMemo(() => (tcIni ? { velocidad_u_hr: p.velocidad_u_hr }
     : { velocidad_u_hr: p.velocidad_u_hr, turnos_dia: p.turnos_dia, horas_turno: p.horas_turno, dias_semana: p.dias_semana }), [p, tcIni]);
   const [turnos, setTurnos] = useState(() => (tcIni || []).map((t) => (t.horas || []).map((h) => String(h))));
+  // (11-11-2026) vigencia por turno (desde / hasta; vacío = sin límite). El turno 1 no lleva fechas.
+  const [vig, setVig] = useState(() => (tcIni || []).map((t) => ({ desde: t.desde || "", hasta: t.hasta || "" })));
   const [calActivo, setCalActivo] = useState(null);
   useEffect(() => { api("GET", "/params/config").then((c) => setCalActivo(!!c.calendario_activo)).catch(() => {}); }, []);
   const [form, setForm] = useState(Object.fromEntries(Object.entries(ini).map(([k, v]) => [k, String(v ?? "")])));
@@ -390,9 +414,10 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
   const [resultado, setResultado] = useState(null);
   const auth = useAuth();
 
-  const turnosNum = useMemo(() => turnos.map((t) => ({ horas: t.map((h) => Number(h || 0)) })), [turnos]);
-  const turnosCambiaron = useMemo(() => tcIni && JSON.stringify(turnosNum.map((t) => t.horas))
-      !== JSON.stringify(tcIni.map((t) => (t.horas || []).map(Number))), [turnosNum, tcIni]);
+  const turnosNum = useMemo(() => turnos.map((t, i) => ({ horas: t.map((h) => Number(h || 0)),
+    ...(i > 0 && vig[i]?.desde ? { desde: vig[i].desde } : {}), ...(i > 0 && vig[i]?.hasta ? { hasta: vig[i].hasta } : {}) })), [turnos, vig]);
+  const _norm = (arr) => JSON.stringify((arr || []).map((t) => [(t.horas || []).map(Number), t.desde || "", t.hasta || ""]));
+  const turnosCambiaron = useMemo(() => tcIni && _norm(turnosNum) !== _norm(tcIni), [turnosNum, tcIni]); // eslint-disable-line
   const cambios = useMemo(() => {
     const c = {};
     Object.keys(ini).forEach((k) => { if (form[k] !== "" && Number(form[k]) !== Number(ini[k])) c[k] = Number(form[k]); });
@@ -456,7 +481,7 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
               </div>
               <div style={st.sec}>Horas por día y turno</div>
               <table style={{ borderCollapse: "collapse" }}>
-                <thead><tr><th style={st.th}></th>{["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((d) => <th key={d} style={{ ...st.th, textAlign: "center" }}>{d}</th>)}<th style={st.th}>Semana</th><th style={st.th}></th></tr></thead>
+                <thead><tr><th style={st.th}></th>{["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((d) => <th key={d} style={{ ...st.th, textAlign: "center" }}>{d}</th>)}<th style={st.th}>Semana</th><th style={st.th}>Vigencia</th><th style={st.th}></th></tr></thead>
                 <tbody>
                   {turnos.map((t, i) => (
                     <tr key={i}>
@@ -467,16 +492,28 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
                                  onChange={(e) => setTurnos(turnos.map((tt, ii) => ii !== i ? tt : tt.map((hh, dd) => dd === d ? e.target.value : hh)))} />
                         </td>))}
                       <td style={{ ...st.td, fontWeight: 700 }}>{fmt1(t.reduce((a, x) => a + Number(x || 0), 0))} h</td>
-                      <td style={st.td}>{i > 0 && <button style={{ ...st.btn, padding: "3px 8px", fontSize: 11 }} onClick={() => setTurnos(turnos.filter((_, ii) => ii !== i))}>Quitar</button>}</td>
+                      <td style={{ ...st.td, whiteSpace: "nowrap" }}>{i === 0 ? <span style={{ fontSize: 11, color: C.textMuted }}>siempre (jornada base)</span> : <>
+                        <input type="date" title="Desde (vacío = desde ya)" style={{ ...st.input, width: 132, padding: "3px 5px", fontSize: 11.5 }} value={vig[i]?.desde || ""}
+                               onChange={(e) => setVig(vig.map((v, ii) => ii !== i ? v : { ...v, desde: e.target.value }))} />
+                        <span style={{ margin: "0 3px", color: C.textMuted }}>→</span>
+                        <input type="date" title="Hasta (vacío = sin fecha de término)" style={{ ...st.input, width: 132, padding: "3px 5px", fontSize: 11.5 }} value={vig[i]?.hasta || ""}
+                               onChange={(e) => setVig(vig.map((v, ii) => ii !== i ? v : { ...v, hasta: e.target.value }))} />
+                        <label style={{ fontSize: 11, color: C.gray, marginLeft: 6 }}>
+                          <input type="checkbox" checked={!vig[i]?.hasta} onChange={(e) => e.target.checked && setVig(vig.map((v, ii) => ii !== i ? v : { ...v, hasta: "" }))} /> sin término</label>
+                      </>}</td>
+                      <td style={st.td}>{i > 0 && <button style={{ ...st.btn, padding: "3px 8px", fontSize: 11 }} onClick={() => { setTurnos(turnos.filter((_, ii) => ii !== i)); setVig(vig.filter((_, ii) => ii !== i)); }}>Quitar</button>}</td>
                     </tr>))}
                   <tr>
                     <td style={{ ...st.td, color: C.gray }}>Total día</td>
                     {[0, 1, 2, 3, 4, 5, 6].map((d) => <td key={d} style={{ ...st.td, textAlign: "center", fontWeight: 700 }}>{fmt1(turnos.reduce((a, t) => a + Number(t[d] || 0), 0))}</td>)}
-                    <td style={{ ...st.td, fontWeight: 700, color: C.tealMid }}>{fmt1(turnos.reduce((a, t) => a + t.reduce((b, x) => b + Number(x || 0), 0), 0))} h</td><td style={st.td}></td>
+                    <td style={{ ...st.td, fontWeight: 700, color: C.tealMid }}>{fmt1(turnos.reduce((a, t) => a + t.reduce((b, x) => b + Number(x || 0), 0), 0))} h</td><td style={st.td}></td><td style={st.td}></td>
                   </tr>
                 </tbody>
               </table>
-              {turnos.length < 3 && <button style={{ ...st.btn, marginTop: 6 }} onClick={() => setTurnos([...turnos, ["0", "0", "0", "0", "0", "0", "0"]])}>＋ Agregar turno</button>}
+              {turnos.length < 3 && <button style={{ ...st.btn, marginTop: 6 }} onClick={() => { setTurnos([...turnos, ["0", "0", "0", "0", "0", "0", "0"]]); setVig([...vig, { desde: "", hasta: "" }]); }}>＋ Agregar turno</button>}
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>
+                Un turno con vigencia (temporada, evento) solo suma horas entre sus fechas; sin fecha de término, rige indefinidamente.
+                Los totales de arriba suman todos los turnos; la vista previa de impacto considera los turnos vigentes hoy.</div>
             </> : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
                 {campo("velocidad_u_hr", "Velocidad (u/h)", { min: 1 })}
@@ -513,7 +550,8 @@ export function ModalEditarLinea({ linea, onClose, onGuardado }) {
                   <b>No se puede guardar:</b> el cambio genera errores nuevos en SKU de la línea.</div>}
               </>}
 
-            <ListaRecos recos={recos} onUsar={() => {}} editables={[]} />
+            <ListaRecos recos={recos} onUsar={() => {}} editables={[]}
+                        auth={auth} onDescartada={(r) => { setRecos(recos.filter((x) => x.id !== r.id)); onGuardado && onGuardado(); }} />
 
             <div style={st.sec}>Confirmar</div>
             <CamposAuth auth={auth} />
@@ -596,8 +634,10 @@ function Excepciones({ linea, auth }) {
 }
 
 // ── Panel resumen de recomendaciones abiertas ─────────────────────────────────
-export function PanelRecomendaciones({ recos, onAbrir }) {
+export function PanelRecomendaciones({ recos, onAbrir, onCambio }) {
   const [abierto, setAbierto] = useState(false);
+  const [editor, setEditor] = useState(() => { try { return localStorage.getItem(KEY_EDITOR) || ""; } catch { return ""; } });
+  const [pin, setPin] = useState(""), [err, setErr] = useState(null);
   if (!recos.length) return null;
   const porPrioridad = recos.reduce((m, r) => ({ ...m, [r.prioridad]: (m[r.prioridad] || 0) + 1 }), {});
   return (
@@ -609,9 +649,15 @@ export function PanelRecomendaciones({ recos, onAbrir }) {
         <span style={{ fontSize: 11, color: C.gray }}>· clic en una para abrir el editor</span>
       </div>
       {abierto && (
-        <div style={{ padding: "0 14px 12px", maxHeight: 320, overflowY: "auto" }}>
+        <div style={{ padding: "0 14px 12px", maxHeight: 360, overflowY: "auto" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, fontSize: 11.5, color: C.gray }}>
+            Para descartar:
+            <input style={{ ...st.input, width: 180, padding: "4px 6px" }} placeholder="Tu nombre" value={editor} onChange={(e) => setEditor(e.target.value)} />
+            <input style={{ ...st.input, width: 90, padding: "4px 6px" }} placeholder="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} />
+            {err && <span style={{ color: C.redDk }}>{err}</span>}
+          </div>
           <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 8 }}>
-            <thead><tr>{["Prioridad", "Qué", "Dónde", "Vigente", "Sugerido", "Motivo"].map((h) => <th key={h} style={st.th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Prioridad", "Qué", "Dónde", "Vigente", "Sugerido", "Motivo", ""].map((h) => <th key={h} style={st.th}>{h}</th>)}</tr></thead>
             <tbody>{recos.map((r) => (
               <tr key={r.id} onClick={() => onAbrir(r)} style={{ cursor: "pointer" }}>
                 <td style={st.td}><span style={st.pill(...(PRIORIDAD[r.prioridad] || PRIORIDAD.media))}>{r.prioridad}</span></td>
@@ -620,6 +666,9 @@ export function PanelRecomendaciones({ recos, onAbrir }) {
                 <td style={st.td}>{fmt2(r.valor_vigente)}</td>
                 <td style={{ ...st.td, color: C.purple, fontWeight: 700 }}>{r.valor_sugerido != null ? fmt2(r.valor_sugerido) : (r.rango || "—")}</td>
                 <td style={{ ...st.td, fontSize: 11.5, color: C.gray }}>{r.motivo}</td>
+                <td style={st.td}><button style={{ ...st.btn, padding: "3px 8px", fontSize: 11 }}
+                  onClick={async (e) => { e.stopPropagation(); setErr(null);
+                    try { if (await descartarReco(r, editor, pin)) onCambio && onCambio(); } catch (x) { setErr(x.message); } }}>Descartar</button></td>
               </tr>))}</tbody>
           </table>
         </div>

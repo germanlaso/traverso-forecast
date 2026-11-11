@@ -91,7 +91,15 @@ def derivados_linea(linea: dict) -> dict:
     dias   = _i(linea.get("dias_semana"), 5)
     tc     = _turnos_config(linea.get("turnos_config"))
 
+    temporales = []
     if tc:
+        # (11-11-2026) turnos con vigencia: la semana tipo usa los turnos vigentes HOY
+        from datetime import date as _date
+        import calendario as _cal
+        hoy = _date.today()
+        temporales = [{"turno": t.get("turno"), "desde": t.get("desde"), "hasta": t.get("hasta"),
+                       "vigente_hoy": _cal.turno_vigente(t, hoy)} for t in tc if t.get("desde") or t.get("hasta")]
+        tc = [t for t in tc if _cal.turno_vigente(t, hoy)] or tc[:1]
         horas_por_dia = [sum(_f((t.get("horas") or [0] * 7)[i]) for t in tc) for i in range(7)]
         laborables = [h for h in horas_por_dia if h > 0] or [0.0]
         h_max, h_min = max(laborables), min(laborables)
@@ -119,6 +127,7 @@ def derivados_linea(linea: dict) -> dict:
         "dias_semana":    dias,
         "turnos_dia":     turnos,
         "calendario":     bool(tc),
+        "turnos_temporales": temporales,
     }
 
 

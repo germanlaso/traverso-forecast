@@ -52,6 +52,10 @@ function capDiaBase(linea,fecha){
 // (11-11-2026) menos las horas bloqueadas a futuro en la bitácora (paradas planificadas y
 // bloqueos programados), igual que el solver.
 function capDiaDe(linea,fecha){
+  // (11-11-2026) si el backend envía la capacidad por fecha (patrón, turnos con vigencia,
+  // feriados, excepciones y bloqueos), se usa tal cual: es la misma que ve el solver.
+  const cf=linea?.cap_u_fecha?.[fecha];
+  if(cf!=null) return cf;
   const base=capDiaBase(linea,fecha);
   const hb=linea?.horas_bloqueadas?.[fecha];
   const vel=linea?.velocidad_u_hr??((linea?.horas_disp_sem>0)?(linea.cap_u_semana/linea.horas_disp_sem):0);

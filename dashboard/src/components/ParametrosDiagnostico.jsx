@@ -392,7 +392,7 @@ export default function ParametrosDiagnostico() {
         <KPI label="Sin línea" value={r.n_sin_linea} color={C.gray} />
       </div>
 
-      <PanelRecomendaciones recos={recos} onAbrir={abrirDesdeReco} />
+      <PanelRecomendaciones recos={recos} onAbrir={abrirDesdeReco} onCambio={() => recargar(true)} />
 
       {/* Aviso de líneas sobrecargadas: el hallazgo que no es de parámetros sino de capacidad */}
       {sobrecargadas.length > 0 && (
@@ -501,7 +501,9 @@ export default function ParametrosDiagnostico() {
               </div>
               <div style={{ fontSize: 11.5, color: C.textMuted, minWidth: 200 }}>
                 {fmtN(d.velocidad_u_hr)} u/hr · {d.horas_por_dia
-                  ? <span title="Horas por día (lunes a domingo), sumando turnos">{d.turnos_dia}t · {d.horas_por_dia.slice(0, 5).map((h) => fmt1(h)).join("-")}{(d.horas_por_dia[5] || d.horas_por_dia[6]) ? ` · S ${fmt1(d.horas_por_dia[5])} D ${fmt1(d.horas_por_dia[6])}` : ""} = {fmt1(d.horas_semana)} h/sem</span>
+                  ? <span title="Horas por día (lunes a domingo), sumando turnos">{d.turnos_dia}t · {d.horas_por_dia.slice(0, 5).map((h) => fmt1(h)).join("-")}{(d.horas_por_dia[5] || d.horas_por_dia[6]) ? ` · S ${fmt1(d.horas_por_dia[5])} D ${fmt1(d.horas_por_dia[6])}` : ""} = {fmt1(d.horas_semana)} h/sem{(d.turnos_temporales || []).length > 0 &&
+                    <b style={{ color: C.purple, marginLeft: 4 }} title={(d.turnos_temporales || []).map((t) => `Turno ${t.turno}: ${t.desde || "ya"} → ${t.hasta || "sin término"}${t.vigente_hoy ? " (vigente)" : ""}`).join(" · ")}>
+                      · {(d.turnos_temporales || []).length} turno(s) con vigencia</b>}</span>
                   : <>{d.turnos_dia}t × {fmt1(d.horas_turno ? d.horas_turno : d.horas_dia / (d.turnos_dia || 1))}h × {d.dias_semana}d</>}
               </div>
               <div style={{ fontSize: 11.5, minWidth: 175 }}>

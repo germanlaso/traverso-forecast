@@ -315,6 +315,20 @@ def horas_linea_dia(
     return base
 
 
+def turno_vigente(t: dict, fecha: date) -> bool:
+    """(11-11-2026) Un turno puede tener vigencia: 'desde' y/o 'hasta' (YYYY-MM-DD, inclusive).
+    Sin fechas = sin límite (el turno base siempre)."""
+    d, h = t.get("desde"), t.get("hasta")
+    try:
+        if d and fecha < (d if isinstance(d, date) else date.fromisoformat(str(d)[:10])):
+            return False
+        if h and fecha > (h if isinstance(h, date) else date.fromisoformat(str(h)[:10])):
+            return False
+    except ValueError:
+        return True
+    return True
+
+
 def _horas_base(fecha, horas_turno, turnos_dia, turnos_config, excepciones) -> float:
     if excepciones:
         h = excepciones.get(fecha)
@@ -326,17 +340,19 @@ def _horas_base(fecha, horas_turno, turnos_dia, turnos_config, excepciones) -> f
         return 0.0
     if turnos_config:
         wd = fecha.weekday()
-        return float(sum(float((t.get("horas") or [0] * 7)[wd] or 0) for t in turnos_config))
+        return float(sum(float((t.get("horas") or [0] * 7)[wd] or 0) for t in turnos_config if turno_vigente(t, fecha)))
     if es_finde(fecha):
         return 0.0
     return float(horas_turno) * int(turnos_dia)
 
 
 def horas_semana_patron(turnos_config: list | None, horas_turno: float = 8,
-                        turnos_dia: int = 1, dias_semana: int = 5) -> float:
-    """Horas de una semana TIPO (sin feriados ni excepciones)."""
+                        turnos_dia: int = 1, dias_semana: int = 5, fecha_ref: date | None = None) -> float:
+    """Horas de una semana TIPO (sin feriados ni excepciones), con los turnos vigentes en
+    fecha_ref (por defecto hoy)."""
     if turnos_config:
-        return float(sum(float(h or 0) for t in turnos_config for h in (t.get("horas") or [])))
+        ref = fecha_ref or date.today()
+        return float(sum(float(h or 0) for t in turnos_config if turno_vigente(t, ref) for h in (t.get("horas") or [])))
     return float(horas_turno) * int(turnos_dia) * int(dias_semana)
 
 
@@ -461,6 +477,16 @@ if __name__ == "__main__":
     assert horas_linea_dia(date(2026, 11, 21), turnos_config=_p42, excepciones={date(2026, 11, 21): 8},
                            bloqueos={date(2026, 11, 21): 1}) == 7.0, "sábado trabajado con bloqueo"
     print("✓ Bloqueos programados de la bitácora")
+    # (11-11-2026) turno con vigencia (temporada)
+    _ptemp = _p42 + [{"turno": 2, "horas": [4, 4, 4, 4, 0, 0, 0], "desde": "2026-12-01", "hasta": "2027-02-28"}]
+    assert horas_linea_dia(date(2026, 11, 25), turnos_config=_ptemp) == 8.0, "antes de la vigencia"
+    assert horas_linea_dia(date(2026, 12, 2), turnos_config=_ptemp) == 12.0, "dentro de la vigencia"
+    assert horas_linea_dia(date(2027, 3, 3), turnos_config=_ptemp) == 8.0, "después de la vigencia"
+    _psin = _p42 + [{"turno": 2, "horas": [4, 4, 4, 4, 0, 0, 0], "desde": "2026-12-01"}]
+    assert horas_linea_dia(date(2027, 6, 2), turnos_config=_psin) == 12.0, "sin fecha de término"
+    assert horas_semana_patron(_ptemp, fecha_ref=date(2026, 12, 10)) == 58.0, "semana tipo en temporada"
+    assert horas_semana_patron(_ptemp, fecha_ref=date(2026, 11, 10)) == 42.0, "semana tipo fuera de temporada"
+    print("✓ Turnos con vigencia (desde / hasta / sin término)")
 
     # Test 7: SS diario (suma de próximos ss_dias hábiles desde d inclusive)
     from calendario import calcular_ss_diario

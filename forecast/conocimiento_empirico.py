@@ -128,6 +128,39 @@ def intervenciones(veredicto: Optional[str] = None):
         return {"intervenciones": [dict(r._mapping) for r in c.execute(sa.text(sql), p)]}
 
 
+@router.get("/resumen")
+def resumen():
+    """Todo lo aprendido en una consulta (pantalla 'Lo aprendido')."""
+    with _engine.connect() as c:
+        def q(sql, p=None):
+            try:
+                return [dict(r._mapping) for r in c.execute(sa.text(sql), p or {})]
+            except Exception:
+                c.rollback()
+                return []
+        conoc = q("""SELECT * FROM mrp_conocimiento_empirico ORDER BY entidad, metrica, valor_empirico DESC NULLS LAST""")
+        interv = q("""SELECT id, caso_id, creado_en, aplicado_en, palanca, linea, skus, hipotesis, veredicto, aprendizaje,
+                             efecto_observado, evidencia, evaluado_en, evaluado_por
+                      FROM mrp_intervenciones ORDER BY COALESCE(evaluado_en, creado_en) DESC""")
+        efect = q("""SELECT palanca, veredicto, count(*) AS n FROM mrp_intervenciones GROUP BY 1, 2 ORDER BY 1, 2""")
+        casos = q("""SELECT origen, COALESCE(decision, 'pendiente') AS decision, estado, count(*) AS n
+                     FROM mrp_analisis_casos WHERE estado <> 'error' GROUP BY 1, 2, 3""")
+        descartes = q("""SELECT id, linea, decision_en, decision_por, decision_motivo FROM mrp_analisis_casos
+                         WHERE decision = 'descartada' ORDER BY decision_en DESC LIMIT 15""")
+        pend = q("""SELECT a.id, a.caso_id, k.linea, a.palanca, a.accion, a.creado_en, a.recomendaciones
+                    FROM mrp_analisis_acciones a JOIN mrp_analisis_casos k ON k.id = a.caso_id
+                    WHERE a.estado = 'aceptada' ORDER BY a.creado_en""")
+    # intervenciones: resumen compacto de la evaluación automática (preliminar / final)
+    for i in interv:
+        ev = i.pop("evidencia", None) or {}
+        e = ev.get("eval_14d") or ev.get("eval_7d")
+        i["evaluacion"] = ({"etapa": e.get("etapa"), "texto": e.get("texto"), "veredicto": e.get("veredicto"),
+                            "planes": [e.get("plan_antes"), e.get("plan_despues")]} if e else None)
+        i["evaluacion_manual"] = None if e else ({"planes": ev.get("planes"), "metodo": ev.get("metodo")} if ev else None)
+    return {"conocimiento": conoc, "intervenciones": interv, "efectividad": efect, "casos": casos,
+            "descartes": descartes, "acciones_pendientes": pend}
+
+
 @router.post("/conocimiento/recalcular")
 def recalcular(semanas: int = 12):
     datos = calcular_capacidad_demostrada(semanas=semanas)

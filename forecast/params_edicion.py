@@ -124,7 +124,24 @@ def _validar_turnos(v) -> list:
             raise HTTPException(422, f"Turno {i + 1}: horas inválidas.")
         if any(x < 0 or x > 12 for x in h):
             raise HTTPException(422, f"Turno {i + 1}: cada día debe tener entre 0 y 12 h.")
-        out.append({"turno": i + 1, "horas": h})
+        item = {"turno": i + 1, "horas": h}
+        # (11-11-2026) vigencia opcional (temporadas, eventos): desde / hasta, vacío = sin límite
+        from datetime import date as _date
+        des, has = (t.get("desde") or None), (t.get("hasta") or None)
+        if (des or has) and i == 0:
+            raise HTTPException(422, "El turno 1 es la jornada base: no lleva fechas de vigencia.")
+        try:
+            d1 = _date.fromisoformat(str(des)[:10]) if des else None
+            d2 = _date.fromisoformat(str(has)[:10]) if has else None
+        except ValueError:
+            raise HTTPException(422, f"Turno {i + 1}: fechas de vigencia inválidas (YYYY-MM-DD).")
+        if d1 and d2 and d2 < d1:
+            raise HTTPException(422, f"Turno {i + 1}: la fecha 'hasta' es anterior a 'desde'.")
+        if d1:
+            item["desde"] = d1.isoformat()
+        if d2:
+            item["hasta"] = d2.isoformat()
+        out.append(item)
     for d in range(7):
         if sum(t["horas"][d] for t in out) > 24:
             raise HTTPException(422, f"{DIAS[d]}: la suma de turnos supera 24 h.")
@@ -343,21 +360,48 @@ def _vincular_intervencion(c, reco_id, hid):
 
 
 def _cerrar_acciones_de_caso(c, reco_ids, editor):
-    """Acción de un caso cuyas recomendaciones ya se aplicaron todas -> 'hecha'; caso sin
-    pendientes -> 'cerrado'."""
+    _sincronizar_acciones(c, editor)
+
+
+def _sincronizar_acciones(c, editor, motivo: str = ""):
+    """(11-11-2026) Acciones de casos con cambios de parámetros: cuando ya no queda ninguna
+    recomendación ABIERTA para sus (SKU, campo) -> 'hecha' si alguna se aplicó después de
+    aceptarla, o 'descartada' si no. Funciona aunque varias acciones compartan la misma
+    recomendación (sin duplicados). Cierra los casos sin pendientes."""
     try:
-      with c.begin_nested():   # savepoint: un error aquí no aborta la edición
-        c.execute(sa.text("""
-            UPDATE mrp_analisis_acciones a SET estado = 'hecha', resuelto_por = :ed, resuelto_en = now(),
-                   comentario = 'Cambios aplicados en el panel de parámetros'
-            WHERE a.estado = 'aceptada' AND a.intervencion_id IS NOT NULL
-              AND EXISTS (SELECT 1 FROM mrp_params_recomendaciones r WHERE r.intervencion_id = a.intervencion_id AND r.id = ANY(:ids))
-              AND NOT EXISTS (SELECT 1 FROM mrp_params_recomendaciones r WHERE r.intervencion_id = a.intervencion_id AND r.estado = 'abierta')"""),
-            {"ids": [int(i) for i in reco_ids], "ed": editor.strip()})
-        c.execute(sa.text("""
-            UPDATE mrp_analisis_casos k SET estado = 'cerrado'
-            WHERE k.estado = 'en_seguimiento'
-              AND NOT EXISTS (SELECT 1 FROM mrp_analisis_acciones a WHERE a.caso_id = k.id AND a.estado = 'aceptada')"""))
+        with c.begin_nested():   # savepoint: un error aquí no aborta la edición
+            filas = c.execute(sa.text("""
+                SELECT a.id, a.intervencion_id,
+                       EXISTS (SELECT 1 FROM jsonb_array_elements(a.cambios_parametros) cp
+                               JOIN mrp_params_recomendaciones r ON r.entidad = 'sku' AND r.clave = cp->>'sku'
+                                AND r.campo = cp->>'campo' AND r.estado = 'aplicada' AND r.estado_en >= a.creado_en) AS aplicada
+                FROM mrp_analisis_acciones a
+                WHERE a.estado = 'aceptada' AND a.recomendaciones > 0
+                  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(a.cambios_parametros) cp
+                                  JOIN mrp_params_recomendaciones r ON r.entidad = 'sku' AND r.clave = cp->>'sku'
+                                   AND r.campo = cp->>'campo' AND r.estado = 'abierta')""")).fetchall()
+            for f in filas:
+                if f.aplicada:
+                    c.execute(sa.text("""UPDATE mrp_analisis_acciones SET estado = 'hecha', resuelto_por = :ed, resuelto_en = now(),
+                                         comentario = 'Cambios aplicados en el panel de parámetros' WHERE id = :i"""),
+                              {"ed": editor.strip(), "i": f.id})
+                    if f.intervencion_id:
+                        c.execute(sa.text("UPDATE mrp_intervenciones SET aplicado_en = COALESCE(aplicado_en, now()) WHERE id = :i"),
+                                  {"i": f.intervencion_id})
+                else:
+                    c.execute(sa.text("""UPDATE mrp_analisis_acciones SET estado = 'descartada', resuelto_por = :ed,
+                                         resuelto_en = now(), comentario = :m WHERE id = :i"""),
+                              {"ed": editor.strip(), "m": f"Recomendación descartada en el panel{': ' + motivo if motivo else ''}",
+                               "i": f.id})
+                    if f.intervencion_id:
+                        c.execute(sa.text("""UPDATE mrp_intervenciones SET veredicto = 'no_concluyente', evaluado_en = now(),
+                                             evaluado_por = :ed, aprendizaje = :m WHERE id = :i AND veredicto = 'pendiente'"""),
+                                  {"ed": editor.strip(), "m": f"No se aplicó (descartada en el panel){': ' + motivo if motivo else ''}",
+                                   "i": f.intervencion_id})
+            c.execute(sa.text("""
+                UPDATE mrp_analisis_casos k SET estado = 'cerrado'
+                WHERE k.estado = 'en_seguimiento'
+                  AND NOT EXISTS (SELECT 1 FROM mrp_analisis_acciones a WHERE a.caso_id = k.id AND a.estado = 'aceptada')"""))
     except Exception:
         pass
 
@@ -560,13 +604,20 @@ def recomendaciones(estado: Optional[str] = "abierta", sku: Optional[str] = None
 def estado_reco(rid: int, body: EstadoReco):
     if body.estado not in ("descartada", "abierta"):
         raise HTTPException(422, "Estado inválido: usar 'descartada' o 'abierta'.")
-    _verificar_identidad(body.editor, body.motivo or "Cambio de estado")
+    _verificar_identidad(body.editor, body.motivo or "")
     with _engine.begin() as c:
         _verificar_pin(c, body.pin)
-        n = c.execute(sa.text("""UPDATE mrp_params_recomendaciones SET estado = :e, estado_por = :ed, estado_en = now()
-                                 WHERE id = :i"""), {"e": body.estado, "ed": body.editor.strip(), "i": rid}).rowcount
-    if not n:
-        raise HTTPException(404, "Recomendación no encontrada.")
+        r = c.execute(sa.text("SELECT * FROM mrp_params_recomendaciones WHERE id = :i FOR UPDATE"), {"i": rid}).first()
+        if r is None:
+            raise HTTPException(404, "Recomendación no encontrada.")
+        if r.estado == "aplicada":
+            raise HTTPException(409, "La recomendación ya fue aplicada: para deshacer, revierte el cambio en el historial.")
+        c.execute(sa.text("""UPDATE mrp_params_recomendaciones SET estado = :e, estado_por = :ed, estado_en = now(),
+                             motivo = CASE WHEN :e = 'descartada' THEN motivo || ' | Descartada: ' || :m ELSE motivo END
+                             WHERE id = :i"""),
+                  {"e": body.estado, "ed": body.editor.strip(), "m": (body.motivo or "").strip(), "i": rid})
+        if body.estado == "descartada":
+            _sincronizar_acciones(c, body.editor, (body.motivo or "").strip())
     return {"id": rid, "estado": body.estado}
 
 

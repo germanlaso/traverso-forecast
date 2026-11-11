@@ -18,6 +18,7 @@ import BitacoraEventos from './components/BitacoraEventos';
 import DashboardOperacion from './components/DashboardOperacion';
 import InformesOperacion from './components/InformesOperacion';
 import AnalisisLinea from './components/AnalisisLinea';
+import LoAprendido from './components/LoAprendido';
 import Landing from './components/Landing';
 import PrecisionForecast from './components/PrecisionForecast';
 
@@ -43,7 +44,7 @@ const BACKEND_URL = process.env.REACT_APP_API_BASE
 // gráficos conservan el tope de 1100 px: una línea de ~1900 px se lee mal y los
 // gráficos de altura fija (330 px) se achatan al estirarse.
 // Para volver al comportamiento anterior, dejar TABS_ANCHAS vacío.
-const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion','campanas','resumen30','monitor','rendimiento','informeia','analisislinea']);
+const TABS_ANCHAS = new Set(['parametros','detalle','stockdiario','programacion','campanas','resumen30','monitor','rendimiento','informeia','analisislinea','aprendido']);
 const MAIN_MAXW_ANCHO = 1800;
 
 // ── Modelo de navegación en dos niveles (mismos keys de tab de siempre) ──
@@ -51,7 +52,7 @@ const NAV = [
   { key:'home', label:'🏠 Inicio', tab:'home' },
   { key:'forecast', label:'📈 Forecast', tabs:[['forecast','Forecast de Demanda'],['eventos','Eventos'],['precision','Precisión Forecast']] },
   { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
-  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake'],['bitacora','Bitácora'],['rendimiento','Rendimiento'],['informeia','Informe IA'],['analisislinea','Análisis de Línea']] },
+  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake'],['bitacora','Bitácora'],['rendimiento','Rendimiento'],['informeia','Informe IA'],['analisislinea','Análisis de Línea'],['aprendido','Lo aprendido']] },
   { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
 ];
 
@@ -1339,6 +1340,7 @@ function AppInner() {
         {activeTab === 'rendimiento' && <DashboardOperacion />}
         {activeTab === 'informeia' && <InformesOperacion />}
         {activeTab === 'analisislinea' && <AnalisisLinea />}
+        {activeTab === 'aprendido' && <LoAprendido />}
         {activeTab === 'campanas' && <Campanas />}
         {activeTab === 'eventos' && <Eventos skus={skus} />}
         {activeTab === 'parametros' && <ParametrosDiagnostico />}

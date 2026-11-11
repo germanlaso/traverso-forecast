@@ -127,7 +127,12 @@ def _normalizar_turnos_config(v) -> Optional[list]:
         h = list((t or {}).get("horas") or [])
         if len(h) != 7:
             continue
-        out.append({"turno": int(t.get("turno", len(out) + 1)), "horas": [float(x or 0) for x in h]})
+        item = {"turno": int(t.get("turno", len(out) + 1)), "horas": [float(x or 0) for x in h]}
+        if t.get("desde"):
+            item["desde"] = str(t["desde"])[:10]      # (11-11-2026) vigencia del turno
+        if t.get("hasta"):
+            item["hasta"] = str(t["hasta"])[:10]
+        out.append(item)
     return out or None
 
 
@@ -270,6 +275,12 @@ def load_params_from_db():
             preferida        = bool(row.get("preferida", False)),
             factor_velocidad = float(row.get("factor_velocidad", 1.0) or 1.0),
         ))
+    # (11-11-2026) escenario de validación en memoria (ESCENARIO_JSON): nunca toca la BD
+    try:
+        import escenarios as _esc
+        _esc.aplicar_mrp(sku_params, lineas)
+    except Exception as _e:
+        print(f"[ESCENARIO] no aplicado: {_e}")
     return sku_params, lineas, sku_lineas
 
 

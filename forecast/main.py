@@ -30,6 +30,7 @@ from analisis_linea import router as analisis_linea_router   # Analisis de linea
 from analisis_diagnostico import router as analisis_diag_router   # Analisis de linea: diagnostico, palancas, IA, casos
 from conocimiento_empirico import router as aprendizaje_router   # Aprendizaje: conocimiento empirico e intervenciones
 from solver_cola import router as solver_cola_router   # Cola unica del solver (R17)
+from analisis_programado import router as analisis_prog_router   # Validacion nocturna con solver
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
@@ -77,6 +78,7 @@ app.include_router(analisis_linea_router)  # Analisis de linea: carga requerida 
 app.include_router(analisis_diag_router)  # Analisis de linea: diagnostico, palancas, IA y casos
 app.include_router(aprendizaje_router)  # Aprendizaje: conocimiento empirico e intervenciones
 app.include_router(solver_cola_router)  # Cola unica del solver (R17)
+app.include_router(analisis_prog_router)  # Validacion nocturna con solver
 
 app.add_middleware(
     CORSMiddleware,
@@ -584,6 +586,20 @@ def _fetch_ov_split(skus_validos: set) -> tuple[dict, dict]:
     except Exception as e:
         logger.warning(f"[Plan] No pude leer OV de HANA; se planifica SIN pedidos: {e}")
         return {}, {}
+
+
+def _cap_u_fecha_linea(l, dias: int = 84) -> dict:
+    """{YYYY-MM-DD: unidades} de capacidad de la línea desde hoy, con la fuente única del calendario."""
+    import calendario as _cal
+    from datetime import date as _d, timedelta as _td
+    out, hoy = {}, _d.today()
+    for i in range(dias):
+        f = hoy + _td(days=i)
+        h = _cal.horas_linea_dia(f, float(l.horas_turno or 0), int(l.turnos_dia or 0),
+                                 getattr(l, "turnos_config", None), getattr(l, "excepciones", None),
+                                 getattr(l, "bloqueos", None))
+        out[f.isoformat()] = round(float(l.velocidad_u_hr or 0) * h)
+    return out
 
 
 @app.post("/plan", tags=["Plan de Produccion"])
@@ -1524,6 +1540,9 @@ def get_mrp_params():
                                           for f, h in (getattr(l, "excepciones", None) or {}).items()},
                     "horas_bloqueadas": {f.isoformat() if hasattr(f, "isoformat") else str(f): round(float(h), 2)
                                          for f, h in (getattr(l, "bloqueos", None) or {}).items()},
+                    # (11-11-2026) capacidad por FECHA (12 semanas): patrón, turnos con vigencia,
+                    # feriados, excepciones y bloqueos -> la grilla usa exactamente lo del solver
+                    "cap_u_fecha": _cap_u_fecha_linea(l),
                 }
                 for l in lineas.values()
             ],

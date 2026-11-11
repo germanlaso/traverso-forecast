@@ -425,6 +425,11 @@ def obtener_caso(cid: int):
                 "SELECT * FROM mrp_analisis_acciones WHERE caso_id = :i ORDER BY orden"), {"i": cid})]
         except Exception:
             caso["acciones"] = []
+        try:
+            caso["validaciones"] = [dict(v._mapping) for v in c.execute(sa.text(
+                "SELECT * FROM mrp_analisis_validaciones WHERE caso_id = :i ORDER BY id DESC"), {"i": cid})]
+        except Exception:
+            caso["validaciones"] = []
     return caso
 
 
@@ -508,6 +513,26 @@ def decidir(cid: int, body: Decision):
                     for cp in a.get("cambios_parametros") or []:
                         if cp.get("campo") not in ("batch_min_u", "cap_bodega_u") or not cp.get("sku"):
                             continue
+                        # (11-11-2026) sin duplicados: si ya hay una recomendación ABIERTA para el mismo
+                        # SKU y campo (de cualquier fuente), con el mismo valor se reutiliza; con otro
+                        # valor, la nueva la reemplaza (la anterior queda descartada con el motivo).
+                        prev = c.execute(sa.text("""SELECT id, valor_sugerido, fuente FROM mrp_params_recomendaciones
+                                                     WHERE estado = 'abierta' AND entidad = 'sku' AND clave = :s AND campo = :c
+                                                     ORDER BY id LIMIT 1"""), {"s": cp["sku"], "c": cp["campo"]}).first()
+                        if prev is not None and prev.valor_sugerido is not None and cp.get("valor") is not None \
+                                and abs(float(prev.valor_sugerido) - float(cp["valor"])) < 0.5:
+                            c.execute(sa.text("""UPDATE mrp_params_recomendaciones
+                                                 SET intervencion_id = COALESCE(intervencion_id, :iv), caso_id = COALESCE(caso_id, :cid),
+                                                     motivo = motivo || :extra WHERE id = :i"""),
+                                      {"iv": interv_id, "cid": cid, "i": prev.id,
+                                       "extra": f" | También recomendada en análisis de línea #{cid}."})
+                            n_rec += 1
+                            continue
+                        if prev is not None:
+                            c.execute(sa.text("""UPDATE mrp_params_recomendaciones SET estado = 'descartada',
+                                                 estado_por = 'Sistema', estado_en = now(),
+                                                 motivo = motivo || :m WHERE id = :i"""),
+                                      {"i": prev.id, "m": f" | Reemplazada por análisis de línea #{cid} (valor {cp.get('valor')})."})
                         n_rec += c.execute(sa.text("""
                             INSERT INTO mrp_params_recomendaciones (entidad, clave, linea, campo, valor_actual, valor_sugerido,
                                                                     rango, motivo, prioridad, fuente, caso_id, intervencion_id)
