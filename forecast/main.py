@@ -31,6 +31,7 @@ from analisis_diagnostico import router as analisis_diag_router   # Analisis de 
 from conocimiento_empirico import router as aprendizaje_router   # Aprendizaje: conocimiento empirico e intervenciones
 from solver_cola import router as solver_cola_router   # Cola unica del solver (R17)
 from analisis_programado import router as analisis_prog_router   # Validacion nocturna con solver
+from informe_semanal import router as informes_router   # Informe semanal automatico
 from db_mrp import (numero_of_tentativo, get_orden_by_key,
                     crear_tablas_params, get_all_lineas, get_all_sku_params,
                     update_sku_param, update_linea)
@@ -79,6 +80,7 @@ app.include_router(analisis_diag_router)  # Analisis de linea: diagnostico, pala
 app.include_router(aprendizaje_router)  # Aprendizaje: conocimiento empirico e intervenciones
 app.include_router(solver_cola_router)  # Cola unica del solver (R17)
 app.include_router(analisis_prog_router)  # Validacion nocturna con solver
+app.include_router(informes_router)  # Informe semanal automatico
 
 app.add_middleware(
     CORSMiddleware,
