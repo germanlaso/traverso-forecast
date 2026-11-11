@@ -50,10 +50,10 @@ function Semanas({ semanas, demostrada }) {
         const v = s.carga_requerida || 0, col = v > 0.95 ? C.red : v > 0.85 ? C.amber : C.teal;
         return (
           <g key={s.semana}>
-            <title>{`Sem ${s.semana_iso}: requerida ${pct(s.carga_requerida)} · programada ${pct(s.uso_programado)}`}</title>
+            <title>{`Sem ${s.semana_iso}${s.parcial ? ` (en curso: ${s.dias_habiles} días hábiles, ${ddmm(s.desde)}–${ddmm(s.hasta)})` : ""}: requerida ${pct(s.carga_requerida)} (${h1(s.horas_requeridas)} h de ${h1(s.horas_nominales)} h nominales) · programada ${pct(s.uso_programado)}`}</title>
             <rect x={i * bw + bw * .2} y={y(v)} width={bw * .6} height={H - 6 - y(v)} fill={col} opacity={.75} rx={2} />
             <rect x={i * bw + bw * .12} y={y(s.uso_programado || 0) - 1} width={bw * .76} height={2.5} fill={C.text} />
-            <text x={i * bw + bw / 2} y={H + 9} fontSize={9} textAnchor="middle" fill={C.muted}>S{s.semana_iso}</text>
+            <text x={i * bw + bw / 2} y={H + 9} fontSize={9} textAnchor="middle" fill={C.muted}>S{s.semana_iso}{s.parcial ? "*" : ""}</text>
           </g>
         );
       })}
@@ -173,7 +173,7 @@ export default function AnalisisLinea() {
       <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Análisis de Línea</h2>
       <p style={{ margin: "0 0 12px", fontSize: 12.5, color: C.gray }}>
         ¿Puede cada línea cumplir lo que viene? <b>Barra</b> = carga requerida por la demanda · <b>marca negra</b> = lo programado en el plan ·
-        <span style={{ color: C.red }}> línea roja</span> = capacidad nominal · <span style={{ color: C.teal }}>línea verde</span> = capacidad demostrada.
+        <span style={{ color: C.red }}> línea roja</span> = capacidad nominal · <span style={{ color: C.teal }}>línea verde</span> = capacidad demostrada. * = semana en curso: solo cuentan los días hábiles que quedan.
         {data && ` Plan #${data.plan?.id}.`}
       </p>
       {error && <div style={{ ...st.card, background: C.redLt, color: C.redDk }}>{error}</div>}

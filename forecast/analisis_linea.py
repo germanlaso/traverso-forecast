@@ -177,6 +177,10 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
                          for d in dias if d >= hoy)
             filas.append({
                 "semana": ls.isoformat(), "semana_iso": ls.isocalendar()[1], "dias_habiles": len(habiles),
+                # semana en curso: solo cuentan los días hábiles que quedan (capacidad Y demanda)
+                "parcial": len(habiles) < dias_sem,
+                "desde": habiles[0].isoformat() if habiles else None,
+                "hasta": habiles[-1].isoformat() if habiles else None,
                 "horas_nominales": round(cap_h, 1), "horas_requeridas": round(h_req, 1),
                 "horas_programadas": round(h_prog, 1),
                 "carga_requerida": round(h_req / cap_h, 4) if cap_h else None,

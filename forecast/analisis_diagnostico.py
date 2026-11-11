@@ -261,6 +261,8 @@ Reglas:
   forecast muy por encima de lo vendido), dilo explícitamente antes de proponer mover capacidad.
 - Usa lo aprendido (intervenciones evaluadas) cuando aplique, citándolo.
 - Lenguaje claro para un planificador o un jefe de producción, sin jerga técnica del sistema.
+- Si citas una semana con "parcial": true (la semana en curso), dilo así: "los N días hábiles que quedan
+  de la Sem X (del dd-mm al dd-mm)", y aclara que las horas nominales son solo las de esos días.
 - Máximo 3 acciones. Nunca afirmes que algo se aplicó: el sistema solo recomienda.
 Responde SOLO con un objeto JSON válido, sin texto antes ni después, con esta forma:
 {"resumen": "2-3 frases", "causa_principal": "...", "explicacion": "párrafo breve",
