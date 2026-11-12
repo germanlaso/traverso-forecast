@@ -3,9 +3,9 @@ titulo: Programación Diaria
 objetivo: Generar el programa de producción para entregar a planta.
 minutos: 6
 puntos: 100
-version: 1
+version: 2
 ayuda: programacion
-por_que: Es lo que llega a planta. Si una orden no está aprobada, no aparece aquí y nadie la va a producir.
+por_que: Es lo que llega a planta. Si una orden no está aprobada, no aparece aquí.
 ---
 ## Paso a paso
 ![Programación Diaria](plan__programacion.png)

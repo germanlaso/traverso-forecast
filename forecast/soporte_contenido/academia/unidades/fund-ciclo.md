@@ -3,7 +3,7 @@ titulo: El ciclo diario del sistema
 objetivo: Entender qué hace el sistema cada día y qué decide el planificador.
 minutos: 8
 puntos: 100
-version: 2
+version: 3
 ayuda: detalle,home
 por_que: El sistema propone, pero las decisiones son tuyas. Si sabes en qué momento del día pasa cada cosa, sabrás cuándo mirar y qué esperar de cada pantalla.
 ---
@@ -20,7 +20,7 @@ El sistema reemplaza la planificación manual en Excel por un ciclo automático 
 - No aprueba órdenes solo.
 - No cambia parámetros solo: cuando detecta un problema, **recomienda** y una persona decide.
 - Los cambios de parámetros, campañas y eventos se aplican en la **próxima corrida del plan** (al día siguiente a las 06:00).
-- Si apruebas o creas órdenes durante el día, la barra superior avisa **"OF modificadas desde el último plan"** hasta que el plan de la mañana siguiente las incorpore.
+- Una orden aprobada o creada durante el día **es válida de inmediato**. La barra superior avisa **"OF modificadas desde el último plan"** solo para indicar que hay cambios posteriores al último plan: el plan de la mañana siguiente los incorpora a sus proyecciones.
 
 ```cuestionario
 [

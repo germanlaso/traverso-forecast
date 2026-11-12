@@ -227,7 +227,7 @@
   "id": "plan-vigente",
   "termino": "Plan vigente",
   "nombre": "Plan de producción vigente",
-  "definicion": "Último plan generado y promovido por el proceso diario (06:00). Es la base de lo que muestran las pantallas de planificación y control. Si después se aprueban o crean órdenes, la barra superior avisa \"OF modificadas desde el último plan\" hasta la próxima corrida.",
+  "definicion": "Último plan generado y promovido por el proceso diario (06:00). Es la base de las proyecciones de las pantallas de planificación y control. Las órdenes que se aprueban, editan o crean después son válidas de inmediato; la barra superior avisa \"OF modificadas desde el último plan\" hasta que el plan de la mañana siguiente las incorpora a sus proyecciones.",
   "sinonimos": [
    "plan del día"
   ],

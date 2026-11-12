@@ -19,7 +19,7 @@ Es la pantalla de trabajo del planificador. Muestra, semana a semana, por línea
 ## Cómo se usa
 ### Aprobar una orden
 1. Ubica la orden **Pendiente** o **Urgente** en su línea y día.
-2. Presiona **Aprobar**.
+2. Presiona **Aprobar** en la tabla de la línea, o haz clic en la **tarjeta de la orden** en la grilla (abren la misma ventana).
 3. En la ventana, ajusta si corresponde la **cantidad real** (cajas), la **fecha de lanzamiento real**, la **fecha de entrada a stock** y un **comentario**.
 4. Confirma: la orden pasa a [[g:of-aprobada]], recibe su número definitivo y el sistema la respeta en las próximas corridas.
 5. Para corregirla después, usa **✏️ Editar**.
@@ -37,7 +37,7 @@ Es la pantalla de trabajo del planificador. Muestra, semana a semana, por línea
 
 ## Cómo leer los datos
 - La capacidad del día sale del calendario de turnos de la línea y descuenta las [[g:parada-planificada|paradas planificadas y bloqueos]] registrados.
-- El aviso **"⚠ OF modificadas desde el último plan"** de la barra superior indica que aprobaste, editaste o creaste órdenes que el plan automático todavía no incorpora. Se apaga solo cuando corre el plan de las 06:00.
+- El aviso **"⚠ OF modificadas desde el último plan"** de la barra superior indica que hay órdenes aprobadas, editadas o creadas **después** del último plan. Esas órdenes **ya son válidas**: aparecen en Programación Diaria y se producen. El aviso solo advierte que las proyecciones que calcula el plan (por ejemplo, Stock Diario o el Mapa de Quiebres) todavía no las consideran; el plan de las 06:00 del día siguiente las incorpora y el aviso se apaga.
 - Si no hay plan vigente cargado, la pantalla lo indica: el plan se genera automáticamente todos los días a las 06:00; si falta, avisa a Planificación.
 - El CSV descarga el plan completo (órdenes sugeridas y aprobadas) para trabajarlo en Excel.
 

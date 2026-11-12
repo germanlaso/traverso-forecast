@@ -6,7 +6,7 @@ orden: 900
 actualizado: 2026-11-12
 ---
 ## ¿Cómo se genera el plan? ¿Puedo regenerarlo?
-El plan se genera solo todos los días a las **06:00** y no se regenera a mano: no hay botón "Generar plan" en ninguna pantalla. Si un día no hay plan vigente, avisa a Planificación. Si apruebas, editas o creas órdenes durante el día, la barra superior muestra **"⚠ OF modificadas desde el último plan"**: el aviso se apaga solo cuando el plan de la mañana siguiente incorpora esos cambios.
+El plan se genera solo todos los días a las **06:00** y no se regenera a mano: no hay botón "Generar plan" en ninguna pantalla. Si un día no hay plan vigente, avisa a Planificación. Si apruebas, editas o creas órdenes durante el día, esas órdenes **son válidas de inmediato**. La barra superior muestra **"⚠ OF modificadas desde el último plan"** solo para avisar que hay cambios posteriores al último plan; el plan de la mañana siguiente los incorpora a sus proyecciones y el aviso se apaga.
 
 ## Cambié un parámetro y el plan no cambió. ¿Por qué?
 Los cambios de parámetros, campañas y eventos se aplican en la **próxima corrida del plan** (al día siguiente a las 06:00).
