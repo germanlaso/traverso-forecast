@@ -1660,6 +1660,7 @@ def _construir_modelo(
             # Si cap_libre = 0, sum(terms) <= 0 fuerza cajas=0 ese (d,l) (variables >= 0).
             # ----------------------------------------------------------------
             terms = []
+            terms_prod = []     # (12-11-2026) solo producción, sin setups (para LLENAR TURNO)
             for s in m.skus:
                 if l not in m.pares_sku_linea[s]:
                     continue
@@ -1668,6 +1669,7 @@ def _construir_modelo(
                 # Costo en "unidades-escala-línea" por caja del SKU:
                 costo_caja = int(round(FACTOR_ESCALA / f)) * upc
                 terms.append(costo_caja * m.cajas[(d, s, l)])
+                terms_prod.append(costo_caja * m.cajas[(d, s, l)])
                 stp = m.setup_u[(s, l)]
                 if stp > 0:
                     # Setup en "unidades-escala-línea": t_cambio × vel × FACTOR_ESCALA
@@ -1678,15 +1680,18 @@ def _construir_modelo(
                 cap_libre_u = max(0, cap_l_d - u_ap_dl)
                 m.model.Add(sum(terms) <= cap_libre_u * FACTOR_ESCALA)
                 # (11-11-2026) LLENAR TURNO (solo pasada C): si la línea abre el día
-                # (algún SKU asignado), ocio >= capacidad libre - lo usado. El objetivo
+                # (algún SKU asignado), ocio >= capacidad libre - lo PRODUCIDO. El objetivo
                 # castiga ocio -> extiende batches hasta llenar el turno.
+                # (12-11-2026) Corrección: el ocio se mide contra la PRODUCCIÓN, sin contar el
+                # tiempo de setup. Con los setups dentro, el solver "llenaba" el día agregando
+                # cambios de SKU (comparación 337 vs 338: setups +49% en 4 semanas).
                 if N2_LLENAR_TURNO and es_pasada_c and cap_libre_u > 0 and N2_W_OCIO_HORA > 0:
                     _asigs = [m.asig[(d, s, l)] for s in m.skus if l in m.pares_sku_linea[s]]
                     if _asigs:
                         _abierta = m.model.NewBoolVar(f"abierta_{d_idx}_{l}")
                         m.model.AddMaxEquality(_abierta, _asigs)
                         _ocio = m.model.NewIntVar(0, cap_libre_u, f"ocio_{d_idx}_{l}")
-                        m.model.Add(FACTOR_ESCALA * _ocio >= cap_libre_u * FACTOR_ESCALA - sum(terms)).OnlyEnforceIf(_abierta)
+                        m.model.Add(FACTOR_ESCALA * _ocio >= cap_libre_u * FACTOR_ESCALA - sum(terms_prod)).OnlyEnforceIf(_abierta)
                         m.ocio[(d, l)] = _ocio
 
             # R1b (v1.3, R2): cap. de nº de SKUs distintos asignados a esta línea-día.

@@ -6,16 +6,21 @@
 # Mismas banderas que el cron de producción (crontab 09:00 UTC) + --no-promote --skip-refresh.
 # Uso (en el server):
 #   docker exec -d traverso_forecast sh /app/comparar_42h.sh 2330      # espera a las 23:30 UTC
+# (12-11-2026) Variables opcionales: CORRIDAS="B C" (subconjunto) y SEMILLA=7 (N2_SEED_A).
+#   docker exec -d -e CORRIDAS="B C" traverso_forecast sh /app/comparar_42h.sh 0000
 set -u
+CORRIDAS="${CORRIDAS:-A B C}"
+SEMILLA="${SEMILLA:-42}"
 HORA="${1:-0000}"
 echo "esperando ${HORA} UTC..." > /app/comp42.log
 while [ "$(date -u +%H%M)" -lt "$HORA" ]; do sleep 30; done
 cd /app
 export PYTHONPATH=/app N2_ENABLED=1 SS_COBERTURA=1 N2_BARRERA_MODO=quiebre N2_WORKERS_C=8 N2_TL_C=3600 \
   CAMPANA_GRANEL_ENABLED=1 CAMPANA_FORMATO_ENABLED=1 QUIEBRE_INTRADIA_SOLVER=1 N2_BARRERA_SOBRE=fin \
-  EVENTOS_ENABLED=1 N2_QBR_MAG_MODO=off N2_ESCALA_A=1 N2_A_GAP_EVENTOS=6 N2_SEED_A=42 \
+  EVENTOS_ENABLED=1 N2_QBR_MAG_MODO=off N2_ESCALA_A=1 N2_A_GAP_EVENTOS=6 N2_SEED_A=$SEMILLA \
   N2_DIAG_LOG_SOLVER=1 N2_CAP_EFECTIVA=1
-for corrida in A B C; do
+echo "corridas: $CORRIDAS | semilla: $SEMILLA" >> /app/comp42.log
+for corrida in $CORRIDAS; do
   case $corrida in
     A) CAL=0; LLENAR=0 ;;
     B) CAL=1; LLENAR=0 ;;
