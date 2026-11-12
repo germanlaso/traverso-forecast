@@ -54,6 +54,7 @@ RE_IMG = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,99}\.(png|jpg|jpeg|webp)$")
 RE_BLOQUE_CUEST = re.compile(r"```cuestionario\s*\n(.*?)\n```", re.S)
 RE_REF_GLOSARIO = re.compile(r"\[\[g:([a-z0-9_-]+)(?:\|[^\]]*)?\]\]")
 RE_REF_TEXTO = re.compile(r"\[\[g:([a-z0-9_-]+)(?:\|([^\]]*))?\]\]")
+RE_REF_ART = re.compile(r"\[\[a:([a-z0-9_-]+)(?:\|([^\]]*))?\]\]")   # enlace a artículo de Ayuda
 RE_IMG_MD = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 APROBACION_DEFECTO = 0.8
 PALABRAS_VACIAS = set("""a al como con cual cuando de del donde el en es esta este hay la las lo los me mi no o para
@@ -243,7 +244,8 @@ def mapa_unidades() -> dict:
 def texto_plano(s: str) -> str:
     """Reemplaza [[g:id]] / [[g:id|texto]] por el texto visible (para búsqueda y Mostacín)."""
     terminos = {t.get("id"): t.get("termino", "") for t in glosario()}
-    return RE_REF_TEXTO.sub(lambda m: m.group(2) or terminos.get(m.group(1), m.group(1)), s or "")
+    s = RE_REF_TEXTO.sub(lambda m: m.group(2) or terminos.get(m.group(1), m.group(1)), s or "")
+    return RE_REF_ART.sub(lambda m: m.group(2) or m.group(1), s)
 
 
 def _fragmentos():
@@ -320,6 +322,11 @@ def validar() -> list:
         prob.append(str(e))
 
     def revisar_cuerpo(origen, cuerpo):
+        for art, _ in RE_REF_ART.findall(cuerpo):
+            try:
+                leer_articulo(art)
+            except ContenidoError:
+                prob.append(f"{origen}: [[a:{art}]] apunta a un artículo inexistente")
         for ref in RE_REF_GLOSARIO.findall(cuerpo):
             if ref not in ids_glosario:
                 prob.append(f"{origen}: [[g:{ref}]] no existe en el glosario")

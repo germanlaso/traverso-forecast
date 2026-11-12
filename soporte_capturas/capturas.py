@@ -31,7 +31,7 @@ Formato del guion:
      "difuminar": [{"selector": "..."} | {"texto": "..."}],
      "anotaciones": [{"n": 1, "texto": "..."} | {"n": 2, "selector": "...", "subir": 1}],   # subir = marcar el contenedor
                     # opcionales: "exacto": true, "indice": 1 (2.ª coincidencia), "opcional": true (si no está, se omite),
-                    #             "pos": "izq" (defecto, número a la izquierda) | "arriba" (número sobre el recuadro)
+                    #             "pos": "izq" (defecto, número a la izquierda) | "der" | "arriba" | "abajo"
      "esperar_sin_texto": ["Cargando"],                                # defecto: no queda ningún "Cargando"
      "recorte": {"selector": "..."} | null,                            # solo esa zona de la pantalla
      "pagina_completa": false}
@@ -65,8 +65,10 @@ JS_ANOTAR = """([cajas, color]) => {
     const b = document.createElement('div');
     b.textContent = c.n;
     // número afuera del recuadro, a la izquierda y centrado; arriba si el elemento está pegado al borde
-    const arriba = c.pos === 'arriba' || c.x <= 44;
-    const bx = arriba ? c.x - 2 : c.x - 38, by = arriba ? c.y - 36 : c.y + c.h / 2 - 13;
+    const der = c.pos === 'der', abajo = c.pos === 'abajo';
+    const arriba = c.pos === 'arriba' || (c.x <= 44 && !abajo && !der);
+    const bx = der ? c.x + c.w + 12 : (arriba || abajo) ? c.x - 2 : c.x - 38;
+    const by = arriba ? c.y - 36 : abajo ? c.y + c.h + 8 : c.y + c.h / 2 - 13;
     b.style.cssText = `position:absolute;left:${bx}px;top:${by}px;width:26px;height:26px;border-radius:50%;` +
       `background:${color};color:#2C2C2A;font:700 14px Arial;display:flex;align-items:center;justify-content:center;` +
       `border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.3)`;

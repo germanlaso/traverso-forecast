@@ -3,30 +3,6 @@
   "archivo": "fund__navegar.png",
   "titulo": "Menú, ayuda y Mostacín",
   "estado": "OK",
-  "fecha": "2026-11-11T18:11:03"
- },
- {
-  "archivo": "fund__inicio.png",
-  "titulo": "Panel de inicio",
-  "estado": "OK",
-  "fecha": "2026-11-11T18:11:10"
- },
- {
-  "archivo": "fund__quiebres.png",
-  "titulo": "Mapa de Quiebres",
-  "estado": "OK",
-  "fecha": "2026-11-11T18:11:19"
- },
- {
-  "archivo": "fund__stockdiario.png",
-  "titulo": "Stock Diario de un SKU",
-  "estado": "OK",
-  "fecha": "2026-11-11T18:11:29"
- },
- {
-  "archivo": "fund__plan_ordenes.png",
-  "titulo": "Órdenes sugeridas y aprobadas",
-  "estado": "OK",
-  "fecha": "2026-11-11T18:11:36"
+  "fecha": "2026-11-12T09:40:18"
  }
 ]

@@ -1,10 +1,12 @@
 ---
-titulo: Lo aprendido
-seccion: Control
+titulo: Base de conocimiento
+seccion: Informes
 resumen: Lo que el sistema sabe de los datos reales y de las decisiones tomadas.
 orden: 49
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
+Está en **Informes → Base de conocimiento**.
+
 ## Para qué sirve
 Muestra la memoria del sistema: la capacidad real de cada línea, qué cambios funcionaron y por qué se descartaron recomendaciones. Es la información que usa la IA en cada análisis.
 
@@ -22,4 +24,4 @@ Muestra la memoria del sistema: la capacidad real de cada línea, qué cambios f
 - Las acciones pendientes se cierran en Análisis de Línea o, si son de parámetros, al aplicarlas en Parámetros.
 
 ## Pantallas relacionadas
-Análisis de Línea · Parámetros
+[[a:analisislinea|Análisis de Línea]] · [[a:parametros|Parámetros]]

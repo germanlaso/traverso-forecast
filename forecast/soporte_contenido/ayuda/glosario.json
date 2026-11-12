@@ -168,7 +168,6 @@
    "orden de producción"
   ],
   "pantallas": [
-   "plan",
    "detalle",
    "programacion"
   ]
@@ -184,7 +183,6 @@
    "orden tentativa"
   ],
   "pantallas": [
-   "plan",
    "detalle",
    "stockdiario"
   ]
@@ -199,7 +197,6 @@
    "producción firme"
   ],
   "pantallas": [
-   "plan",
    "detalle",
    "programacion"
   ]
@@ -230,12 +227,12 @@
   "id": "plan-vigente",
   "termino": "Plan vigente",
   "nombre": "Plan de producción vigente",
-  "definicion": "Último plan generado y promovido por el proceso diario (06:00). Es la base de lo que muestran las pantallas de planificación y control.",
+  "definicion": "Último plan generado y promovido por el proceso diario (06:00). Es la base de lo que muestran las pantallas de planificación y control. Si después se aprueban o crean órdenes, la barra superior avisa \"OF modificadas desde el último plan\" hasta la próxima corrida.",
   "sinonimos": [
    "plan del día"
   ],
   "pantallas": [
-   "plan",
+   "detalle",
    "home"
   ]
  },
@@ -246,7 +243,7 @@
   "definicion": "Cantidad de semanas hacia adelante que cubre el plan.",
   "sinonimos": [],
   "pantallas": [
-   "plan",
+   "detalle",
    "stock"
   ]
  },
@@ -473,15 +470,14 @@
   "definicion": "Cajas producidas realmente ÷ cajas programadas en SAP, total y por línea.",
   "sinonimos": [],
   "pantallas": [
-   "rendimiento",
-   "conciliacion"
+   "rendimiento"
   ]
  },
  {
   "id": "ocupacion",
   "termino": "Ocupación",
   "nombre": "Ocupación de línea",
-  "definicion": "Horas equivalentes de producción (producción real ÷ velocidad nominal) ÷ horas nominales disponibles.",
+  "definicion": "Horas equivalentes de producción (producción real ÷ velocidad nominal) ÷ horas nominales de la línea. Las horas nominales siguen su calendario de turnos y no cuentan feriados.",
   "sinonimos": [],
   "pantallas": [
    "rendimiento"
@@ -501,22 +497,21 @@
   "id": "adopcion",
   "termino": "Adopción",
   "nombre": "Adopción del sistema",
-  "definicion": "Porcentaje de los SKU producidos en SAP en una semana que fueron planificados por el sistema.",
+  "definicion": "Porcentaje del programa de producción de SAP que tiene su orden en la app. Se ve en Rendimiento.",
   "sinonimos": [],
   "pantallas": [
-   "conciliacion"
+   "rendimiento"
   ]
  },
  {
   "id": "terminal-report",
   "termino": "Terminal Report",
   "nombre": "Producción efectiva en SAP",
-  "definicion": "Registro en SAP de lo producido realmente. Es la fuente de la producción real en Rendimiento y Conciliación.",
+  "definicion": "Registro en SAP de lo producido realmente. Es la fuente de la producción real que muestran Detalle Producción y Rendimiento.",
   "sinonimos": [
    "TR"
   ],
   "pantallas": [
-   "conciliacion",
    "rendimiento"
   ]
  },
@@ -549,12 +544,14 @@
   "id": "jornada-42h",
   "termino": "Jornada 42 h",
   "nombre": "Jornada legal 2026",
-  "definicion": "Turno de 42 horas semanales: 9 horas lunes y martes, 8 horas de miércoles a viernes.",
+  "definicion": "Jornada legal vigente desde 2026: 42 horas semanales, lunes y martes 9 h y miércoles a viernes 8 h. Es el calendario por defecto de cada línea; puede tener turnos adicionales y excepciones por fecha.",
   "sinonimos": [
    "42 horas"
   ],
   "pantallas": [
-   "parametros"
+   "parametros",
+   "analisislinea",
+   "rendimiento"
   ]
  },
  {
@@ -568,6 +565,47 @@
   "pantallas": [
    "parametros",
    "analisislinea"
+  ]
+ },
+ {
+  "id": "horas-nominales",
+  "termino": "Horas nominales",
+  "nombre": "Capacidad nominal de una línea",
+  "definicion": "Horas que una línea puede trabajar según su calendario de turnos (por defecto la jornada de 42 h), sumando turnos adicionales vigentes y excepciones por fecha, y descontando feriados y bloqueos de la bitácora. Es el 100% contra el que se miden la carga y la ocupación.",
+  "sinonimos": [
+   "capacidad nominal",
+   "horas disponibles"
+  ],
+  "pantallas": [
+   "parametros",
+   "analisislinea",
+   "rendimiento"
+  ]
+ },
+ {
+  "id": "turno-adicional",
+  "termino": "Turno adicional",
+  "nombre": "Turno con vigencia",
+  "definicion": "Turno extra de una línea (segundo o tercero) que puede tener fecha de inicio y de término, por ejemplo para una temporada. Solo suma horas entre esas fechas; sin fecha de término rige indefinidamente.",
+  "sinonimos": [
+   "turno de temporada",
+   "segundo turno"
+  ],
+  "pantallas": [
+   "parametros"
+  ]
+ },
+ {
+  "id": "excepcion-capacidad",
+  "termino": "Excepción de capacidad",
+  "nombre": "Excepción por fecha",
+  "definicion": "Cambio de las horas de una línea en un día puntual: extensión de turno, sábado trabajado, domingo o feriado trabajado, o día sin producción (0 h). Se registra en Parámetros con PIN y rige desde la próxima corrida del plan.",
+  "sinonimos": [
+   "excepción por fecha",
+   "sábado trabajado"
+  ],
+  "pantallas": [
+   "parametros"
   ]
  }
 ]

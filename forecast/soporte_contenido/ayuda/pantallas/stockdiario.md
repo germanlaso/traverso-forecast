@@ -3,7 +3,7 @@ titulo: Stock Diario
 seccion: Planificación
 resumen: Proyección diaria del stock de un SKU, separando forecast y pedidos.
 orden: 30
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
 ## Para qué sirve
 Muestra, día a día, cómo evoluciona el stock de un SKU según el [[g:plan-vigente]]: qué demanda viene (forecast y pedidos), qué producción entra y cuándo quedaría [[g:bajo-ss]] o en [[g:quiebre]].
@@ -17,7 +17,7 @@ Muestra, día a día, cómo evoluciona el stock de un SKU según el [[g:plan-vig
 ## Cómo se usa
 1. Busca el SKU.
 2. Pasa el mouse sobre un día para ver el desglose: forecast, pedidos, demanda corregida, stock y SS.
-3. Si ves un quiebre, revisa si hay una OF sugerida antes de esa fecha y apruébala desde **Plan de Producción** o **Detalle Producción**.
+3. Si ves un quiebre, revisa si hay una OF sugerida antes de esa fecha y apruébala en [[a:detalle|Detalle Producción]].
 
 ## Cómo leer los datos
 - **Quiebre** = stock proyectado bajo cero. **Bajo SS** = bajo el stock de seguridad pero sobre cero.
@@ -26,4 +26,4 @@ Muestra, día a día, cómo evoluciona el stock de un SKU según el [[g:plan-vig
 - Si aparece el aviso de que el plan es anterior al detalle diario, hay que esperar la próxima corrida del plan.
 
 ## Pantallas relacionadas
-Mapa de Quiebres · Detalle Producción · Plan de Producción
+[[a:quiebres|Mapa de Quiebres]] · [[a:detalle|Detalle Producción]]

@@ -3,8 +3,8 @@ titulo: Los conceptos clave
 objetivo: Distinguir stock de seguridad, quiebre, bajo SS y los tipos de orden de fabricación.
 minutos: 10
 puntos: 100
-version: 1
-ayuda: stockdiario,plan
+version: 2
+ayuda: stockdiario,detalle
 por_que: Estas palabras aparecen en todas las pantallas. Si las tienes claras, cada número que ves tiene sentido y sabes cuándo preocuparte.
 ---
 ## Stock de seguridad (SS)
@@ -16,11 +16,13 @@ El [[g:ss]] es el stock mínimo que el plan busca mantener para absorber variaci
 - **Riesgo**: en el Mapa de Quiebres, el stock queda muy cerca de cero (10% del SS o menos), sin llegar a quebrar.
 
 ## Tipos de órdenes
-![Órdenes sugeridas y aprobadas en el plan](fund__plan_ordenes.png)
+![Órdenes en Detalle Producción](fund__detalle_ordenes.png)
 
-1. **OF sugerida (OFT)**: la propone el sistema al generar el plan. Es una propuesta.
-2. **OF aprobada**: el planificador la revisó y aprobó. Queda fija en el plan.
-3. **OFM**: orden creada a mano por el planificador. Entra al plan como aprobada.
+1. **OF sugerida (OFT)**, que en Detalle Producción aparece como **Pendiente**: la propone el sistema al generar el plan. Es una propuesta.
+2. **OF aprobada** (✓ Aprobada): el planificador la revisó y aprobó en Detalle Producción. Queda fija en el plan.
+3. **Urgente** (⚡): una OF sugerida cuya fecha de lanzamiento es hoy o ya pasó y todavía no está aprobada.
+
+Además existe la **OFM**: una orden creada a mano por el planificador, que entra al plan como aprobada.
 
 ## Productos a pedido (MTO)
 Un SKU [[g:mto]] se produce contra pedidos y no contra forecast. No tiene forecast propio y su SS es 0.

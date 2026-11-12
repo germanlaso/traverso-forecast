@@ -3,7 +3,7 @@ titulo: Mapa de Quiebres
 seccion: Control
 resumen: Mapa SKU × semana con los quiebres y riesgos del plan vigente.
 orden: 42
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
 ## Para qué sirve
 Muestra, por línea, qué SKU quedarán en [[g:quiebre]], en [[g:riesgo]] o [[g:bajo-ss]] en las próximas semanas según el [[g:plan-vigente]].
@@ -26,4 +26,4 @@ Muestra, por línea, qué SKU quedarán en [[g:quiebre]], en [[g:riesgo]] o [[g:
 - **Recepción pendiente (posible falso)**: hay una OF lanzada que no se refleja en el stock. El quiebre puede ser falso, o hay producción sin registrar.
 
 ## Pantallas relacionadas
-Stock Diario · Inicio · Análisis de Línea
+[[a:stockdiario|Stock Diario]] · [[a:home|Inicio]] · [[a:analisislinea|Análisis de Línea]]

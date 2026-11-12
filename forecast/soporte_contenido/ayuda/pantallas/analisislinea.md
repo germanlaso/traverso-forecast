@@ -3,8 +3,10 @@ titulo: Análisis de Línea
 seccion: Control
 resumen: Semáforo de capacidad por línea, diagnóstico y acciones recomendadas.
 orden: 48
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
+Está en **Control → Análisis de Línea**.
+
 ## Para qué sirve
 Responde: **¿puede cada línea cumplir lo que viene?** Muestra el [[g:semaforo|semáforo]] de cada línea y, cuando una no está pudiendo cumplir, permite analizarla y decidir qué hacer.
 
@@ -24,6 +26,7 @@ Responde: **¿puede cada línea cumplir lo que viene?** Muestra el [[g:semaforo|
 5. Registra **tu decisión**: aceptar todo, aceptar solo las acciones marcadas o descartar. Pide tu nombre, el [[g:pin]] y un motivo.
 
 ## Cómo leer los datos
+- La capacidad nominal (100%) sigue el calendario de turnos de cada línea (por defecto la [[g:jornada-42h]]), sin contar feriados, e incluye turnos adicionales vigentes y excepciones por fecha.
 - Rojo: carga requerida sobre 95% en alguna de las próximas 3 semanas, o quiebre por capacidad desde la semana 2.
 - Ámbar: carga sobre 85%, o quiebre inmediato en la semana 1.
 - Si la barra supera la marca negra, el plan no alcanzó a programar lo que la demanda pide.
@@ -31,4 +34,4 @@ Responde: **¿puede cada línea cumplir lo que viene?** Muestra el [[g:semaforo|
 - Los motivos de descarte también sirven: el sistema los considera en los próximos análisis.
 
 ## Pantallas relacionadas
-Lo aprendido · Parámetros · Mapa de Quiebres
+[[a:aprendido|Base de conocimiento]] · [[a:parametros|Parámetros]] · [[a:quiebres|Mapa de Quiebres]]

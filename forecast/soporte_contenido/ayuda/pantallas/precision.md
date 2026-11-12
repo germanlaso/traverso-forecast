@@ -3,8 +3,10 @@ titulo: Precisión Forecast
 seccion: Forecast
 resumen: Venta real vs lo que el forecast predijo con 1 y 2 semanas de anticipación.
 orden: 22
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
+Está en **Forecast → Precisión Forecast** y también en **Informes → Precisión Forecast**.
+
 ## Para qué sirve
 Mide qué tan bien acierta el [[g:forecast]]. Compara la venta real con lo que se pronosticó con **1 semana** y con **2 semanas** de anticipación. Cada anticipación se evalúa por separado y nunca se mezclan.
 
@@ -29,4 +31,4 @@ Mide qué tan bien acierta el [[g:forecast]]. Compara la venta real con lo que s
 - "Bajo vol.": SKU con venta promedio bajo el umbral; no se informa su %.
 
 ## Pantallas relacionadas
-Forecast de Demanda · Eventos
+[[a:forecast|Forecast de Demanda]] · [[a:eventos|Eventos]]

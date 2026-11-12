@@ -113,6 +113,8 @@ def _limpiar_respuesta(texto: str, ids_articulo: set):
     no_sabe = MARCA_NO_SE in texto
     enlaces, vistos = [], set()
     for tipo, i in RE_ENLACE.findall(texto):
+        if tipo == "ir" and i in ("faq", "contacto"):   # artículos generales: no son pantallas
+            tipo = "art"
         if i in ids_articulo and (tipo, i) not in vistos and len(enlaces) < 3:
             vistos.add((tipo, i))
             enlaces.append({"tipo": tipo, "id": i, "titulo": sc.leer_articulo(i)["titulo"]})

@@ -3,8 +3,10 @@ titulo: Faltantes
 seccion: Control
 resumen: Informe diario de pedidos no despachados y su causa.
 orden: 40
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
+Está en **Control → Faltantes** y también en **Informes → Faltantes**.
+
 ## Para qué sirve
 Muestra los [[g:faltante]]s: cantidades de pedidos ([[g:ov]]) que no se despacharon, y si la causa fue falta de stock o vida útil. Es un análisis de lo que ya pasó, con datos hasta ayer.
 
@@ -28,4 +30,4 @@ Muestra los [[g:faltante]]s: cantidades de pedidos ([[g:ov]]) que no se despacha
 - El informe se envía por correo todos los días a las 8:00 y a las 11:00.
 
 ## Pantallas relacionadas
-Resumen 30d · Stock Diario · Mapa de Quiebres
+[[a:resumen30|Resumen 30d]] · [[a:stockdiario|Stock Diario]] · [[a:quiebres|Mapa de Quiebres]]

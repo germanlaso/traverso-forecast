@@ -3,8 +3,10 @@ titulo: Resumen 30d
 seccion: Control
 resumen: Mapa de calor de faltantes por producto en los últimos 30 días.
 orden: 41
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
+Está en **Control → Resumen 30d** y también en **Informes → Resumen 30d**.
+
 ## Para qué sirve
 Muestra qué productos han tenido [[g:faltante]]s en los últimos 30 días y con qué frecuencia e intensidad.
 
@@ -23,4 +25,4 @@ Muestra qué productos han tenido [[g:faltante]]s en los últimos 30 días y con
 - Amarillo: 1 a 20 cajas · Naranja: 21 a 60 · Rojo: más de 60.
 
 ## Pantallas relacionadas
-Faltantes · Inicio
+[[a:faltantes|Faltantes]] · [[a:home|Inicio]]

@@ -1,10 +1,12 @@
 ---
 titulo: Salud Datalake
-seccion: Control
+seccion: Herramientas
 resumen: Estado de la conexión con las bases de datos de origen (SQL Server y SAP HANA).
 orden: 44
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
+Está en **Herramientas → Salud Datalake**.
+
 ## Para qué sirve
 Muestra si el sistema se está conectando bien a sus fuentes de datos. Si una fuente falla, el plan o los informes pueden quedar desactualizados.
 
@@ -22,4 +24,4 @@ Muestra si el sistema se está conectando bien a sus fuentes de datos. Si una fu
 - Caídas o latencias altas sostenidas pueden explicar datos desfasados en otras pantallas. En ese caso, avisa al administrador.
 
 ## Pantallas relacionadas
-Inicio
+[[a:home|Inicio]]

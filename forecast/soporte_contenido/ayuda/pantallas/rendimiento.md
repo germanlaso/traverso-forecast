@@ -1,10 +1,12 @@
 ---
 titulo: Rendimiento
-seccion: Control
+seccion: Informes
 resumen: Indicadores semanales de la operación por línea: cumplimiento, ocupación y eficiencia.
 orden: 46
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
+Está en **Informes → Rendimiento**.
+
 ## Para qué sirve
 Muestra cómo rindió la operación: cuánto se programó, cuánto se produjo y cómo se usaron las líneas.
 
@@ -21,9 +23,10 @@ Muestra cómo rindió la operación: cuánto se programó, cuánto se produjo y 
 
 ## Cómo leer los datos
 - Las semanas van de lunes a domingo; un asterisco (*) marca una semana parcial o en curso.
+- Las **horas nominales** de cada línea siguen su calendario de turnos (por defecto la [[g:jornada-42h]]) y **no cuentan los feriados**. Por eso la ocupación de semanas con feriado puede diferir de cálculos anteriores.
 - Cumplimiento = cajas producidas ÷ cajas programadas en SAP.
 - Ocupación = horas equivalentes de producción ÷ horas nominales.
 - Eficiencia = producción real ÷ producción teórica; solo con bitácora.
 
 ## Pantallas relacionadas
-Bitácora · Conciliación · Informe IA
+[[a:bitacora|Bitácora]] · [[a:informeia|Informe semanal]]

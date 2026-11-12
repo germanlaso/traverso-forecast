@@ -3,7 +3,7 @@ titulo: Inicio
 seccion: Inicio
 resumen: Resumen del plan vigente, del stock y de los faltantes, con accesos a cada sección.
 orden: 10
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
 ## Para qué sirve
 Es el panel de entrada: en una mirada muestra cómo está el [[g:plan-vigente]], el stock y los faltantes de los últimos 30 días. Es solo de lectura.
@@ -24,4 +24,4 @@ Es el panel de entrada: en una mirada muestra cómo está el [[g:plan-vigente]],
 - Si la fecha de última descarga de stock es antigua, los números del plan pueden estar desfasados.
 
 ## Pantallas relacionadas
-Mapa de Quiebres · Resumen 30d · Stock Diario
+[[a:quiebres|Mapa de Quiebres]] · [[a:resumen30|Resumen 30d]] · [[a:stockdiario|Stock Diario]]

@@ -21,21 +21,28 @@
      "n": 1,
      "texto": "🏭 Planificación",
      "exacto": true,
-     "pos": "arriba"
+     "pos": "abajo"
     },
     {
      "n": 2,
-     "selector": "button[aria-label='Ayuda de esta pantalla']"
+     "selector": "button[aria-label='Ayuda de esta pantalla']",
+     "pos": "abajo"
     },
     {
      "n": 3,
      "texto": "🛟 Soporte",
      "exacto": true,
-     "pos": "arriba"
+     "pos": "abajo"
     },
     {
      "n": 4,
      "selector": "button[aria-label='Pregúntale a Mostacín']"
+    },
+    {
+     "n": 5,
+     "texto": "Versión",
+     "pos": "der",
+     "opcional": true
     }
    ]
   },
@@ -156,23 +163,42 @@
    ]
   },
   {
-   "archivo": "fund__plan_ordenes.png",
-   "titulo": "Órdenes sugeridas y aprobadas",
+   "archivo": "fund__detalle_ordenes.png",
+   "titulo": "Estados de las órdenes en Detalle Producción",
    "seccion": "🏭 Planificación",
-   "pestana": "Plan de Producción",
-   "esperar_texto": "SKUs planificados",
+   "pestana": "Detalle Producción",
+   "esperar_texto": "Sem sig.",
+   "pasos": [
+    {
+     "accion": "click",
+     "texto": "▸",
+     "exacto": true
+    },
+    {
+     "accion": "esperar",
+     "ms": 1200
+    },
+    {
+     "accion": "scroll",
+     "texto": "Pendiente",
+     "exacto": true
+    }
+   ],
    "anotaciones": [
     {
      "n": 1,
-     "texto": "OFT-2026"
+     "texto": "Pendiente",
+     "exacto": true
     },
     {
      "n": 2,
-     "texto": "OF-2026"
+     "texto": "✓ Aprobada",
+     "exacto": true
     },
     {
      "n": 3,
-     "texto": "OFM-0",
+     "texto": "⚡ Urgente",
+     "exacto": true,
      "opcional": true
     }
    ]

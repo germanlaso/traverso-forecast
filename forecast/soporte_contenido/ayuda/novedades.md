@@ -1,11 +1,20 @@
 ---
 titulo: Novedades
 seccion: General
-resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.1.0 (12-11-2026).
+resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.1.1 (12-11-2026).
 orden: 901
 actualizado: 2026-11-12
 ---
 La versión vigente aparece en la barra superior; al hacer clic se abre esta página. El número tiene tres partes: la primera cambia cuando cambia la forma de trabajar, la segunda cuando hay pantallas o funciones nuevas y la tercera con correcciones menores.
+
+## Versión 2.1.1 — 12 de noviembre de 2026
+La Ayuda y la Academia quedaron al día con los menús nuevos y la jornada de 42 h:
+- Cada artículo indica en qué sección del menú está la pantalla y enlaza a las pantallas relacionadas.
+- [[a:detalle|Detalle Producción]]: cómo aprobar y crear órdenes, y qué significan la producción real y los minutos de detención.
+- [[a:bitacora|Bitácora]]: cómo registrar la hora de inicio y fin de una parada (la duración se calcula sola).
+- [[a:parametros|Parámetros]]: cómo configurar turnos con vigencia y excepciones por fecha.
+- [[a:faq|Preguntas frecuentes]] renovadas y nuevos términos en el glosario: horas nominales, turno adicional y excepción de capacidad.
+- Academia: la unidad "Moverse por la app y pedir ayuda" incluye la nueva sección Informes.
 
 ## Versión 2.1.0 — 12 de noviembre de 2026
 La capacidad de las líneas se ajusta a la jornada laboral de 42 horas semanales.

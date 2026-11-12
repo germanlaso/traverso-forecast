@@ -3,7 +3,7 @@ titulo: Eventos
 seccion: Forecast
 resumen: Registro de periodos con venta anormal para que el forecast no los repita.
 orden: 21
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
 ## Para qué sirve
 Permite registrar un [[g:evento]]: un periodo en que la venta de un producto fue anormal por una causa conocida (por ejemplo, un quiebre del competidor). Así el [[g:forecast]] no proyecta ese pico o caída como si fuera normal.
@@ -25,4 +25,4 @@ Permite registrar un [[g:evento]]: un periodo en que la venta de un producto fue
 - Si cambias las fechas después de ver la vista previa, se vuelve a calcular: el sistema no guarda sin haber mostrado el efecto real.
 
 ## Pantallas relacionadas
-Forecast de Demanda · Precisión Forecast
+[[a:forecast|Forecast de Demanda]] · [[a:precision|Precisión Forecast]]

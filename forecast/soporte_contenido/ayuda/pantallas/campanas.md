@@ -3,7 +3,7 @@ titulo: Campañas
 seccion: Planificación
 resumen: Calendario semanal de campañas de granel y formato.
 orden: 33
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
 ## Para qué sirve
 Muestra y permite fijar las [[g:campana]]s: reglas que agrupan la producción por semana para evitar cambios costosos. Por ejemplo, una semana de granel de ketchup y otra de mostaza, o agrupar el mismo formato de envase en una línea.
@@ -23,4 +23,4 @@ Muestra y permite fijar las [[g:campana]]s: reglas que agrupan la producción po
 - Las OF y OFM manuales no están sujetas a la campaña: un cambio de formato de emergencia se puede crear en cualquier semana desde Detalle Producción.
 
 ## Pantallas relacionadas
-Detalle Producción · Plan de Producción
+[[a:detalle|Detalle Producción]]

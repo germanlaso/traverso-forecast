@@ -9,7 +9,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import MarkdownSoporte, { CS, useGlosario } from "./MarkdownSoporte";
 
 const API = process.env.REACT_APP_API_BASE || "";
-const ORDEN_SECCIONES = ["Inicio", "Forecast", "Planificación", "Control", "Herramientas", "General"];
+const ORDEN_SECCIONES = ["Inicio", "Forecast", "Planificación", "Control", "Informes", "Herramientas", "General"];
 const GLOSARIO = "__glosario";
 
 const st = {

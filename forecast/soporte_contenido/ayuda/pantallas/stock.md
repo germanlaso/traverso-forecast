@@ -3,7 +3,7 @@ titulo: Proyección de Stock por SKU
 seccion: Planificación
 resumen: Proyección semanal de entradas, salidas y stock de un SKU.
 orden: 35
-actualizado: 2026-11-11
+actualizado: 2026-11-12
 ---
 ## Para qué sirve
 Muestra semana a semana las entradas, la venta estimada y el stock proyectado de un SKU. Se abre desde otras pantallas (por ejemplo, al hacer clic en un SKU).
@@ -19,4 +19,4 @@ Muestra semana a semana las entradas, la venta estimada y el stock proyectado de
 - Si dice "Sin datos disponibles", el SKU no tiene forecast entrenado.
 
 ## Pantallas relacionadas
-Stock Diario · Mapa de Quiebres
+[[a:stockdiario|Stock Diario]] · [[a:quiebres|Mapa de Quiebres]]
