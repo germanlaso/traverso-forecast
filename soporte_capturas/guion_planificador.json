@@ -1,0 +1,382 @@
+{
+ "base_url": "http://180.1.1.18:3000",
+ "viewport": [
+  1440,
+  900
+ ],
+ "escala": 1,
+ "variables": {
+  "SKU_EJEMPLO": "261010255"
+ },
+ "difuminar_palabras": [],
+ "capturas": [
+  {
+   "archivo": "plan__forecast.png",
+   "titulo": "Forecast de un SKU",
+   "seccion": "📈 Forecast",
+   "pestana": "Forecast de Demanda",
+   "esperar_texto": "SKU:",
+   "pasos": [
+    {
+     "accion": "escribir",
+     "selector": "input[placeholder^='Buscar por código']",
+     "valor": "{SKU_EJEMPLO}"
+    },
+    {
+     "accion": "esperar",
+     "ms": 800
+    },
+    {
+     "accion": "click",
+     "texto": "{SKU_EJEMPLO}"
+    },
+    {
+     "accion": "esperar_texto",
+     "texto": "Forecast semanal detallado"
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "selector": "input[placeholder^='Buscar por código']",
+     "pos": "arriba"
+    },
+    {
+     "n": 2,
+     "texto": "Canal:",
+     "exacto": true,
+     "pos": "arriba"
+    },
+    {
+     "n": 3,
+     "texto": "MAPE",
+     "exacto": true,
+     "subir": 1
+    },
+    {
+     "n": 4,
+     "texto": "Forecast semanal detallado"
+    }
+   ]
+  },
+  {
+   "archivo": "plan__eventos.png",
+   "titulo": "Eventos",
+   "seccion": "📈 Forecast",
+   "pestana": "Eventos",
+   "esperar_texto": "Registrar un evento pasado",
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Eventos registrados"
+    },
+    {
+     "n": 2,
+     "texto": "Registrar un evento pasado"
+    }
+   ]
+  },
+  {
+   "archivo": "plan__precision.png",
+   "titulo": "Precisión del forecast",
+   "seccion": "📈 Forecast",
+   "pestana": "Precisión Forecast",
+   "esperar_texto": "Sesgo neto",
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "1 semana de anticipación"
+    },
+    {
+     "n": 2,
+     "texto": "Sesgo neto",
+     "exacto": true,
+     "subir": 1
+    },
+    {
+     "n": 3,
+     "texto": "WMAPE",
+     "exacto": true,
+     "subir": 1,
+     "pos": "abajo"
+    },
+    {
+     "n": 4,
+     "texto": "Forecast vs real vs año anterior",
+     "pos": "der"
+    }
+   ],
+   "pasos": [
+    {
+     "accion": "click",
+     "texto": "Forecast vs real vs año anterior",
+     "exacto": true
+    },
+    {
+     "accion": "esperar",
+     "ms": 1500
+    }
+   ]
+  },
+  {
+   "archivo": "plan__detalle_grilla.png",
+   "titulo": "Grilla de Detalle Producción",
+   "seccion": "🏭 Planificación",
+   "pestana": "Detalle Producción",
+   "esperar_texto": "Sem sig.",
+   "pasos": [
+    {
+     "accion": "click",
+     "texto": "▸",
+     "exacto": true
+    },
+    {
+     "accion": "esperar",
+     "ms": 1200
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Sem sig.",
+     "pos": "arriba"
+    },
+    {
+     "n": 2,
+     "texto": "% libre",
+     "indice": 1
+    },
+    {
+     "n": 3,
+     "texto": "aprobadas",
+     "pos": "arriba"
+    },
+    {
+     "n": 4,
+     "texto": "real ",
+     "opcional": true
+    },
+    {
+     "n": 5,
+     "texto": "Stock del datalake"
+    }
+   ]
+  },
+  {
+   "archivo": "plan__aprobar.png",
+   "titulo": "Ventana de aprobación (se cierra con Cancelar, sin guardar)",
+   "seccion": "🏭 Planificación",
+   "pestana": "Detalle Producción",
+   "esperar_texto": "Sem sig.",
+   "pasos": [
+    {
+     "accion": "click",
+     "texto": "▸",
+     "exacto": true
+    },
+    {
+     "accion": "esperar",
+     "ms": 1200
+    },
+    {
+     "accion": "scroll",
+     "texto": "Aprobar",
+     "exacto": true
+    },
+    {
+     "accion": "click",
+     "texto": "Aprobar",
+     "exacto": true
+    },
+    {
+     "accion": "esperar_texto",
+     "texto": "Aprobar orden de producción"
+    },
+    {
+     "accion": "esperar",
+     "ms": 600
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Cantidad real a producir"
+    },
+    {
+     "n": 2,
+     "texto": "Fecha lanzamiento real"
+    },
+    {
+     "n": 3,
+     "texto": "Responsable *",
+     "exacto": true
+    },
+    {
+     "n": 4,
+     "texto": "Confirmar aprobación",
+     "pos": "der"
+    }
+   ],
+   "despues": [
+    {
+     "accion": "click",
+     "texto": "Cancelar",
+     "exacto": true
+    }
+   ]
+  },
+  {
+   "archivo": "plan__crear_of.png",
+   "titulo": "Crear OF manual (se cierra con Cancelar, sin crear)",
+   "seccion": "🏭 Planificación",
+   "pestana": "Detalle Producción",
+   "esperar_texto": "Sem sig.",
+   "pasos": [
+    {
+     "accion": "click",
+     "texto": "＋ Crear OF",
+     "exacto": true
+    },
+    {
+     "accion": "esperar_texto",
+     "texto": "Crear OF manual"
+    },
+    {
+     "accion": "esperar",
+     "ms": 800
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "SKU",
+     "exacto": true
+    },
+    {
+     "n": 2,
+     "texto": "Cantidad (cajas)"
+    },
+    {
+     "n": 3,
+     "texto": "Fecha de lanzamiento"
+    },
+    {
+     "n": 4,
+     "texto": "Capacidad del día",
+     "subir": 1,
+     "opcional": true
+    }
+   ],
+   "despues": [
+    {
+     "accion": "click",
+     "texto": "Cancelar",
+     "exacto": true
+    }
+   ]
+  },
+  {
+   "archivo": "plan__campanas.png",
+   "titulo": "Campañas",
+   "seccion": "🏭 Planificación",
+   "pestana": "Campañas",
+   "esperar_texto": "Campañas de línea",
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "fijado por el planificador",
+     "opcional": true
+    },
+    {
+     "n": 2,
+     "texto": "propuesto por el optimizador",
+     "opcional": true,
+     "pos": "arriba"
+    }
+   ]
+  },
+  {
+   "archivo": "plan__programacion.png",
+   "titulo": "Programación Diaria",
+   "seccion": "🏭 Planificación",
+   "pestana": "Programación Diaria",
+   "esperar_texto": "Desde:",
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Desde:",
+     "exacto": true
+    },
+    {
+     "n": 2,
+     "texto": "Lineas:",
+     "exacto": true
+    },
+    {
+     "n": 3,
+     "texto": "Imprimir / Guardar PDF"
+    }
+   ]
+  },
+  {
+   "archivo": "plan__faltantes.png",
+   "titulo": "Faltantes",
+   "seccion": "📊 Control",
+   "pestana": "Faltantes",
+   "esperar_texto": "Faltante diario",
+   "espera_ms": 2500,
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Desde",
+     "exacto": true
+    },
+    {
+     "n": 2,
+     "texto": "Faltante del rango",
+     "subir": 1
+    },
+    {
+     "n": 3,
+     "texto": "Faltante diario"
+    },
+    {
+     "n": 4,
+     "texto": "↓ Excel",
+     "opcional": true
+    }
+   ]
+  },
+  {
+   "archivo": "plan__analisislinea.png",
+   "titulo": "Análisis de Línea",
+   "seccion": "📊 Control",
+   "pestana": "Análisis de Línea",
+   "esperar_texto": "¿Puede cada línea cumplir lo que viene?",
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "No cumple",
+     "exacto": true
+    },
+    {
+     "n": 2,
+     "texto": "Carga próx. 3 sem",
+     "pos": "arriba"
+    },
+    {
+     "n": 3,
+     "texto": "Analizar",
+     "exacto": true,
+     "pos": "abajo"
+    },
+    {
+     "n": 4,
+     "texto": "por decidir",
+     "pos": "abajo",
+     "opcional": true
+    }
+   ]
+  }
+ ]
+}

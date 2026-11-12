@@ -11,15 +11,17 @@ Está en **Control → Análisis de Línea**.
 Responde: **¿puede cada línea cumplir lo que viene?** Muestra el [[g:semaforo|semáforo]] de cada línea y, cuando una no está pudiendo cumplir, permite analizarla y decidir qué hacer.
 
 ## Qué muestra
-- Una tarjeta por línea con su semáforo y un mini gráfico por semana:
-  - **Barra**: [[g:carga-requerida]] por la demanda.
+- Una fila por línea, de la más comprometida a la menos, con su **estado** (**No cumple**, **En riesgo** u **OK**) y el **por qué**.
+- **Carga próx. 3 sem** ([[g:carga-requerida]]) y **Demostrada** ([[g:capacidad-demostrada]]).
+- Un gráfico por semana:
+  - **Barra**: carga requerida por la demanda.
   - **Marca negra**: [[g:uso-programado]] en el plan.
   - **Línea roja**: capacidad nominal (100%).
-  - **Línea verde**: [[g:capacidad-demostrada]].
-- Casos abiertos, automáticos (los abre el sistema tras el plan diario) o manuales.
+  - **Línea verde**: capacidad demostrada.
+- **Análisis (n · m por decidir)**: casos abiertos de la línea, automáticos (los abre el sistema tras el plan diario) o manuales.
 
 ## Cómo se usa
-1. Revisa las líneas en rojo y ámbar.
+1. Revisa las líneas **No cumple** y **En riesgo**.
 2. Usa **Analizar** en una línea: en aproximadamente un minuto entrega causas, [[g:palancas]] en orden de esfuerzo y una recomendación.
 3. Revisa las acciones recomendadas: efecto, costo o riesgo.
 4. Si quieres comprobar una palanca, usa **Validar con solver esta noche** (se ejecuta desde las 21:00).
@@ -27,8 +29,8 @@ Responde: **¿puede cada línea cumplir lo que viene?** Muestra el [[g:semaforo|
 
 ## Cómo leer los datos
 - La capacidad nominal (100%) sigue el calendario de turnos de cada línea (por defecto la [[g:jornada-42h]]), sin contar feriados, e incluye turnos adicionales vigentes y excepciones por fecha.
-- Rojo: carga requerida sobre 95% en alguna de las próximas 3 semanas, o quiebre por capacidad desde la semana 2.
-- Ámbar: carga sobre 85%, o quiebre inmediato en la semana 1.
+- **No cumple** (rojo): carga requerida sobre 95% en alguna de las próximas 3 semanas, o quiebre por capacidad desde la semana 2.
+- **En riesgo** (ámbar): carga sobre 85%, o quiebre inmediato en la semana 1.
 - Si la barra supera la marca negra, el plan no alcanzó a programar lo que la demanda pide.
 - **Nada se aplica solo**: los cambios de parámetros aceptados pasan como recomendaciones al panel de Parámetros.
 - Los motivos de descarte también sirven: el sistema los considera en los próximos análisis.

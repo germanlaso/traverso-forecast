@@ -34,6 +34,7 @@ Formato del guion:
                     #             "pos": "izq" (defecto, número a la izquierda) | "der" | "arriba" | "abajo"
      "esperar_sin_texto": ["Cargando"],                                # defecto: no queda ningún "Cargando"
      "recorte": {"selector": "..."} | null,                            # solo esa zona de la pantalla
+     "despues": [pasos],                                               # tras la foto (p. ej. click en Cancelar)
      "pagina_completa": false}
   ]
 }
@@ -207,6 +208,10 @@ def capturar(page, guion, cap, salida, variables):
         localizar(page, cap["recorte"]).screenshot(path=str(destino))
     else:
         page.screenshot(path=str(destino), full_page=bool(cap.get("pagina_completa")))
+    # "despues": pasos de cierre (p. ej. Cancelar una ventana abierta solo para la foto, sin guardar nada)
+    if cap.get("despues"):
+        page.evaluate("() => { const c = document.getElementById('__anotaciones_soporte'); if (c) c.remove(); }")
+        ejecutar_pasos(page, cap["despues"], variables)
     return destino
 
 
@@ -252,7 +257,17 @@ def main():
     # el manifiesto queda junto al script (no en la carpeta de imágenes, que es contenido publicado)
     dir_man = Path(__file__).resolve().parent / "manifiestos"
     dir_man.mkdir(exist_ok=True)
-    (dir_man / f"{Path(a.guion).stem}.json").write_text(json.dumps(manifiesto, ensure_ascii=False, indent=1), encoding="utf-8")
+    arch_man = dir_man / f"{Path(a.guion).stem}.json"
+    previo = {}
+    if arch_man.exists():                         # con --solo se actualizan solo las capturas corridas
+        try:
+            previo = {m["archivo"]: m for m in json.loads(arch_man.read_text(encoding="utf-8"))}
+        except (ValueError, KeyError):
+            previo = {}
+    previo.update({m["archivo"]: m for m in manifiesto})
+    orden = [c["archivo"] for c in guion["capturas"]]
+    final = sorted(previo.values(), key=lambda m: orden.index(m["archivo"]) if m["archivo"] in orden else 999)
+    arch_man.write_text(json.dumps(final, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"\n{len(capturas) - errores} de {len(capturas)} capturas OK · salida: {salida.resolve()}")
     sys.exit(1 if errores else 0)
 

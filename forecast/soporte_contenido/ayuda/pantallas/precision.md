@@ -13,7 +13,7 @@ Mide qué tan bien acierta el [[g:forecast]]. Compara la venta real con lo que s
 ## Qué muestra
 - Selector de anticipación (1 o 2 semanas) y filtros por SKU, categoría, línea y rango de semanas.
 - Indicadores: [[g:sesgo]] neto, [[g:wmape]], venta real y forecast en cajas, semanas evaluadas.
-- Gráfico **Forecast vs real vs año anterior**.
+- Dos vistas del gráfico: **Forecast vs real vs año anterior** (lo pronosticado, lo vendido y el año anterior, semana a semana) y **Desviación** (sesgo y WMAPE de cada semana).
 - Tabla por SKU con su desviación.
 
 ## Cómo se usa

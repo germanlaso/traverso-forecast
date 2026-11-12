@@ -420,7 +420,7 @@
   "id": "semaforo",
   "termino": "Semáforo de líneas",
   "nombre": "Estado de capacidad por línea",
-  "definicion": "Rojo: carga requerida sobre 95% en alguna de las próximas 3 semanas, o un SKU (no a pedido) con quiebre desde la semana 2. Ámbar: carga requerida sobre 85%, o quiebre inmediato en la semana 1 (pedidos o recepciones). Verde: el resto.",
+  "definicion": "Estado de cada línea en Análisis de Línea. No cumple (rojo): carga requerida sobre 95% en alguna de las próximas 3 semanas, o un SKU (no a pedido) con quiebre desde la semana 2. En riesgo (ámbar): carga sobre 85%, o quiebre inmediato en la semana 1 (pedidos o recepciones). OK (verde): el resto.",
   "sinonimos": [
    "semáforo"
   ],

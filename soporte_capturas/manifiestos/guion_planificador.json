@@ -1,0 +1,62 @@
+[
+ {
+  "archivo": "plan__forecast.png",
+  "titulo": "Forecast de un SKU",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:42:36"
+ },
+ {
+  "archivo": "plan__eventos.png",
+  "titulo": "Eventos",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:42:43"
+ },
+ {
+  "archivo": "plan__precision.png",
+  "titulo": "Precisión del forecast",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:53:51"
+ },
+ {
+  "archivo": "plan__detalle_grilla.png",
+  "titulo": "Grilla de Detalle Producción",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:50:42"
+ },
+ {
+  "archivo": "plan__aprobar.png",
+  "titulo": "Ventana de aprobación (se cierra con Cancelar, sin guardar)",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:50:53"
+ },
+ {
+  "archivo": "plan__crear_of.png",
+  "titulo": "Crear OF manual (se cierra con Cancelar, sin crear)",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:51:03"
+ },
+ {
+  "archivo": "plan__campanas.png",
+  "titulo": "Campañas",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:51:11"
+ },
+ {
+  "archivo": "plan__programacion.png",
+  "titulo": "Programación Diaria",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:51:18"
+ },
+ {
+  "archivo": "plan__faltantes.png",
+  "titulo": "Faltantes",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:51:25"
+ },
+ {
+  "archivo": "plan__analisislinea.png",
+  "titulo": "Análisis de Línea",
+  "estado": "OK",
+  "fecha": "2026-11-12T10:47:27"
+ }
+]
