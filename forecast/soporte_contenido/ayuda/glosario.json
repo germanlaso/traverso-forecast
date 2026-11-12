@@ -383,9 +383,10 @@
   "id": "carga-requerida",
   "termino": "Carga requerida",
   "nombre": "Carga requerida por la demanda",
-  "definicion": "Horas de línea que exige la demanda del plan, como % de la capacidad nominal. Es lo que se necesita producir.",
+  "definicion": "Producción neta que hace falta en una línea: la demanda menos el stock disponible, manteniendo el stock de seguridad. Se expresa como % de la capacidad nominal. Una línea con mucho stock aparece menos exigida que si se mirara solo la demanda.",
   "sinonimos": [
-   "requerido"
+   "requerido",
+   "necesidad neta"
   ],
   "pantallas": [
    "analisislinea"
@@ -606,6 +607,31 @@
   ],
   "pantallas": [
    "parametros"
+  ]
+ },
+ {
+  "id": "analisis-vigente",
+  "termino": "Análisis vigente",
+  "nombre": "Análisis vigente de una línea",
+  "definicion": "El análisis más reciente de una línea en Análisis de Línea (botón \"Análisis #N\"). Es el único que se decide y se valida con solver; los anteriores quedan en el Historial, solo para consulta.",
+  "sinonimos": [
+   "análisis actual",
+   "caso vigente"
+  ],
+  "pantallas": [
+   "analisislinea"
+  ]
+ },
+ {
+  "id": "reemplazado",
+  "termino": "Reemplazado",
+  "nombre": "Análisis reemplazado",
+  "definicion": "Estado de un análisis anterior que no se había decidido cuando se abrió uno nuevo de la misma línea. Queda en el Historial en solo lectura, no se decide y sus validaciones programadas se cancelan. No es un descarte: no cuenta como decisión para el aprendizaje.",
+  "sinonimos": [
+   "reemplazado por"
+  ],
+  "pantallas": [
+   "analisislinea"
   ]
  }
 ]
