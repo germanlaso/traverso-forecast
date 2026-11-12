@@ -20,17 +20,24 @@ const C = {
 
 // Accesos por seccion. Los keys son los MISMOS tab-keys de App.js.
 const ACCESOS = [
+  // Misma estructura que NAV en App.js (reorganización 12-11-2026). Plan de Producción y
+  // Conciliación quedan fuera del menú.
   { seccion: 'forecast', titulo: '📈 Forecast', items: [
-      ['forecast', 'Forecast de Demanda'], ['eventos', 'Eventos'] ] },
+      ['forecast', 'Forecast de Demanda'], ['eventos', 'Eventos'],
+      ['precision', 'Precisión Forecast'] ] },
   { seccion: 'planificacion', titulo: '🏭 Planificación', items: [
-      ['stockdiario', 'Stock Diario'], ['plan', 'Plan de Producción'],
-      ['detalle', 'Detalle Producción'], ['campanas', 'Campañas'],
-      ['programacion', 'Programación Diaria'] ] },
+      ['stockdiario', 'Stock Diario'], ['detalle', 'Detalle Producción'],
+      ['campanas', 'Campañas'], ['programacion', 'Programación Diaria'],
+      ['bitacora', 'Bitácora'] ] },
   { seccion: 'control', titulo: '📊 Control', items: [
-      ['stockdiario', 'Stock Diario'], ['faltantes', 'Faltantes'],
-      ['resumen30', 'Resumen 30d'], ['quiebres', 'Mapa de Quiebres'] ] },   // Conciliación oculta temporalmente (pendiente de mas pruebas)
+      ['faltantes', 'Faltantes'], ['resumen30', 'Resumen 30d'],
+      ['quiebres', 'Mapa de Quiebres'], ['analisislinea', 'Análisis de Línea'] ] },
+  { seccion: 'informes', titulo: '📑 Informes', items: [
+      ['faltantes', 'Faltantes'], ['resumen30', 'Resumen 30d'],
+      ['precision', 'Precisión Forecast'], ['rendimiento', 'Rendimiento'],
+      ['informeia', 'Informe semanal'], ['aprendido', 'Base de conocimiento'] ] },
   { seccion: 'herramientas', titulo: '🛠️ Herramientas', items: [
-      ['parametros', 'Parámetros'] ] },
+      ['parametros', 'Parámetros'], ['monitor', 'Salud Datalake'] ] },
 ];
 
 const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];

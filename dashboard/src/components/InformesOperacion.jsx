@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 
-// Pestaña Control > Informe IA.
+// Pestaña Informes > Informe semanal (clave 'informeia').
 //   · Informes AUTOMÁTICOS (semanales): guardados en la BD, servidos por el backend
 //     (/informes/lista y /informes/{id}/html). PDF: imprimir desde el navegador.
 //   · Informes estáticos anteriores: public/informes/index.json (+ .html y .pdf).

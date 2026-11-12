@@ -54,11 +54,17 @@ const MAIN_MAXW_ANCHO = 1800;
 // ── Modelo de navegación en dos niveles (mismos keys de tab de siempre) ──
 const NAV = [
   { key:'home', label:'🏠 Inicio', tab:'home' },
+  // Reorganización del menú (12-11-2026). Las claves de pestaña NO cambian: las usan la ayuda "?",
+  // la Academia, Mostacín y el Landing. Una pestaña puede estar en dos secciones (Faltantes,
+  // Resumen 30d, Precisión); irAPantalla() lleva a la primera sección que la contiene.
+  // Ocultas del menú (el render sigue en este archivo, reversible): 'plan' (Plan de Producción)
+  // y 'conciliacion' (Conciliación; Rendimiento usa su backend, no tocar).
   { key:'forecast', label:'📈 Forecast', tabs:[['forecast','Forecast de Demanda'],['eventos','Eventos'],['precision','Precisión Forecast']] },
-  { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['plan','Plan de Producción'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria']] },
-  { key:'control', label:'📊 Control', tabs:[['stockdiario','Stock Diario'],['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['conciliacion','Conciliación'],['monitor','Salud Datalake'],['bitacora','Bitácora'],['rendimiento','Rendimiento'],['informeia','Informe IA'],['analisislinea','Análisis de Línea'],['aprendido','Lo aprendido']] },
-  { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros']] },
-  { key:'soporte', label:'🛟 Soporte', tabs:[['ayuda','Ayuda'],['academia','Academia'],['mostacin','Mostacín']] },
+  { key:'planificacion', label:'🏭 Planificación', tabs:[['stockdiario','Stock Diario'],['detalle','Detalle Producción'],['campanas','Campañas'],['programacion','Programación Diaria'],['bitacora','Bitácora']] },
+  { key:'control', label:'📊 Control', tabs:[['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['analisislinea','Análisis de Línea']] },
+  { key:'informes', label:'📑 Informes', tabs:[['faltantes','Faltantes'],['resumen30','Resumen 30d'],['precision','Precisión Forecast'],['rendimiento','Rendimiento'],['informeia','Informe semanal'],['aprendido','Base de conocimiento']] },
+  { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros'],['monitor','Salud Datalake']] },
+  { key:'soporte', label:'🛟 Soporte', tabs:[['ayuda','Ayuda'],['academia','Academia'],['mostacin','Chat de consultas']] },
 ];
 
 const C = {
@@ -280,8 +286,8 @@ function AppInner() {
     return `hace ${Math.round(diffH / 24)} dias`;
   };
   const [dbStatus, setDbStatus] = useState(null);
-  const [csvMode, setCsvMode] = useState(false);
-  const [csvPath, setCsvPath] = useState('/app/data/ventas.csv');
+  const [csvMode] = useState(false);   // fuente fija: SQL Server (selector quitado 12-11-2026)
+  const [csvPath] = useState('/app/data/ventas.csv');
   const [periods, setPeriods] = useState(26);
   const [canal, setCanal] = useState('');
   const [canales, setCanales] = useState([]);
@@ -344,11 +350,12 @@ function AppInner() {
   const [aprobForm, setAprobForm]   = useState({});     // campos del form
   const [aprobando, setAprobando]   = useState(false);
   const [stockInfo, setStockInfo] = useState(null);
-  const [events, setEvents] = useState([
+  const [events] = useState([   // sin UI desde 12-11-2026 (eventos en Forecast > Eventos); inactivos
     {name:'promo_verano', label:'Promo verano', dates:'', value:1.25, active:false},
     {name:'nuevo_competidor', label:'Nuevo competidor', dates:'', value:0.88, active:false},
   ]);
   const canalRef = useRef('');
+  const fcReqRef = useRef(0);   // Forecast: id de la última consulta (descarta respuestas viejas)
 
   useEffect(() => {
     axios.get(`${API}/health`).then(r => setDbStatus(r.data)).catch(() => setDbStatus({status:'error'}));
@@ -399,6 +406,7 @@ function AppInner() {
 
   const runForecast = async (forceRetrain = false) => {
     if (!selSku) return;
+    const reqId = ++fcReqRef.current;
     setLoading(true); setError(''); setResult(null);
     const canalVal = canalRef.current || null;
     const activeEvents = events
@@ -411,13 +419,21 @@ function AppInner() {
         events: activeEvents, force_retrain: forceRetrain,
         use_csv: csvMode ? csvPath : null,
       });
+      if (reqId !== fcReqRef.current) return;   // llegó otra consulta después
       setResult(data);
     } catch(e) {
-      setError(`Error: ${extractErrorMsg(e)}`);
+      if (reqId === fcReqRef.current) setError(`Error: ${extractErrorMsg(e)}`);
     } finally {
-      setLoading(false);
+      if (reqId === fcReqRef.current) setLoading(false);
     }
   };
+
+  // Forecast de Demanda (12-11-2026): se muestra solo al elegir SKU, canal o semanas, usando el
+  // modelo en caché. Reemplaza los botones "Generar forecast" y "Reentrenar": el forecast diario y
+  // el reentrenamiento semanal (domingos) los hace el cron. Endpoints /forecast y /train/batch intactos.
+  useEffect(() => {
+    if (activeTab === 'forecast' && selSku) runForecast(false);
+  }, [activeTab, selSku, canal, periods]);
 
   const runPlan = async () => {
     setPlanLoading(true); setPlan(null); setError('');
@@ -718,8 +734,8 @@ function AppInner() {
               fontWeight: 600,
               cursor: 'pointer'
             }}
-            onClick={() => { setActiveSection('planificacion'); setActiveTab('plan'); }}
-            title="Click para ir al plan y regenerar">
+            onClick={() => { setActiveSection('planificacion'); setActiveTab('detalle'); }}
+            title="Click para ir a Detalle Producción">
               ⚠ Plan desactualizado — Regenerar
             </span>
           )}
@@ -764,15 +780,6 @@ function AppInner() {
         {/* ══ FORECAST TAB ══ */}
         {activeTab === 'forecast' && (
           <div>
-            <div style={{...s.card,marginBottom:12}}>
-              <div style={s.row}>
-                <span style={{fontSize:12,fontWeight:600,color:C.textMuted}}>Fuente:</span>
-                <label style={{fontSize:12,cursor:'pointer',display:'flex',alignItems:'center',gap:5}}><input type="radio" checked={!csvMode} onChange={() => setCsvMode(false)}/>SQL Server</label>
-                <label style={{fontSize:12,cursor:'pointer',display:'flex',alignItems:'center',gap:5}}><input type="radio" checked={csvMode} onChange={() => setCsvMode(true)}/>CSV offline</label>
-                {csvMode && <input style={{...s.input,flex:1,minWidth:280}} value={csvPath} onChange={e => setCsvPath(e.target.value)} placeholder="/app/data/ventas.csv"/>}
-              </div>
-            </div>
-
             <div style={s.card}>
               <div style={s.row}>
                 <span style={{fontSize:12,fontWeight:600,color:C.textMuted}}>SKU:</span>
@@ -787,8 +794,7 @@ function AppInner() {
                   <option value="">Todos los canales</option>
                   {canales.filter(c => c !== 'OFICINA').map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <button style={s.btnPrimary} onClick={() => runForecast(false)} disabled={loading||!selSku}>{loading ? 'Calculando...' : '▶ Generar forecast'}</button>
-                <button style={s.btn} onClick={() => runForecast(true)} disabled={loading||!selSku}>↺ Reentrenar</button>
+                {loading && <span style={{fontSize:12,color:C.textMuted}}>Calculando forecast…</span>}
               </div>
               {selectedSku && <div style={{fontSize:11,color:C.textMuted,marginTop:-6}}>
                 <span style={{marginRight:16}}>Marca: <strong>{selectedSku.marca||'—'}</strong></span>
@@ -839,21 +845,6 @@ function AppInner() {
               </div>
             )}
 
-            <div style={s.grid2}>
-              <div style={s.card}>
-                <div style={s.cardTitle}>Ajustes comerciales (regressores)</div>
-                <div style={{fontSize:11,color:C.textMuted,marginBottom:10}}>Activa eventos para ver su impacto. Fechas separadas por coma (AAAA-MM-DD).</div>
-                {events.map((ev, i) => (
-                  <div key={i} style={s.eventRow}>
-                    <input type="checkbox" checked={ev.active} onChange={e => setEvents(events.map((x,j) => j===i?{...x,active:e.target.checked}:x))}/>
-                    <input style={{...s.input,width:130}} value={ev.label} onChange={e => setEvents(events.map((x,j) => j===i?{...x,label:e.target.value}:x))}/>
-                    <input style={{...s.input,flex:1}} placeholder="2025-02-03, 2025-02-10" value={ev.dates} onChange={e => setEvents(events.map((x,j) => j===i?{...x,dates:e.target.value}:x))}/>
-                    <input type="number" style={{...s.input,width:64}} step="0.01" min="0" value={ev.value} onChange={e => setEvents(events.map((x,j) => j===i?{...x,value:e.target.value}:x))}/>
-                    <span style={{fontSize:10,color:C.textMuted,width:50}}>{ev.value>=1?`+${Math.round((ev.value-1)*100)}%`:`-${Math.round((1-ev.value)*100)}%`}</span>
-                  </div>
-                ))}
-                <button style={{...s.btn,marginTop:10,fontSize:11,width:'100%'}} onClick={() => setEvents([...events,{name:`evento_${events.length+1}`,label:'Nuevo evento',dates:'',value:1.0,active:true}])}>+ Agregar evento</button>
-              </div>
               <div style={s.card}>
                 <div style={s.cardTitle}>Forecast semanal detallado</div>
                 <div style={{overflowY:'auto',maxHeight:280}}>
@@ -870,12 +861,11 @@ function AppInner() {
                           <td style={{padding:'5px 10px',color:C.textMuted}}>{Math.round(f.yhat_upper).toLocaleString('es-CL')}</td>
                         </tr>
                       ))}
-                      {!result && <tr><td colSpan={4} style={{padding:'20px 10px',color:C.textMuted,textAlign:'center'}}>Selecciona un SKU y genera el forecast</td></tr>}
+                      {!result && <tr><td colSpan={4} style={{padding:'20px 10px',color:C.textMuted,textAlign:'center'}}>Selecciona un SKU para ver su forecast</td></tr>}
                     </tbody>
                   </table>
                 </div>
               </div>
-            </div>
 
             {skus.length > 0 && (
               <div style={s.card}>
@@ -1308,6 +1298,20 @@ function AppInner() {
           ordenesAprobadas={ordenesAprobadas}
         />}
         {activeTab === 'quiebres' && <MapaQuiebres onOpenSku={irAStock} />}
+        {/* Acciones que estaban en la pestaña Plan de Producción (oculta del menú el 12-11-2026).
+            Sin "Actualizar stock": el datalake se actualiza una vez al día y el cron lo descarga; el
+            botón daba la falsa impresión de stock al minuto. Se muestra la fecha del stock en uso. */}
+        {activeTab === 'detalle' && (
+          <div style={{display:'flex',gap:10,alignItems:'center',justifyContent:'flex-end',flexWrap:'wrap',marginBottom:10}}>
+            {stockInfo?.disponible && <span style={{fontSize:11,color:C.textMuted}}>Stock del datalake: {stockInfo.fecha_descarga_info||'—'}</span>}
+            {plan?.ordenes?.length > 0 && (
+              <button style={s.btn} onClick={descargarPlanCSV}
+                title="Descargar todo el plan (sugerido y aprobado) en CSV para Excel">
+                ⬇ Descargar plan (CSV)
+              </button>
+            )}
+          </div>
+        )}
         {activeTab === 'detalle' && <DetalleProduccion
           ordenesPlan={plan?.ordenes ?? []}
           ordenesAprobadas={ordenesAprobadas}

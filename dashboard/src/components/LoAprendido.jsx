@@ -50,7 +50,7 @@ export default function LoAprendido() {
       .then(setD).catch((e) => setErr(e.message));
   }, []);
   if (err) return <div style={st.wrap}><div style={{ ...st.card, color: C.redDk }}>{err}</div></div>;
-  if (!d) return <div style={st.wrap}><div style={st.card}>Cargando lo aprendido…</div></div>;
+  if (!d) return <div style={st.wrap}><div style={st.card}>Cargando base de conocimiento…</div></div>;
 
   const cap = d.conocimiento.filter((x) => x.metrica === "capacidad_semanal_pct");
   const ivs = d.intervenciones;
@@ -64,7 +64,7 @@ export default function LoAprendido() {
 
   return (
     <div style={st.wrap}>
-      <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Lo aprendido</h2>
+      <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Base de conocimiento</h2>
       <p style={{ margin: "0 0 12px", fontSize: 12.5, color: C.gray }}>
         Lo que el sistema sabe a partir de los datos reales y de las decisiones tomadas: capacidad real de cada línea,
         qué cambios funcionaron y por qué se descartaron recomendaciones. Esta memoria es la que usa la IA en cada análisis.
