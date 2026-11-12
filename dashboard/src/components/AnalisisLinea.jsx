@@ -104,6 +104,7 @@ function Caso({ caso, onCerrar, onDecidido }) {
   const ESTADO_ACC = { aceptada: [C.amberLt, C.amberDk, "Pendiente"], hecha: [C.tealLt, C.tealMid, "Hecha"],
                        rechazada: [C.grayLt, C.gray, "No aceptada"], descartada: [C.grayLt, C.gray, "Descartada"] };
   const decidido = !!caso.decision;
+  const reemplazado = caso.estado === "reemplazado";
   return (
     <div style={{ ...st.card, borderColor: C.purple, borderWidth: 2 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
@@ -124,7 +125,7 @@ function Caso({ caso, onCerrar, onDecidido }) {
       {(r.acciones || []).map((a) => { const ac = accDe(a.orden); return (
         <div key={a.orden} style={{ display: "flex", gap: 10, padding: "8px 10px", border: `1px solid ${C.grayLt}`, borderRadius: 8, marginBottom: 6,
                                     opacity: ac && ac.estado === "rechazada" ? .55 : 1 }}>
-          {!caso.decision && (
+          {!caso.decision && !reemplazado && (
             <input type="checkbox" style={{ marginTop: 4 }} checked={marcadas.has(a.orden)} title="Marcar para aceptar"
                    onChange={(e) => { const n = new Set(marcadas); e.target.checked ? n.add(a.orden) : n.delete(a.orden); setMarcadas(n); }} />)}
           <div style={{ fontSize: 18, fontWeight: 700, color: C.purple, minWidth: 18 }}>{a.orden}</div>
@@ -171,11 +172,28 @@ function Caso({ caso, onCerrar, onDecidido }) {
         <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>{dg.metodo}{r._meta ? ` · IA: ${r._meta.modelo}, ${r._meta.segundos} s, US$ ${r._meta.costo_usd}` : ""}</div>
       </details>
 
-      <div style={st.sec}>Validación con el solver</div>
-      <div style={{ fontSize: 12, color: C.gray, marginBottom: 6 }}>
+      {(caso.pendientes_anteriores || []).length > 0 && !reemplazado && (
+        <div style={{ border: `1px solid ${C.amber}`, background: C.amberLt, borderRadius: 8, padding: "8px 10px", margin: "8px 0", fontSize: 12.5 }}>
+          <b>Acciones pendientes de análisis anteriores de esta línea</b> (aceptadas, aún sin ejecutar):
+          {caso.pendientes_anteriores.map((a) => (
+            <div key={a.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 5 }}>
+              <span style={{ minWidth: 70, color: C.gray }}>caso #{a.caso_id}</span>
+              <span style={{ flex: 1 }}>{a.accion}</span>
+              {a.recomendaciones > 0 ? <span style={{ color: C.amberDk }}>se cierra al aplicarla en Herramientas → Parámetros</span> : <>
+                <input style={{ ...st.input, width: 220, padding: "3px 6px", fontSize: 12 }} placeholder="Qué se hizo / por qué se descarta"
+                       value={comentarios[a.id] || ""} onChange={(e) => setComentarios({ ...comentarios, [a.id]: e.target.value })} />
+                <button style={{ ...st.btn, padding: "3px 9px", fontSize: 11.5 }} onClick={() => resolver(a, "hecha")}>Marcar hecha</button>
+                <button style={{ ...st.btn, padding: "3px 9px", fontSize: 11.5 }} onClick={() => resolver(a, "descartada")}>Descartar</button>
+              </>}
+            </div>))}
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Para marcar o descartar usa tu nombre y PIN de la sección "Tu decisión".</div>
+        </div>)}
+
+      {!reemplazado && <div style={st.sec}>Validación con el solver</div>}
+      {!reemplazado && <div style={{ fontSize: 12, color: C.gray, marginBottom: 6 }}>
         El análisis estima las palancas con un modelo de horas. Para confirmarlas, el sistema puede correr esta noche el plan completo
-        con la palanca aplicada (sin cambiar nada real), con 2 semillas, y compararlo contra el plan sin cambios.</div>
-      {(caso.validaciones || []).map((v) => (
+        con la palanca aplicada (sin cambiar nada real), con 2 semillas, y compararlo contra el plan sin cambios.</div>}
+      {!reemplazado && (caso.validaciones || []).map((v) => (
         <div key={v.id} style={{ border: `1px solid ${C.grayLt}`, borderRadius: 8, padding: "7px 10px", marginBottom: 6, fontSize: 12.5 }}>
           <b>#{v.id}</b> · palancas 1 a {v.nivel} · {v.descripcion} ·{" "}
           {v.estado === "lista" && v.resultado?.veredicto
@@ -185,7 +203,7 @@ function Caso({ caso, onCerrar, onDecidido }) {
             {v.resultado.consistente_entre_semillas === false && " Las semillas no coinciden: el efecto está dentro del ruido del solver."}</div>}
           {v.estado === "programada" && <div style={{ color: C.muted, marginTop: 3 }}>Se ejecuta desde las 21:00, en la cola del solver.</div>}
         </div>))}
-      {!(caso.validaciones || []).some((v) => ["programada", "ejecutando"].includes(v.estado)) && (
+      {!reemplazado && !(caso.validaciones || []).some((v) => ["programada", "ejecutando"].includes(v.estado)) && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
           <select style={{ ...st.input, width: 280 }} value={nivelVal} onChange={(e) => setNivelVal(Number(e.target.value))}>
             <option value={1}>Palanca 1: parámetros</option>
@@ -195,8 +213,12 @@ function Caso({ caso, onCerrar, onDecidido }) {
           <button style={st.btn} onClick={validar}>Validar con solver esta noche</button>
         </div>)}
 
-      <div style={st.sec}>Tu decisión</div>
-      {decidido ? (<>
+      {reemplazado ? (
+        <div style={{ marginTop: 12, padding: "8px 10px", borderRadius: 8, background: C.grayLt, fontSize: 12.5 }}>
+          <b>Análisis reemplazado por el #{caso.reemplazado_por}</b> (solo lectura). Se abrió un análisis más reciente de esta línea;
+          la decisión se toma sobre el vigente.</div>
+      ) : <div style={st.sec}>Tu decisión</div>}
+      {reemplazado ? null : decidido ? (<>
         <div style={{ fontSize: 12.5 }}><b>{caso.decision}</b> por {caso.decision_por}: {caso.decision_motivo}
           <span style={{ marginLeft: 8, ...st.pill(caso.estado === "cerrado" ? C.tealLt : C.amberLt, caso.estado === "cerrado" ? C.tealMid : C.amberDk) }}>
             {caso.estado === "en_seguimiento" ? "en seguimiento" : caso.estado}</span></div>
@@ -255,6 +277,10 @@ export default function AnalisisLinea() {
 
   const rojos = (data?.lineas || []).filter((l) => l.semaforo === "rojo").length;
   const casosDe = (linea) => casos.filter((c) => c.linea === linea);
+  // (12-11-2026, v2.2.0) un solo caso VIGENTE por línea: el más reciente que no sea error ni reemplazado.
+  // Los anteriores quedan en el historial (solo lectura).
+  const vigenteDe = (linea) => casosDe(linea).find((c) => !["error", "reemplazado"].includes(c.estado));
+  const historialDe = (linea) => { const v = vigenteDe(linea); return casosDe(linea).filter((c) => !v || c.id !== v.id); };
   return (
     <div style={st.wrap}>
       <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Análisis de Línea</h2>
@@ -284,23 +310,28 @@ export default function AnalisisLinea() {
                 <td style={{ ...st.td, whiteSpace: "nowrap" }}>
                   {l.semaforo !== "verde" && (
                     <button style={st.btnPri} disabled={!!analizando} onClick={() => analizar(l.linea)}>Analizar</button>)}
-                  {casosDe(l.linea).length > 0 && (
+                  {vigenteDe(l.linea) && (
+                    <button style={{ ...st.btn, marginLeft: 6 }} onClick={() => abrirCaso(vigenteDe(l.linea).id)}
+                            title="Abrir el análisis vigente de esta línea">
+                      Análisis #{vigenteDe(l.linea).id}
+                      {!vigenteDe(l.linea).decision && vigenteDe(l.linea).estado === "listo" &&
+                        <b style={{ color: C.purple }}> · por decidir</b>}
+                    </button>)}
+                  {historialDe(l.linea).length > 0 && (
                     <button style={{ ...st.btn, marginLeft: 6 }} onClick={() => setAbiertas({ ...abiertas, [l.linea]: !abiertas[l.linea] })}
-                            title="Ver los análisis anteriores de esta línea">
-                      {abiertas[l.linea] ? "▲" : "▼"} Análisis ({casosDe(l.linea).length}
-                      {casosDe(l.linea).filter((c) => !c.decision && c.estado === "listo").length > 0 &&
-                        <b style={{ color: C.purple }}> · {casosDe(l.linea).filter((c) => !c.decision && c.estado === "listo").length} por decidir</b>})
+                            title="Análisis anteriores de esta línea (solo lectura)">
+                      {abiertas[l.linea] ? "▲" : "▼"} Historial ({historialDe(l.linea).length})
                     </button>)}
                 </td>
               </tr>
               {abiertas[l.linea] && (
                 <tr><td colSpan={7} style={{ ...st.td, background: C.grayLt, padding: "6px 12px" }}>
-                  {casosDe(l.linea).map((c) => (
+                  {historialDe(l.linea).map((c) => (
                     <div key={c.id} onClick={() => abrirCaso(c.id)}
                          style={{ display: "flex", gap: 10, padding: "5px 6px", cursor: "pointer", borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
                       <b style={{ minWidth: 34 }}>#{c.id}</b>
                       <span style={{ minWidth: 92, color: C.gray }}>{new Date(c.creado_en).toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })}</span>
-                      <span style={{ minWidth: 80 }}>{c.decision || "pendiente"}</span>
+                      <span style={{ minWidth: 120 }}>{c.decision || (c.estado === "reemplazado" ? `reemplazado por #${c.reemplazado_por}` : c.estado === "error" ? "error" : "sin decidir")}</span>
                       <span style={{ minWidth: 76 }}>{c.origen === "automatico"
                         ? <span style={st.pill(C.blueLt, C.blue)} title="Abierto por el sistema después del plan diario">automático</span>
                         : <span style={st.pill(C.grayLt, C.gray)}>manual</span>}</span>

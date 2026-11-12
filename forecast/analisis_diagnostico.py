@@ -306,7 +306,7 @@ def _aprendizaje(c, linea):
         WHERE veredicto <> 'pendiente' ORDER BY evaluado_en DESC NULLS LAST LIMIT 10"""))]
     casos = [dict(r._mapping) for r in c.execute(sa.text("""
         SELECT creado_en::date AS fecha, recomendacion->>'resumen' AS resumen, decision, decision_motivo
-        FROM mrp_analisis_casos WHERE linea = :l AND estado NOT IN ('error') ORDER BY creado_en DESC LIMIT 3"""), {"l": linea})]
+        FROM mrp_analisis_casos WHERE linea = :l AND estado NOT IN ('error','reemplazado') ORDER BY creado_en DESC LIMIT 3"""), {"l": linea})]
     return {"intervenciones_evaluadas": inter, "casos_anteriores_linea": casos}
 
 
@@ -346,6 +346,25 @@ class Decision(BaseModel):
     pin: str
     enviar_al_panel: bool = True
     acciones_aceptadas: list[int] | None = None   # "orden" de las acciones aceptadas (parcial)
+
+
+def _reemplazar_anteriores(c, linea: str, cid: int):
+    """(12-11-2026, v2.2.0) Un solo caso VIGENTE por línea: los casos anteriores SIN DECIDIR pasan a
+    'reemplazado' (solo lectura, con referencia al nuevo) y se cancelan sus validaciones programadas.
+    Lo decidido no se toca: sus acciones pendientes siguen y se muestran en el caso vigente."""
+    ids = [r.id for r in c.execute(sa.text("""
+        UPDATE mrp_analisis_casos SET estado = 'reemplazado', reemplazado_por = :n
+        WHERE linea = :l AND id <> :n AND decision IS NULL
+          AND estado IN ('listo','solicitado','en_cola','ejecutando') RETURNING id"""), {"l": linea, "n": cid})]
+    if ids:
+        try:
+            with c.begin_nested():
+                c.execute(sa.text("""UPDATE mrp_analisis_validaciones SET estado = 'cancelada', fin = now(),
+                                     error = 'Caso reemplazado por uno más nuevo'
+                                     WHERE caso_id = ANY(:ids) AND estado = 'programada'"""), {"ids": ids})
+        except Exception:
+            pass
+    return ids
 
 
 @router.post("/lineas/{linea}/analizar")
@@ -397,6 +416,7 @@ def ejecutar_analisis(linea: str, solicitado_por: str, con_ia: bool = True, orig
                        "d": json.dumps({k: diag[k] for k in ("causas", "evidencia", "metodo", "motivos",
                                                              "primera_palanca_suficiente", "semaforo")}, default=str),
                        "r": json.dumps(rec, default=str), "i": cid})
+            _reemplazar_anteriores(c, linea, cid)
     except Exception as e:
         with _engine.begin() as c:
             c.execute(sa.text("UPDATE mrp_analisis_casos SET estado = 'error', error = :e WHERE id = :i"),
@@ -407,7 +427,7 @@ def ejecutar_analisis(linea: str, solicitado_por: str, con_ia: bool = True, orig
 
 @router.get("/casos")
 def listar_casos(linea: Optional[str] = None, limit: int = 30):
-    sql = """SELECT id, linea, creado_en, origen, solicitado_por, plan_id, estado, decision,
+    sql = """SELECT id, linea, creado_en, origen, solicitado_por, plan_id, estado, decision, reemplazado_por,
                     diagnostico->>'semaforo' AS semaforo, recomendacion->>'resumen' AS resumen
              FROM mrp_analisis_casos WHERE 1=1"""
     p = {"lim": max(1, min(limit, 200))}
@@ -430,6 +450,14 @@ def obtener_caso(cid: int):
                 "SELECT * FROM mrp_analisis_acciones WHERE caso_id = :i ORDER BY orden"), {"i": cid})]
         except Exception:
             caso["acciones"] = []
+        try:
+            caso["pendientes_anteriores"] = [dict(a._mapping) for a in c.execute(sa.text("""
+                SELECT a.id, a.caso_id, a.orden, a.palanca, a.accion, a.recomendaciones, a.creado_en
+                FROM mrp_analisis_acciones a JOIN mrp_analisis_casos k ON k.id = a.caso_id
+                WHERE k.linea = :l AND a.caso_id <> :i AND a.estado = 'aceptada' ORDER BY a.creado_en"""),
+                {"l": caso["linea"], "i": cid})]
+        except Exception:
+            caso["pendientes_anteriores"] = []
         try:
             caso["validaciones"] = [dict(v._mapping) for v in c.execute(sa.text(
                 "SELECT * FROM mrp_analisis_validaciones WHERE caso_id = :i ORDER BY id DESC"), {"i": cid})]
@@ -481,6 +509,8 @@ def decidir(cid: int, body: Decision):
             raise HTTPException(404, "Caso no encontrado.")
         if caso.decision:
             raise HTTPException(409, f"El caso ya tiene decisión ({caso.decision}).")
+        if caso.estado == "reemplazado":
+            raise HTTPException(409, f"Este análisis fue reemplazado por el #{caso.reemplazado_por}: decide sobre el vigente.")
         acciones = (caso.recomendacion or {}).get("acciones", []) or []
         ordenes = [int(a.get("orden") or i + 1) for i, a in enumerate(acciones)]
         if body.decision == "aceptada":

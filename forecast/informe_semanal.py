@@ -169,7 +169,7 @@ def compilar(lunes: date) -> dict:
                          FROM mrp_params_recomendaciones WHERE estado = 'abierta'
                          ORDER BY CASE prioridad WHEN 'alta' THEN 0 WHEN 'media-alta' THEN 1 WHEN 'media' THEN 2 ELSE 3 END, clave""", {})
         casos = filas("""SELECT id, linea, origen, estado, decision, recomendacion->>'causa_principal' AS causa
-                         FROM mrp_analisis_casos WHERE creado_en >= :d AND creado_en < :h AND estado <> 'error' ORDER BY id""")
+                         FROM mrp_analisis_casos WHERE creado_en >= :d AND creado_en < :h AND estado NOT IN ('error','reemplazado') ORDER BY id""")
         pend = filas("SELECT count(*) AS n FROM mrp_analisis_acciones WHERE estado = 'aceptada'", {})
         cambios = filas("""SELECT campo, count(*) AS n, count(DISTINCT COALESCE(sku, linea)) AS elementos,
                                   string_agg(DISTINCT editor, ', ') AS editores

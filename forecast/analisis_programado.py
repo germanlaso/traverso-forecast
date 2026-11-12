@@ -90,6 +90,8 @@ def programar_validacion(cid: int, body: SolicitudValidacion):
         if r is None:
             raise HTTPException(404, "Caso no encontrado.")
         caso = dict(r._mapping)
+        if caso.get("estado") == "reemplazado":
+            raise HTTPException(409, f"Este análisis fue reemplazado por el #{caso.get('reemplazado_por')}: valida el vigente.")
         ya = c.execute(sa.text("SELECT id FROM mrp_analisis_validaciones WHERE caso_id = :i AND estado IN ('programada','ejecutando')"),
                        {"i": cid}).scalar()
         if ya:

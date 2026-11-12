@@ -143,7 +143,8 @@ def resumen():
                              efecto_observado, evidencia, evaluado_en, evaluado_por
                       FROM mrp_intervenciones ORDER BY COALESCE(evaluado_en, creado_en) DESC""")
         efect = q("""SELECT palanca, veredicto, count(*) AS n FROM mrp_intervenciones GROUP BY 1, 2 ORDER BY 1, 2""")
-        casos = q("""SELECT origen, COALESCE(decision, 'pendiente') AS decision, estado, count(*) AS n
+        casos = q("""SELECT origen, COALESCE(decision, CASE WHEN estado = 'reemplazado' THEN 'reemplazado' ELSE 'pendiente' END) AS decision,
+                            estado, count(*) AS n
                      FROM mrp_analisis_casos WHERE estado <> 'error' GROUP BY 1, 2, 3""")
         descartes = q("""SELECT id, linea, decision_en, decision_por, decision_motivo FROM mrp_analisis_casos
                          WHERE decision = 'descartada' ORDER BY decision_en DESC LIMIT 15""")

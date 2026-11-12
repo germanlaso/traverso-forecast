@@ -9,5 +9,5 @@
 // Al subir versión: (1) actualizar VERSION y FECHA_VERSION, (2) agregar la entrada en novedades.md,
 // (3) tras el deploy, tag de git: git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z
 // Historia: v1.x = piloto (tags v1.0 … v1.3-piloto-ready). v2.0.0 = primera versión numerada post-piloto.
-export const VERSION = '2.1.2';
+export const VERSION = '2.2.0';
 export const FECHA_VERSION = '12-11-2026';

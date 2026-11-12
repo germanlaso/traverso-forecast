@@ -1,11 +1,18 @@
 ---
 titulo: Novedades
 seccion: General
-resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.1.2 (12-11-2026).
+resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.2.0 (12-11-2026).
 orden: 901
 actualizado: 2026-11-12
 ---
 La versión vigente aparece en la barra superior; al hacer clic se abre esta página. El número tiene tres partes: la primera cambia cuando cambia la forma de trabajar, la segunda cuando hay pantallas o funciones nuevas y la tercera con correcciones menores.
+
+## Versión 2.2.0 — 12 de noviembre de 2026
+### Análisis de Línea: un análisis vigente por línea
+- Cada línea muestra solo su análisis más reciente, que es el que se decide. Los anteriores quedan en **Historial**, solo para consulta.
+- Cuando se abre un análisis nuevo de una línea, los anteriores que no se habían decidido quedan como "reemplazados": ya no se deciden, porque sus cifras quedaron desactualizadas.
+- Lo ya decidido se mantiene: si un análisis anterior tiene acciones aceptadas pendientes, aparecen en el análisis vigente para marcarlas como hechas o descartarlas.
+- Ver [[a:analisislinea|Análisis de Línea]].
 
 ## Versión 2.1.2 — 12 de noviembre de 2026
 Correcciones y ajustes de forma.
