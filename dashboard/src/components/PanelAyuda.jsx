@@ -59,7 +59,7 @@ export default function PanelAyuda({ pantalla, onClose, onAbrirEnAyuda }) {
             <>
               <h2 style={{ margin: "0 0 4px", fontSize: 19 }}>{art.titulo}</h2>
               {art.resumen && <p style={{ margin: "0 0 6px", fontSize: 13.5, color: CS.gray }}>{art.resumen}</p>}
-              <MarkdownSoporte texto={art.cuerpo} onTermino={(t) => onAbrirEnAyuda(`__glosario:${t}`)} />
+              <MarkdownSoporte texto={art.cuerpo} onTermino={(t) => onAbrirEnAyuda(`__glosario:${t}`)} onArticulo={onAbrirEnAyuda} />
             </>
           )}
         </div>

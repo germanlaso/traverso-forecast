@@ -25,6 +25,7 @@ import Ayuda from './components/Ayuda';                 // Soporte > Ayuda
 import PanelAyuda from './components/PanelAyuda';       // Ayuda contextual "?"
 import MostacinFlotante, { MostacinChat } from './components/Mostacin';   // Chat de ayuda
 import Academia from './components/Academia';           // Soporte > Academia
+import { VERSION, FECHA_VERSION } from './version';      // Versión de la app (barra superior → Novedades)
 
 const API = process.env.REACT_APP_API_BASE || '';
 // BACKEND_URL: URL absoluta para navegaciones reales del browser (<a href>),
@@ -64,7 +65,7 @@ const NAV = [
   { key:'control', label:'📊 Control', tabs:[['faltantes','Faltantes'],['resumen30','Resumen 30d'],['quiebres','Mapa de Quiebres'],['analisislinea','Análisis de Línea']] },
   { key:'informes', label:'📑 Informes', tabs:[['faltantes','Faltantes'],['resumen30','Resumen 30d'],['precision','Precisión Forecast'],['rendimiento','Rendimiento'],['informeia','Informe semanal'],['aprendido','Base de conocimiento']] },
   { key:'herramientas', label:'🛠️ Herramientas', tabs:[['parametros','Parámetros'],['monitor','Salud Datalake']] },
-  { key:'soporte', label:'🛟 Soporte', tabs:[['ayuda','Ayuda'],['academia','Academia'],['mostacin','Chat de consultas']] },
+  { key:'soporte', label:'🛟 Soporte', tabs:[['ayuda','Ayuda'],['academia','Academia'],['mostacin','Chat de consultas'],['novedades','Novedades']] },
 ];
 
 const C = {
@@ -112,6 +113,27 @@ const s = {
  * Extrae un string legible desde el error de axios.
  * Maneja: string, array de objetos Pydantic, objeto con message, etc.
  */
+// Barra superior: fecha de hoy y semana ISO (lunes a domingo), la misma numeración "Sem NN"
+// que usan los informes semanales.
+const DIAS_CORTOS = ['dom','lun','mar','mié','jue','vie','sáb'];
+function semanaISO(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dia = t.getUTCDay() || 7;            // lunes=1 … domingo=7
+  t.setUTCDate(t.getUTCDate() + 4 - dia);   // jueves de la misma semana
+  const ini = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil(((t - ini) / 86400000 + 1) / 7);
+}
+function fechaBarra(d) {
+  const dd = String(d.getDate()).padStart(2, '0'), mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${DIAS_CORTOS[d.getDay()]} ${dd}-${mm}-${d.getFullYear()} · Sem ${semanaISO(d)}`;
+}
+// created_at del plan: si viene sin zona horaria se asume UTC.
+function parseFechaUTC(v) {
+  if (!v) return NaN;
+  const s = String(v);
+  return Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+}
+
 function extractErrorMsg(e) {
   const detail = e?.response?.data?.detail;
   if (!detail) return e?.message || 'Error desconocido';
@@ -296,6 +318,7 @@ function AppInner() {
   // Soporte: panel "?" de la pantalla actual y destino a abrir en la pestaña Ayuda
   const [panelAyuda, setPanelAyuda] = useState(false);
   const [ayudaDestino, setAyudaDestino] = useState(null);
+  const [destinoNovedades] = useState({ id: 'novedades', t: 0 });   // Soporte > Novedades = artículo de Ayuda
   const irAPantalla = (tab) => {
     const sec = NAV.find(n => n.tab === tab || (n.tabs || []).some(([t]) => t === tab));
     if (sec) { setActiveSection(sec.key); setActiveTab(tab); }
@@ -333,8 +356,15 @@ function AppInner() {
   });
   const marcarPlanStale = () => {
     localStorage.setItem('traverso:planStale', '1');
+    localStorage.setItem('traverso:planStaleDesde', new Date().toISOString());
     setPlanStale(true);
   };
+  // Fecha y semana en la barra superior (se refresca cada minuto por si la app queda abierta).
+  const [ahora, setAhora] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setAhora(new Date()), 60000);
+    return () => clearInterval(id);
+  }, []);
   const [planLoading, setPlanLoading] = useState(false);
   const [planHorizonte, setPlanHorizonte] = useState(4);
   const [planOptimizar, setPlanOptimizar] = useState(true);
@@ -384,6 +414,17 @@ function AppInner() {
       .then(r => {
         if (r.data && r.data.disponible) {
           setPlan(r.data);
+          // "OF modificadas" se apaga cuando el plan vigente se generó DESPUÉS del último cambio.
+          // Marcas antiguas sin fecha (de cuando solo se limpiaba con runPlan) también se apagan.
+          if (localStorage.getItem('traverso:planStale') === '1') {
+            const desde = Date.parse(localStorage.getItem('traverso:planStaleDesde') || '');
+            const creado = parseFechaUTC(r.data.created_at);
+            if (isNaN(desde) || (!isNaN(creado) && creado > desde)) {
+              localStorage.removeItem('traverso:planStale');
+              localStorage.removeItem('traverso:planStaleDesde');
+              setPlanStale(false);
+            }
+          }
           setPlanFrescura({
             stockEsHoy: r.data.stock_es_hoy,
             advertencia: r.data.advertencia_frescura,
@@ -452,6 +493,7 @@ function AppInner() {
         setLastPlanTimestamp(ts);
         // V6.38: limpiar stale tras regeneracion exitosa
         localStorage.removeItem('traverso:planStale');
+        localStorage.removeItem('traverso:planStaleDesde');
         setPlanStale(false);
       } catch (e) { console.warn('No se pudo cachear plan en localStorage:', e); }
       // V6.48: refetch de ordenesAprobadas para reconciliar el state local
@@ -720,23 +762,29 @@ function AppInner() {
       <div className="no-print" style={s.topbar}>
         <div>
           <div style={s.topTitle}>Traverso S.A. — Sistema de Planificación de Producción</div>
-          <div style={s.topSub}>Motor Prophet · Segmento Comercial · Piloto v1.1</div>
+          <div style={s.topSub}>
+            <span onClick={() => irAPantalla('novedades')} title="Ver las novedades de esta versión"
+              style={{cursor:'pointer',textDecoration:'underline',textUnderlineOffset:2}}>
+              Versión {VERSION} · {FECHA_VERSION}
+            </span>
+          </div>
         </div>
         <div style={{display:'flex',gap:10,alignItems:'center'}}>
+          <span style={{fontSize:12,opacity:.9,whiteSpace:'nowrap'}} title="Fecha de hoy y semana ISO (lunes a domingo)">{fechaBarra(ahora)}</span>
           {/* Soporte: ayuda contextual de la pantalla actual */}
           <button onClick={() => setPanelAyuda(true)} title="Ayuda de esta pantalla" aria-label="Ayuda de esta pantalla"
             style={{width:28,height:28,borderRadius:'50%',border:'1.5px solid rgba(255,255,255,.85)',background:'transparent',
               color:'#fff',fontWeight:700,fontSize:14,cursor:'pointer',lineHeight:1}}>?</button>
           {/* V6.38: badge global de plan desactualizado (visible en todas las pestañas) */}
-          {planStale && lastPlanTimestamp && (
+          {planStale && (
             <span style={{
               ...s.badge(C.amberLt, '#854F0B'),
               fontWeight: 600,
               cursor: 'pointer'
             }}
             onClick={() => { setActiveSection('planificacion'); setActiveTab('detalle'); }}
-            title="Click para ir a Detalle Producción">
-              ⚠ Plan desactualizado — Regenerar
+            title="Se modificaron OF después del plan vigente. Se incorporan en la próxima corrida automática del plan (06:00). Click para ir a Detalle Producción">
+              ⚠ OF modificadas desde el último plan
             </span>
           )}
           {dbStatus && <span style={s.badge(dbStatus.db?.ok?C.tealLt:C.dangerLt, dbStatus.db?.ok?'#085041':'#A32D2D')}>{dbStatus.db?.ok ? '● SQL conectado' : '● Sin conexión SQL'}</span>}
@@ -1371,6 +1419,8 @@ function AppInner() {
         {activeTab === 'parametros' && <ParametrosDiagnostico />}
         {activeTab === 'precision' && <PrecisionForecast />}
         {activeTab === 'ayuda' && <Ayuda destino={ayudaDestino} onIrPantalla={irAPantalla}
+          pantallasNavegables={new Set(NAV.flatMap(n => n.tab ? [n.tab] : n.tabs.map(([t]) => t)))} />}
+        {activeTab === 'novedades' && <Ayuda destino={destinoNovedades} onIrPantalla={irAPantalla}
           pantallasNavegables={new Set(NAV.flatMap(n => n.tab ? [n.tab] : n.tabs.map(([t]) => t)))} />}
         {activeTab === 'academia' && <Academia onAbrirEnAyuda={abrirEnAyuda} />}
         {activeTab === 'mostacin' && <div style={{height:'calc(100vh - 190px)',minHeight:420,border:`1px solid ${C.border}`,borderRadius:12,overflow:'hidden'}}>

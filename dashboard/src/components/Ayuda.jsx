@@ -152,7 +152,7 @@ export default function Ayuda({ destino = null, onIrPantalla = null, pantallasNa
               )}
             </div>
             {art.resumen && <p style={{ margin: "0 0 8px", fontSize: 14, color: CS.gray }}>{art.resumen}</p>}
-            <MarkdownSoporte texto={art.cuerpo} onTermino={abrirTermino} />
+            <MarkdownSoporte texto={art.cuerpo} onTermino={abrirTermino} onArticulo={(id) => { setSel(id); setQ(""); }} />
             {art.actualizado && <p style={{ fontSize: 11.5, color: CS.muted, marginTop: 24 }}>Actualizado: {art.actualizado.split("-").reverse().join("-")}</p>}
           </article>
         )}

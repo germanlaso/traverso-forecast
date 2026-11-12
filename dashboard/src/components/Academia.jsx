@@ -275,7 +275,7 @@ function VistaUnidad({ persona, ruta, unidadId, avance, onAvance, onUnidad, onVo
         </div>
         <p style={{ fontSize: 14.5, margin: "6px 0 14px" }}><b>Objetivo:</b> {u.objetivo}</p>
         {u.por_que && <div style={{ marginBottom: 14 }}><Globo grande><b>Por qué importa.</b> {u.por_que}</Globo></div>}
-        <MarkdownSoporte texto={u.cuerpo} onTermino={(t) => onAbrirEnAyuda(`__glosario:${t}`)} />
+        <MarkdownSoporte texto={u.cuerpo} onTermino={(t) => onAbrirEnAyuda(`__glosario:${t}`)} onArticulo={onAbrirEnAyuda} />
         {u.ayuda && (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 10, fontSize: 13, color: CS.gray }}>
             Más detalle en la Ayuda:

@@ -1,7 +1,9 @@
 // MarkdownSoporte.jsx — Renderizador acotado del contenido de Soporte (Ayuda y Academia).
 // Sin dependencias: soporta ## / ### títulos, párrafos, listas (- y 1.) con un nivel de anidación,
 // **negrita**, `código`, [texto](https://...), imágenes ![alt](archivo.png) y términos del glosario
-// [[g:id]] / [[g:id|texto]] (subrayado punteado con su definición al pasar el mouse).
+// [[g:id]] / [[g:id|texto]] (subrayado punteado con su definición al pasar el mouse) y enlaces a
+// artículos de la Ayuda [[a:id|texto]] (id = nombre del archivo sin .md; en pantallas = clave del tab).
+// El enlace a artículo navega solo si quien usa el componente pasa onArticulo; si no, queda como texto.
 // Las imágenes se cargan con fetch → blob: en dev, el servidor :3000 solo reenvía al backend los fetch.
 import React, { useEffect, useState } from "react";
 
@@ -84,7 +86,7 @@ export function ImagenSoporte({ archivo, alt }) {
 }
 
 // ── Inline ────────────────────────────────────────────────────────────────────
-const RE_INLINE = /\*\*(.+?)\*\*|`([^`]+)`|\[\[g:([a-z0-9_-]+)(?:\|([^\]]+))?\]\]|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+const RE_INLINE = /\*\*(.+?)\*\*|`([^`]+)`|\[\[g:([a-z0-9_-]+)(?:\|([^\]]+))?\]\]|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\[\[a:([a-z0-9_-]+)\|([^\]]+)\]\]/g;
 
 function inline(texto, ctx, k = "i") {
   const out = [];
@@ -98,6 +100,12 @@ function inline(texto, ctx, k = "i") {
     else if (m[3] !== undefined) {
       const t = ctx.glosario[m[3]];
       out.push(t ? <Termino key={key} t={t} texto={m[4]} onTermino={ctx.onTermino} /> : <span key={key}>{m[4] || m[3]}</span>);
+    } else if (m[7] !== undefined) {
+      out.push(ctx.onArticulo
+        ? <span key={key} role="link" tabIndex={0} onClick={() => ctx.onArticulo(m[7])}
+            onKeyDown={(e) => e.key === "Enter" && ctx.onArticulo(m[7])}
+            style={{ color: CS.tealMid, textDecoration: "underline", cursor: "pointer" }}>{m[8]}</span>
+        : <span key={key}>{m[8]}</span>);
     } else out.push(<a key={key} href={m[6]} target="_blank" rel="noreferrer" style={{ color: CS.tealMid }}>{m[5]}</a>);
     ultimo = re.lastIndex;
   }
@@ -137,10 +145,10 @@ function parsear(md) {
   return bloques;
 }
 
-export default function MarkdownSoporte({ texto, onTermino }) {
+export default function MarkdownSoporte({ texto, onTermino, onArticulo = null }) {
   const glosario = useGlosario();
   if (glosario === null) return <p style={{ fontSize: 13, color: CS.muted }}>Cargando…</p>;
-  const ctx = { glosario, onTermino };
+  const ctx = { glosario, onTermino, onArticulo };
   const estiloLista = { margin: "6px 0 10px", paddingLeft: 22, lineHeight: 1.6 };
   return (
     <div style={{ fontSize: 14, lineHeight: 1.6, color: CS.text, maxWidth: 760 }}>
