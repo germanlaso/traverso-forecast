@@ -27,6 +27,7 @@ Formato del guion:
      "pasos": [{"accion": "click", "texto": "..."} | {"accion": "click", "selector": "..."} |
                {"accion": "escribir", "selector": "...", "valor": "{SKU_EJEMPLO}"} |
                {"accion": "tecla", "tecla": "Enter"} | {"accion": "esperar", "ms": 1500} |
+               {"accion": "seleccionar", "selector": "select >> nth=0", "indice": 1 | "valor": "texto"} |
                {"accion": "esperar_texto", "texto": "..."} | {"accion": "scroll", "texto": "..."}],
      "difuminar": [{"selector": "..."} | {"texto": "..."}],
      "anotaciones": [{"n": 1, "texto": "..."} | {"n": 2, "selector": "...", "subir": 1}],   # subir = marcar el contenedor
@@ -144,6 +145,12 @@ def ejecutar_pasos(page, pasos, variables):
             loc = page.locator(p["selector"]).first
             loc.click()
             loc.fill(sustituir(p["valor"], variables))
+        elif a == "seleccionar":                       # <select>: por índice de opción o por texto visible
+            loc = page.locator(p["selector"]).first
+            if "indice" in p:
+                loc.select_option(index=int(p["indice"]))
+            else:
+                loc.select_option(label=sustituir(p["valor"], variables))
         elif a == "tecla":
             page.keyboard.press(p["tecla"])
         elif a == "esperar":
@@ -161,6 +168,8 @@ def difuminar(page, lista):
     for d in lista or []:
         if d.get("selector"):
             page.locator(d["selector"]).evaluate_all("els => els.forEach(e => e.style.filter = 'blur(6px)')")
+        elif d.get("subir"):                       # difumina el contenedor del texto indicado
+            localizar(page, d).evaluate("e => e.style.filter = 'blur(6px)'")
         else:
             page.get_by_text(d["texto"]).evaluate_all("els => els.forEach(e => e.style.filter = 'blur(6px)')")
 

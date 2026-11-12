@@ -78,8 +78,38 @@
    "titulo": "Producción",
    "publico": "Producción (bitácora, casos)",
    "orden": 3,
-   "descripcion": "Registrar lo que pasa en las líneas y leer los indicadores de desempeño.",
-   "modulos": []
+   "descripcion": "Registrar lo que pasa en las líneas, leer los indicadores de desempeño y participar en los análisis de capacidad.",
+   "modulos": [
+    {
+     "id": "prod-bitacora",
+     "titulo": "Bitácora",
+     "insignia": "📝",
+     "descripcion": "Registrar eventos con su horario y anotar lo que viene para que el plan lo considere.",
+     "unidades": [
+      "prod-registrar",
+      "prod-futuros"
+     ]
+    },
+    {
+     "id": "prod-desempeno",
+     "titulo": "Desempeño",
+     "insignia": "⚙️",
+     "descripcion": "Cumplimiento, ocupación y eficiencia; informe semanal y lo que aprende el sistema.",
+     "unidades": [
+      "prod-rendimiento",
+      "prod-informe"
+     ]
+    },
+    {
+     "id": "prod-casos",
+     "titulo": "Casos de línea",
+     "insignia": "🧩",
+     "descripcion": "Leer un análisis de capacidad y aportar la mirada de la planta.",
+     "unidades": [
+      "prod-caso"
+     ]
+    }
+   ]
   },
   {
    "id": "administracion",

@@ -1,0 +1,50 @@
+[
+ {
+  "archivo": "prod__bitacora_form.png",
+  "titulo": "Formulario de la bitácora (se completa, NO se guarda)",
+  "estado": "OK",
+  "fecha": "2026-11-12T12:47:49"
+ },
+ {
+  "archivo": "prod__bitacora_grilla.png",
+  "titulo": "Bitácora desde la grilla de Detalle (se completa, NO se registra)",
+  "estado": "OK",
+  "fecha": "2026-11-12T12:47:58"
+ },
+ {
+  "archivo": "prod__bitacora_lista.png",
+  "titulo": "Lista de eventos",
+  "estado": "OK",
+  "fecha": "2026-11-12T12:45:00"
+ },
+ {
+  "archivo": "prod__rendimiento.png",
+  "titulo": "Rendimiento",
+  "estado": "OK",
+  "fecha": "2026-11-12T12:45:09"
+ },
+ {
+  "archivo": "prod__informe.png",
+  "titulo": "Informe semanal",
+  "estado": "OK",
+  "fecha": "2026-11-12T12:45:16"
+ },
+ {
+  "archivo": "prod__conocimiento.png",
+  "titulo": "Base de conocimiento",
+  "estado": "OK",
+  "fecha": "2026-11-12T12:45:23"
+ },
+ {
+  "archivo": "prod__conocimiento_2.png",
+  "titulo": "Intervenciones y descartes (motivos difuminados)",
+  "estado": "OK",
+  "fecha": "2026-11-12T12:45:30"
+ },
+ {
+  "archivo": "prod__caso.png",
+  "titulo": "Análisis vigente de una línea",
+  "estado": "OK",
+  "fecha": "2026-11-12T12:45:39"
+ }
+]

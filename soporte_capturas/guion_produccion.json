@@ -1,0 +1,303 @@
+{
+ "base_url": "http://180.1.1.18:3000",
+ "viewport": [
+  1440,
+  900
+ ],
+ "escala": 1,
+ "variables": {},
+ "difuminar_palabras": [],
+ "capturas": [
+  {
+   "archivo": "prod__bitacora_form.png",
+   "titulo": "Formulario de la bitácora (se completa, NO se guarda)",
+   "seccion": "🏭 Planificación",
+   "pestana": "Bitácora",
+   "esperar_texto": "Bitácora de eventos por línea",
+   "pasos": [
+    {
+     "accion": "escribir",
+     "selector": "input[placeholder='Nombre y apellido']",
+     "valor": "Ejemplo Academia"
+    },
+    {
+     "accion": "seleccionar",
+     "selector": "select >> nth=0",
+     "indice": 1
+    },
+    {
+     "accion": "esperar",
+     "ms": 400
+    },
+    {
+     "accion": "seleccionar",
+     "selector": "select >> nth=1",
+     "indice": 1
+    },
+    {
+     "accion": "esperar",
+     "ms": 400
+    },
+    {
+     "accion": "escribir",
+     "selector": "input[type=time] >> nth=0",
+     "valor": "08:30"
+    },
+    {
+     "accion": "escribir",
+     "selector": "input[type=time] >> nth=1",
+     "valor": "09:15"
+    },
+    {
+     "accion": "escribir",
+     "selector": "input[placeholder^='Ej.: llenadora']",
+     "valor": "tapadora"
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "selector": "input[placeholder='Nombre y apellido']"
+    },
+    {
+     "n": 2,
+     "selector": "select >> nth=1",
+     "pos": "der"
+    },
+    {
+     "n": 3,
+     "selector": "input[type=time] >> nth=0",
+     "pos": "abajo"
+    },
+    {
+     "n": 4,
+     "selector": "input[type=time] >> nth=1",
+     "pos": "der"
+    },
+    {
+     "n": 5,
+     "selector": "input[placeholder^='Ej.: llenadora']"
+    }
+   ]
+  },
+  {
+   "archivo": "prod__bitacora_grilla.png",
+   "titulo": "Bitácora desde la grilla de Detalle (se completa, NO se registra)",
+   "seccion": "🏭 Planificación",
+   "pestana": "Detalle Producción",
+   "esperar_texto": "Sem sig.",
+   "pasos": [
+    {
+     "accion": "click",
+     "selector": "span[title='Registrar evento en la bitácora']"
+    },
+    {
+     "accion": "esperar_texto",
+     "texto": "Hora fin"
+    },
+    {
+     "accion": "escribir",
+     "selector": "input[type=time] >> nth=0",
+     "valor": "10:00"
+    },
+    {
+     "accion": "escribir",
+     "selector": "input[type=time] >> nth=1",
+     "valor": "10:40"
+    },
+    {
+     "accion": "esperar",
+     "ms": 400
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Hora inicio",
+     "pos": "arriba"
+    },
+    {
+     "n": 2,
+     "texto": "Hora fin",
+     "pos": "arriba"
+    },
+    {
+     "n": 3,
+     "texto": "Máquina (opcional)"
+    }
+   ],
+   "despues": [
+    {
+     "accion": "tecla",
+     "tecla": "Escape"
+    }
+   ]
+  },
+  {
+   "archivo": "prod__bitacora_lista.png",
+   "titulo": "Lista de eventos",
+   "seccion": "🏭 Planificación",
+   "pestana": "Bitácora",
+   "esperar_texto": "Bitácora de eventos por línea",
+   "pasos": [
+    {
+     "accion": "scroll",
+     "texto": "Últimos 7 días y planificados"
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Últimos 7 días y planificados"
+    },
+    {
+     "n": 2,
+     "texto": "Anular",
+     "exacto": true,
+     "opcional": true,
+     "pos": "der"
+    }
+   ]
+  },
+  {
+   "archivo": "prod__rendimiento.png",
+   "titulo": "Rendimiento",
+   "seccion": "📑 Informes",
+   "pestana": "Rendimiento",
+   "esperar_texto": "Programado en SAP vs producido real",
+   "espera_ms": 2500,
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Período:",
+     "pos": "arriba"
+    },
+    {
+     "n": 2,
+     "texto": "Programado en SAP vs producido real"
+    },
+    {
+     "n": 3,
+     "texto": "Ocupación por línea",
+     "opcional": true
+    },
+    {
+     "n": 4,
+     "texto": "Detalle por línea",
+     "opcional": true
+    }
+   ]
+  },
+  {
+   "archivo": "prod__informe.png",
+   "titulo": "Informe semanal",
+   "seccion": "📑 Informes",
+   "pestana": "Informe semanal",
+   "esperar_texto": "Abrir en pestaña nueva",
+   "espera_ms": 2500,
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Abrir en pestaña nueva",
+     "pos": "abajo"
+    },
+    {
+     "n": 2,
+     "texto": "Imprimir / PDF",
+     "pos": "der"
+    }
+   ]
+  },
+  {
+   "archivo": "prod__conocimiento.png",
+   "titulo": "Base de conocimiento",
+   "seccion": "📑 Informes",
+   "pestana": "Base de conocimiento",
+   "esperar_texto": "Capacidad real vs parametrizada",
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Capacidad real vs parametrizada"
+    }
+   ],
+   "pagina_completa": false
+  },
+  {
+   "archivo": "prod__conocimiento_2.png",
+   "titulo": "Intervenciones y descartes (motivos difuminados)",
+   "seccion": "📑 Informes",
+   "pestana": "Base de conocimiento",
+   "esperar_texto": "Capacidad real vs parametrizada",
+   "pasos": [
+    {
+     "accion": "scroll",
+     "texto": "Recomendaciones descartadas y por qué"
+    }
+   ],
+   "difuminar": [
+    {
+     "selector": "xpath=//p[contains(., 'Los motivos de descarte')]/following-sibling::div/div"
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 2,
+     "texto": "Intervenciones: qué se cambió y qué pasó",
+     "opcional": true
+    },
+    {
+     "n": 3,
+     "texto": "Recomendaciones descartadas y por qué",
+     "opcional": true
+    }
+   ]
+  },
+  {
+   "archivo": "prod__caso.png",
+   "titulo": "Análisis vigente de una línea",
+   "seccion": "📊 Control",
+   "pestana": "Análisis de Línea",
+   "esperar_texto": "¿Puede cada línea cumplir lo que viene?",
+   "pasos": [
+    {
+     "accion": "click",
+     "texto": "Análisis #"
+    },
+    {
+     "accion": "esperar_texto",
+     "texto": "Acciones recomendadas"
+    },
+    {
+     "accion": "esperar",
+     "ms": 800
+    },
+    {
+     "accion": "scroll",
+     "texto": "Acciones recomendadas"
+    }
+   ],
+   "anotaciones": [
+    {
+     "n": 1,
+     "texto": "Acciones recomendadas (en orden de esfuerzo)"
+    },
+    {
+     "n": 2,
+     "texto": "Para Producción:",
+     "opcional": true
+    },
+    {
+     "n": 3,
+     "texto": "Ver detalle del diagnóstico",
+     "opcional": true
+    },
+    {
+     "n": 4,
+     "texto": "Tu decisión",
+     "exacto": true,
+     "opcional": true
+    }
+   ]
+  }
+ ]
+}
