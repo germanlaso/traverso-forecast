@@ -776,16 +776,10 @@ export default function DetalleProduccion({
           <span>
             {planLoading
               ? "⏳ Generando plan de producción... el detalle por línea se actualizará al terminar."
-              : "⚠ No hay plan de producción generado. Las líneas se ven sin órdenes pendientes."}
+              : "⚠ No hay plan vigente cargado. El plan se genera automáticamente todos los días a las 06:00; si falta, avisa a Planificación."}
           </span>
-          {!planLoading && onSolicitarPlan && (
-            <button onClick={onSolicitarPlan}
-              style={{fontSize:12,padding:"6px 14px",borderRadius:7,border:"none",
-                      background:C.amber,color:"#fff",cursor:"pointer",fontWeight:700,
-                      whiteSpace:"nowrap"}}>
-              Generar plan
-            </button>
-          )}
+          {/* (12-11-2026) Sin botón "Generar plan": llamaba a POST /plan sin las banderas del cron
+              (riesgo tipo plan #275). El plan lo genera solo el cron de las 06:00. */}
         </div>
       )}
 

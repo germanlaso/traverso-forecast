@@ -111,7 +111,7 @@ function CamposAuth({ auth }) {
       </label>
       <label style={st.label}>Motivo del cambio
         <input style={st.input} value={auth.motivo} onChange={(e) => auth.setMotivo(e.target.value)}
-               placeholder="Ej.: Informe IA Sem 45 · cap. bodega menor a batch + SS" />
+               placeholder="Ej.: Informe semanal Sem 45 · cap. bodega menor a batch + SS" />
       </label>
     </div>
   );

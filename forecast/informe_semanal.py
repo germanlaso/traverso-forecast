@@ -8,7 +8,7 @@ Cada lunes (crontab 08:30 Chile) arma el informe de la última semana cerrada (l
   2. LECTURA IA (Claude): resumen ejecutivo, alertas y recomendaciones ("analizar...", nunca
      obligatorias), usando SOLO las cifras compiladas. Sin API -> el informe sale igual, sin lectura.
   3. HTML autocontenido (claro/oscuro, imprimible a PDF desde el navegador), guardado en la
-     tabla mrp_informes y servido por /informes/{id}/html (pestaña Control -> Informe IA).
+     tabla mrp_informes y servido por /informes/{id}/html (pestaña Informes > Informe semanal).
 
 Uso:
   python3 /app/informe_semanal.py                 # semana cerrada anterior

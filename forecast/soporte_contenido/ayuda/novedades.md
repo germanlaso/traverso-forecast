@@ -1,11 +1,27 @@
 ---
 titulo: Novedades
 seccion: General
-resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.0.0 (12-11-2026).
+resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.1.0 (12-11-2026).
 orden: 901
 actualizado: 2026-11-12
 ---
 La versión vigente aparece en la barra superior; al hacer clic se abre esta página. El número tiene tres partes: la primera cambia cuando cambia la forma de trabajar, la segunda cuando hay pantallas o funciones nuevas y la tercera con correcciones menores.
+
+## Versión 2.1.0 — 12 de noviembre de 2026
+La capacidad de las líneas se ajusta a la jornada laboral de 42 horas semanales.
+
+### Capacidad con la jornada de 42 horas
+- El plan calcula la capacidad de cada línea con la jornada de 42 horas: lunes y martes de 9 horas, y miércoles a viernes de 8 horas. Rige desde el plan del 13 de noviembre.
+- Cada línea puede tener su propia jornada: horas por día en cada turno y hasta tres turnos. Un turno adicional puede tener fecha de inicio y de término, por ejemplo para una temporada.
+- Las excepciones por fecha (un sábado trabajado, una extensión de turno o un día sin producción) se registran para ese día y el plan las considera.
+- Las paradas planificadas y los bloqueos programados de la Bitácora siguen descontándose de la capacidad de ese día.
+- Ver [[a:parametros|la ayuda de Parámetros]].
+
+### Indicadores con la jornada nueva
+- Rendimiento, Análisis de Línea y el Informe semanal miden la ocupación contra las horas de la jornada de 42 horas y ya no cuentan los feriados como días de trabajo. Por eso la ocupación de algunas semanas anteriores cambia, en especial las que tuvieron feriado. Ver [[a:rendimiento|Rendimiento]].
+
+### Otras mejoras
+- Detalle Producción ya no muestra el botón "Generar plan" cuando no hay plan cargado: el plan se genera automáticamente todos los días a las 06:00.
 
 ## Versión 2.0.0 — 12 de noviembre de 2026
 La primera versión numerada después del piloto. Suma herramientas para controlar la operación de las líneas, análisis con inteligencia artificial y un módulo de soporte para aprender a usar la app.
