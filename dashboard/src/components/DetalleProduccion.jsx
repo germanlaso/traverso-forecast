@@ -24,6 +24,15 @@ function esDiaHabil(f){const d=new Date(f+"T12:00:00");const dow=d.getDay();retu
 function addDias(f,n){const d=new Date(f+"T12:00:00");d.setDate(d.getDate()+n);return d.toISOString().slice(0,10);}
 function getDomingoActual(){const h=new Date();const d=new Date(h);d.setDate(h.getDate()-h.getDay());return d.toISOString().slice(0,10);}
 function addSemanas(f,n){const d=new Date(f+"T12:00:00");d.setDate(d.getDate()+n*7);return d.toISOString().slice(0,10);}
+// (12-11-2026) Número de semana ISO (lunes a domingo), el mismo "Sem NN" de la barra superior y de los
+// informes. La grilla va de domingo a sábado: se numera por su lunes (base + 1 día).
+function semanaIsoDe(f){
+  const d=new Date(f+"T12:00:00"); d.setDate(d.getDate()+1);
+  const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
+  const dn=(t.getUTCDay()+6)%7; t.setUTCDate(t.getUTCDate()-dn+3);
+  const p=new Date(Date.UTC(t.getUTCFullYear(),0,4));
+  return 1+Math.round(((t-p)/864e5-3+((p.getUTCDay()+6)%7))/7);
+}
 function diasDesde(fechaDom,nSem){
   const dias=[];
   for(let i=0;i<nSem*7;i++){
@@ -789,7 +798,7 @@ export default function DetalleProduccion({
         <span style={{fontSize:13,fontWeight:600,color:C.tealMid}}>
           {(()=>{const ini=new Date(semanaBase+"T12:00:00");const fin=new Date(semanaBase+"T12:00:00");fin.setDate(fin.getDate()+6);
             const fmt=d=>`${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
-            return `Semana ${fmt(ini)} al ${fmt(fin)}/${fin.getFullYear()}`;})()}
+            return `Sem ${semanaIsoDe(semanaBase)} · ${fmt(ini)} al ${fmt(fin)}/${fin.getFullYear()}`;})()}
         </span>
         <button onClick={()=>setSemanaBase(addSemanas(semanaBase,1))}
           style={{fontSize:13,padding:"5px 12px",borderRadius:6,border:`0.5px solid ${C.border}`,background:"#fff",cursor:"pointer"}}>Sem sig. →</button>
@@ -854,6 +863,9 @@ export default function DetalleProduccion({
                   </span>
                 )}
                 <span style={s.linTit}>{linea.codigo} — {linea.nombre}</span>
+                <span title="Semana ISO (lunes a domingo) que muestra la grilla"
+                  style={{marginLeft:10,fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:10,
+                          background:C.tealLt,color:C.tealMid}}>Sem {semanaIsoDe(semanaBase)}</span>
                 <span style={{...s.linSub,marginLeft:10}}>Cap. semanal: {fmtN(linea.cap_u_semana)} u. · {linea.horas_disp_sem}h/sem</span>
               </div>
               <div style={{display:"flex",gap:8,fontSize:11,alignItems:"center"}}>

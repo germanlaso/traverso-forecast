@@ -272,6 +272,11 @@ def diagnosticar(linea: str, carga: dict, piezas: dict, lineas: dict, sku_lineas
 # ── Recomendación IA ──────────────────────────────────────────────────────────
 SYSTEM_IA = """Eres el analista de planificación de producción de Traverso (alimentos, Chile).
 Recibes el diagnóstico de UNA línea de producción, calculado por el sistema, y lo aprendido de casos anteriores.
+DEFINICIONES (12-11-2026): "horas_requeridas" / "carga_requerida" = producción NETA que hace falta para no bajar
+del SS: demanda (forecast + OV) menos el stock disponible; si hoy hay stock bajo el SS, su reposición se reparte en
+las semanas. "horas_demanda" = demanda BRUTA, solo referencia: NO es lo que hay que producir. Si lo programado es
+menor que la demanda bruta pero cubre lo requerido neto, NO hay brecha (el stock cubre la diferencia): no lo
+presentes como problema ni preguntes a Producción por ello.
 Reglas:
 - No recalcules cifras: usa solo las que vienen en los datos y cita de dónde sale cada afirmación.
 - El objetivo supremo es evitar quiebres de stock.

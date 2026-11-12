@@ -225,7 +225,7 @@ footer{color:var(--muted);font-size:11.5px;margin-top:24px;border-top:1px solid 
   <div class="grid2">
     <div class="card">
       <h3>Saturadas vs holgadas</h3>
-      <p class="cap">Cada punto es una línea. <b>Eje horizontal:</b> ocupación real = producción real SAP (Terminal Report) ÷ capacidad nominal, en las semanas de tendencia (lo que pasó). <b>Eje vertical:</b> lo que la demanda (forecast + OV) le exige a la línea en las próximas 4 semanas del plan vigente (lo que viene). <b>Zona roja:</b> vienen saturadas y seguirán saturadas. <b>Zona verde:</b> holgadas en ambos períodos.</p>
+      <p class="cap">Cada punto es una línea. <b>Eje horizontal:</b> ocupación real = producción real SAP (Terminal Report) ÷ capacidad nominal, en las semanas de tendencia (lo que pasó). <b>Eje vertical:</b> producción neta que la línea necesita en las próximas 4 semanas del plan vigente: demanda (forecast + OV) menos el stock disponible, manteniendo el SS (lo que viene). <b>Zona roja:</b> vienen saturadas y seguirán saturadas. <b>Zona verde:</b> holgadas en ambos períodos.</p>
       <div id="ch-scatter"></div>
     </div>
     <div class="card">
@@ -322,7 +322,7 @@ document.getElementById('lead').innerHTML = IA.resumen_ejecutivo ? esc(IA.resume
 document.getElementById('lead-riesgo').innerHTML = esc(LEC.riesgo || 'Los quiebres que importan son los que aparecen después de la primera semana en líneas saturadas: ahí el plan ya incluye las OF tentativas del solver y aun así no alcanza. Los de los primeros días responden a pedidos comprometidos sobre el stock actual.');
 document.getElementById('lead-cumpl').innerHTML = `Cumplimiento = producción real SAP (Terminal Report) ÷ programado SAP. <b>${D.meta.sem_eval}: ${pct(K.cumpl_ult,1)}</b> · ${D.meta.periodo_corto}: ${pct(K.cumpl,1)}. ` + esc(LEC.cumplimiento || '');
 document.getElementById('lead-ocup').innerHTML = `<b>Ocupación real</b> = producción real SAP (Terminal Report) en horas-equivalentes ÷ horas nominales. <b>${D.meta.sem_eval}: ${pct(K.ocR_ult,1)}</b> · ${D.meta.periodo_corto}: ${pct(K.ocR,1)} (programada SAP: ${pct(K.ocP,1)}). ` + esc(LEC.ocupacion || '');
-document.getElementById('cap-uso').innerHTML = `<b>Barra</b> = <b>programado</b> en el plan vigente (OF sugeridas + aprobadas) del ${D.meta.horizonte}, como % de la capacidad nominal (rojo ≥85%, ámbar 70–85%, verde &lt;70%). <b style="color:var(--red-dk)">▼ Requerido</b> = lo que la demanda exige (forecast + OV) en ese mismo horizonte. <b>Marca negra</b> = <b>ocupación real</b> de ${D.meta.periodo_corto} (producción real SAP), como referencia de lo que hizo la línea.`;
+document.getElementById('cap-uso').innerHTML = `<b>Barra</b> = <b>programado</b> en el plan vigente (OF sugeridas + aprobadas) del ${D.meta.horizonte}, como % de la capacidad nominal (rojo ≥85%, ámbar 70–85%, verde &lt;70%). <b style="color:var(--red-dk)">▼ Requerido</b> = producción <b>neta</b> que hace falta en ese horizonte: demanda (forecast + OV) menos el stock disponible, manteniendo el SS. <b>Marca negra</b> = <b>ocupación real</b> de ${D.meta.periodo_corto} (producción real SAP), como referencia de lo que hizo la línea.`;
 document.getElementById('cap-quiebres').innerHTML = `Faltante hoy = informe Faltantes del ${D.meta.faltantes_fecha || '–'}. MTO = fabricación a pedido: se gestiona por la orden del cliente, no por parámetros.`;
 document.getElementById('t-semanas').textContent = `Programado SAP vs producido real SAP · ${D.meta.periodo_corto}`;
 document.getElementById('t-uso').textContent = `Uso de línea: programado vs requerido · ${D.meta.plan_label}`;
@@ -409,7 +409,7 @@ document.getElementById('cap-ia').textContent = 'Recomendaciones de la IA a part
     const mk=el('rect',{x:X(l.ocR)-1.5,y:y+1,width:3,height:rh-2,fill:css('--ink')},s);
     const rq=el('path',{d:`M${X(l.req)-5},${y+1} L${X(l.req)+5},${y+1} L${X(l.req)},${y+8} Z`,fill:css('--red-dk')},s);
     text(s,Math.max(X(l.fut),X(l.req),X(l.ocR))+6,y+rh/2+3,pct(l.fut),{size:9.5,fill:css('--soft')});
-    const tt=`<b>${l.linea}</b> (${l.cat})<br>Programado (OF sugeridas + aprobadas): ${pct(l.fut)}<br>Requerido por la demanda: ${pct(l.req)}<br>Ocupación real ${D.meta.periodo_corto} (SAP): ${pct(l.ocR)}<br>Quiebres: ${l.q} · Bajo SS: ${l.ss}`;
+    const tt=`<b>${l.linea}</b> (${l.cat})<br>Programado (OF sugeridas + aprobadas): ${pct(l.fut)}<br>Requerido (neto de stock): ${pct(l.req)}<br>Ocupación real ${D.meta.periodo_corto} (SAP): ${pct(l.ocR)}<br>Quiebres: ${l.q} · Bajo SS: ${l.ss}`;
     hover(r,tt); hover(mk,tt); hover(rq,tt);
   });
   const lg=el('g',{},s), ly=H-8;
@@ -539,13 +539,13 @@ document.querySelectorAll('#seg-heat button').forEach(b=>b.onclick=()=>{ documen
   el('rect',{x:X(0),y:Y(0.4),width:X(0.4)-X(0),height:Y(0)-Y(0.4),fill:css('--teal-lt'),opacity:.7},s);
   [0,0.25,0.5,0.75,1].forEach(v=>{ el('line',{x1:X(v),x2:X(v),y1:m.t,y2:m.t+ih,stroke:css('--grid')},s); el('line',{x1:m.l,x2:m.l+iw,y1:Y(v),y2:Y(v),stroke:css('--grid')},s); text(s,X(v),H-m.b+14,pct(v),{anchor:'middle',size:9.5}); text(s,m.l-6,Y(v)+3,pct(v),{anchor:'end',size:9.5}); });
   text(s,m.l+iw/2,H-6,'Producción real SAP '+D.meta.periodo_corto+' ÷ capacidad nominal (lo que pasó)',{anchor:'middle',size:10.5,fill:css('--soft')});
-  const yt=text(s,12,m.t+ih/2,'Requerido por la demanda, próx. 4 semanas (lo que viene)',{anchor:'middle',size:10.5,fill:css('--soft')}); yt.setAttribute('transform',`rotate(-90 12 ${m.t+ih/2})`);
+  const yt=text(s,12,m.t+ih/2,'Requerido neto de stock, próx. 4 semanas (lo que viene)',{anchor:'middle',size:10.5,fill:css('--soft')}); yt.setAttribute('transform',`rotate(-90 12 ${m.t+ih/2})`);
   text(s,X(1.08),Y(1.06),'saturadas',{anchor:'end',size:10,fill:css('--red-dk'),bold:true});
   text(s,X(0.02),Y(0.03),'holgadas',{size:10,fill:css('--teal-dk'),bold:true});
   L.forEach(l=>{
     const col=l.req>=0.85||l.ocR>=0.85?css('--red'):l.req<0.4&&l.ocR<0.4?css('--teal'):css('--amber');
     const c=el('circle',{cx:X(l.ocR),cy:Y(l.req),r:6,fill:col,'fill-opacity':.8,stroke:css('--card'),'stroke-width':1.5},s);
-    hover(c,`<b>${l.linea}</b><br>Ocupación real SAP ${D.meta.periodo_corto}: ${pct(l.ocR)}<br>Requerido por la demanda: ${pct(l.req)}<br>Programado (OF sugeridas + aprobadas): ${pct(l.fut)}`);
+    hover(c,`<b>${l.linea}</b><br>Ocupación real SAP ${D.meta.periodo_corto}: ${pct(l.ocR)}<br>Requerido (neto de stock): ${pct(l.req)}<br>Programado (OF sugeridas + aprobadas): ${pct(l.fut)}`);
     text(s,X(l.ocR)+8,Y(l.req)+3,l.linea,{size:9.5,fill:css('--soft')});
   });
 })();
@@ -553,7 +553,7 @@ document.querySelectorAll('#seg-heat button').forEach(b=>b.onclick=()=>{ documen
 table('t-capnom', [
   {h:'Línea',k:'linea',f:x=>`<b>${x.linea}</b>`},{h:'Capacidad nominal actual',k:'param'},
   {h:'Mejor semana (real SAP)',k:'max_oc',num:1,f:x=>pct(x.max_oc)},{h:'Prom. 3 mejores sem. (real SAP)',k:'top3',num:1,f:x=>pct(x.top3)},
-  {h:'Programado próx. 4 sem',k:'fut',num:1,f:x=>pct(x.fut)},{h:'Requerido próx. 4 sem',k:'req',num:1,f:x=>pct(x.req)},
+  {h:'Programado próx. 4 sem',k:'fut',num:1,f:x=>pct(x.fut)},{h:'Requerido neto próx. 4 sem',k:'req',num:1,f:x=>pct(x.req)},
   {h:'Quiebres proyectados',k:'q',num:1},
 ], D.lineas.filter(l=>l.top3>1.05).sort((a,b)=>b.top3-a.top3), 'Ninguna línea produjo sobre su capacidad parametrizada en la ventana analizada.');
 

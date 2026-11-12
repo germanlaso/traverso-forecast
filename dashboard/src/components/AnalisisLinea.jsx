@@ -259,7 +259,7 @@ export default function AnalisisLinea() {
     <div style={st.wrap}>
       <h2 style={{ margin: "0 0 2px", fontSize: 20 }}>Análisis de Línea</h2>
       <p style={{ margin: "0 0 12px", fontSize: 12.5, color: C.gray }}>
-        ¿Puede cada línea cumplir lo que viene? <b>Barra</b> = carga requerida por la demanda · <b>marca negra</b> = lo programado en el plan ·
+        ¿Puede cada línea cumplir lo que viene? <b>Barra</b> = carga requerida: producción neta que hace falta (demanda − stock disponible, manteniendo el SS) · <b>marca negra</b> = lo programado en el plan ·
         <span style={{ color: C.red }}> línea roja</span> = capacidad nominal · <span style={{ color: C.teal }}>línea verde</span> = capacidad demostrada. * = semana en curso: solo cuentan los días hábiles que quedan.
         {data && ` Plan #${data.plan?.id}.`}
       </p>

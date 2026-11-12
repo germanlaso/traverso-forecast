@@ -2,7 +2,8 @@
 analisis_linea.py — Análisis de Línea (MVP 1). Pieza 1: CARGA REQUERIDA y SEMÁFORO.
 
 Tres miradas por línea y semana (todas en % de la capacidad nominal):
-  · carga requerida  = horas que exige la demanda del plan (forecast + OV corregida)
+  · carga requerida  = horas de producción NETA que hace falta para no bajar del SS: demanda
+                       acumulada (forecast + OV corregida) + SS - stock disponible (12-11-2026)
                        ÷ horas nominales                                                  -> lo que se NECESITA
   · reposición de SS = horas para reponer el SS (stock de seguridad) que hoy falta; se informa APARTE
                        (no entra al semáforo: con SS de 15 días sobre demanda de temporada puede ser
@@ -110,7 +111,13 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
         else:
             pref.setdefault(r["sku"], r["linea"])
 
-    req = defaultdict(lambda: defaultdict(float))      # linea -> semana -> horas requeridas
+    # (12-11-2026) REQUERIDO = NECESIDAD NETA de producción: lo que hay que producir para que el
+    # stock no baje del SS (demanda acumulada + SS - stock inicial disponible), asignado a la semana
+    # en que se necesita. Antes se sumaba la demanda BRUTA (sin descontar stock) y las líneas con
+    # mucho stock aparecían saturadas (caso L2Pet LV: 85% "requerido" con 19-33 días de cobertura).
+    # La demanda bruta queda como referencia en 'horas_demanda'.
+    req = defaultdict(lambda: defaultdict(float))      # linea -> semana -> horas requeridas (netas)
+    dem_b = defaultdict(lambda: defaultdict(float))    # linea -> semana -> horas de demanda bruta
     req_ss = defaultdict(float)                        # linea -> horas de reposición SS (sem 1)
     skus_linea = defaultdict(set)
     sin_vel = set()
@@ -125,15 +132,30 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
             sin_vel.add(sku)
             continue
         skus_linea[lin].add(sku)
-        for f, v in dd.items():
+        v0 = dd.get(fechas[0], {})
+        stock0 = float(v0.get("stock_ini_disp_u") or 0)
+        # Si hoy el stock está bajo el SS, esa brecha (d0) se repone repartida en las semanas del
+        # análisis, no toda el primer día (un SKU bajo SS no es una urgencia de capacidad de 1 día).
+        d0 = max(0.0, float(v0.get("ss_u") or 0) - stock0)
+        cum, ya = 0.0, 0.0
+        for f in sorted(dd):
             d = date.fromisoformat(f)
             if d >= lim:
-                continue
+                break
+            v = dd[f]
             dem = v.get("demanda_corr_u")
             if dem is None:
                 dem = (v.get("forecast_u") or 0) + (v.get("pedidos_u") or 0)
-            req[lin][_lunes(d)] += float(dem) / vel
-        v0 = dd.get(fechas[0], {})
+            dem = float(dem)
+            dem_b[lin][_lunes(d)] += dem / vel
+            cum += dem
+            neto = max(0.0, cum + float(v.get("ss_u") or 0) - stock0 - d0)   # producción acumulada necesaria
+            if neto > ya:                                                     # solo crece
+                req[lin][_lunes(d)] += (neto - ya) / vel
+                ya = neto
+        if d0 > 0:
+            for i in range(semanas):
+                req[lin][lunes0 + timedelta(days=7 * i)] += d0 / semanas / vel
         faltante_ss = max(0.0, float(v0.get("ss_u") or 0) - float(v0.get("stock_ini_disp_u") or 0))
         req_ss[lin] += faltante_ss / vel
 
@@ -196,6 +218,7 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
             habiles = [d for d in dias if hd[d] > 0 and d >= hoy]
             cap_h = sum(hd[d] for d in habiles)
             h_req = req[lin].get(ls, 0.0)
+            h_dem = dem_b[lin].get(ls, 0.0)
             h_prog = sum(min(hd[d], float(uso.get(d.isoformat(), 0) or 0) / 100.0 * hd[d]
                                  + h_aprob[lin].get(d.isoformat(), 0.0))
                          for d in dias if d >= hoy and hd[d] > 0)
@@ -206,6 +229,7 @@ def calcular_carga(detalle: dict, uso_linea: dict, alertas: list, lineas: dict, 
                 "desde": habiles[0].isoformat() if habiles else None,
                 "hasta": habiles[-1].isoformat() if habiles else None,
                 "horas_nominales": round(cap_h, 1), "horas_requeridas": round(h_req, 1),
+                "horas_demanda": round(h_dem, 1),     # referencia: demanda bruta, sin descontar stock
                 "horas_programadas": round(h_prog, 1),
                 "carga_requerida": round(h_req / cap_h, 4) if cap_h else None,
                 "uso_programado": round(h_prog / cap_h, 4) if cap_h else None,

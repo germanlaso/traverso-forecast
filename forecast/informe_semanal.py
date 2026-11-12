@@ -338,7 +338,8 @@ Reglas:
   "en la tendencia (Sem A–B)", "en el plan vigente para las próximas 4 semanas" o "en el último corte de faltantes".
   Nunca mezcles cifras de períodos distintos en una misma frase sin nombrar cada período.
 - FUENTES: "ocupación real" y "cumplimiento" vienen de la producción real reportada en SAP (Terminal Report): dilo así.
-  "Programado" = OF sugeridas + aprobadas del plan; "requerido" = lo que exige la demanda (forecast + OV).
+  "Programado" = OF sugeridas + aprobadas del plan; "requerido" = producción NETA que hace falta: demanda
+  (forecast + OV) menos el stock disponible, manteniendo el SS. Un SKU con mucho stock no requiere producción.
 - UNIDADES: las cantidades son CAJAS (cj), nunca unidades.
 - Sin jerga del sistema: no uses nombres de campos (top3, fut, req, ocR...). Di, por ejemplo,
   "en sus 3 mejores semanas produjo 154% de su capacidad nominal".
@@ -371,7 +372,7 @@ def _para_ia(D: dict) -> dict:
             "lineas": [{"linea": l["linea"], "categoria": l["cat"], "cumplimiento_semana_evaluada": (l["cumpl_sem"] or [None])[-1],
                         "cumplimiento_tendencia": l["cumpl"], "cumplimiento_ultimas_4_semanas": l["cumpl4"],
                         "cumplimiento_primeras_4_semanas": l["cumpl_ini"], "ocupacion_real_sap_tendencia": l["ocR"],
-                        "programado_proximas_4_semanas": l["fut"], "requerido_por_demanda_proximas_4_semanas": l["req"],
+                        "programado_proximas_4_semanas": l["fut"], "requerido_neto_proximas_4_semanas": l["req"],
                         "promedio_3_mejores_semanas_real_sap": l["top3"], "mejor_semana_real_sap": l["max_oc"],
                         "capacidad_nominal": l["param"], "skus_con_quiebre": l["q"], "skus_bajo_ss": l["ss"], "tiene_bitacora": l["con_bit"]}
                        for l in D["lineas"]],
