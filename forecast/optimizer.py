@@ -239,6 +239,10 @@ SOLVER_RANDOM_SEED = None  # (N2) si != None se fija en el solver (reproducibili
 # OFF (default): single-pass N1-min, identico al cron actual. ON: optimizar_plan
 # corre A (N1-min, define Q*) -> C (SS-target, barrera Q*). Ver DEFINICION_N2_v2.
 N2_ENABLED = _os.environ.get("N2_ENABLED", "0") == "1"
+# (13-11-2026) PASADA D (eficiencia de línea) después de C: compacta días, agrupa por jerarquía
+# de cambio, ordena dentro del día y llena hasta la meta, sin agregar quiebres ni días bajo SS.
+# OFF por defecto. Parámetros N2_D_* en pasada_d.py.
+N2_PASADA_D = _os.environ.get("N2_PASADA_D", "0") == "1"
 # (27-07-2026) Pesos y workers de la pasada C, configurables por entorno para poder
 # calibrar sin tocar código. Los defaults son los valores históricos: sin variables
 # definidas, el comportamiento es idéntico al anterior.
@@ -2975,6 +2979,13 @@ def optimizar_plan(
     if N2_ENABLED:
         logger.info("[N2] N2_ENABLED=1 -> dos pasadas (A -> Q* -> C)")
         resultado = _correr_dos_pasadas(**_rich_kwargs)
+        if N2_PASADA_D:
+            # (13-11-2026) EN SU LUGAR: cron_plan persiste este mismo objeto. Si falla, queda C.
+            try:
+                from pasada_d import aplicar_pasada_d
+                aplicar_pasada_d(resultado, _rich_kwargs)
+            except Exception as _e_d:
+                logger.error(f"[PASADA_D] FALLÓ, queda el plan de C sin cambios: {_e_d!r}")
     else:
         resultado = optimizar_plan_v12_rich(**_rich_kwargs)
 
