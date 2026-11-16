@@ -228,8 +228,11 @@ def evaluar(D, P, ventana, lineas):
             prev = {"sku": set(), "emb": set(), "gr": set()}
             for f in dias:
                 skus = por_ld.get((l, f), {})
-                cap = max(1e-9, D.cap_h[(l, f)] - D.ap_h[(l, f)])
-                hp = sum(D.horas_prod(s, l, u) for s, u in skus.items())
+                # ocupación de la línea: OFT + cambios + OF aprobadas, sobre la capacidad del día
+                # (no se resta lo aprobado del denominador: si lo aprobado llena el día, el
+                # cociente se disparaba)
+                cap = D.cap_h[(l, f)]
+                hp = sum(D.horas_prod(s, l, u) for s, u in skus.items()) + D.ap_h[(l, f)]
                 _, hc, viol = mejor_orden(D.A, skus)
                 if skus:
                     R["abiertos"] += 1
