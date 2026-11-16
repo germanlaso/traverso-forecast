@@ -924,6 +924,22 @@ def generar_plan(req: PlanRequest = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/plan/vigente/meta", tags=["Plan de Produccion"])
+def get_plan_vigente_meta():
+    """(v2.3.0) Identidad del plan vigente, sin leer el snapshot. La app la consulta cada 5 min
+    y al volver a la pestaña para avisar si lo que muestra ya no es el plan vigente."""
+    from sqlalchemy import text as _sql
+    from db_mrp import SessionLocal
+    with SessionLocal() as s:
+        row = s.execute(_sql(
+            "SELECT id, created_at, timestamp_stock FROM mrp_planes WHERE vigente LIMIT 1"
+        )).mappings().first()
+    if row is None:
+        return {"disponible": False}
+    return {"disponible": True, "plan_id": row["id"], "created_at": str(row["created_at"]),
+            "timestamp_stock": str(row["timestamp_stock"]) if row["timestamp_stock"] else None}
+
+
 @app.get("/plan/vigente", tags=["Plan de Produccion"])
 def get_plan_vigente():
     """Devuelve el plan VIGENTE persistido en mrp_planes (el que promovio el cron).
@@ -950,6 +966,16 @@ def get_plan_vigente():
     ts_stock = row["timestamp_stock"]
     # frescura: el stock del plan vigente es de hoy?
     stock_es_hoy = bool(ts_stock and ts_stock.date() == _date.today())
+    # (v2.3.0) orden de producción dentro del día (Pasada D): lo traen las OFT del snapshot, no la
+    # vista legacy. Se agrega por (sku, línea, fecha de lanzamiento). Planes sin D: no cambia nada.
+    _ordenes = vista.get("ordenes", []) or []
+    _ord = {(o.get("sku"), o.get("linea"), str(o.get("fecha_lanzamiento"))[:10]): o.get("orden_dia")
+            for o in (snap.get("ofts") or []) if o.get("orden_dia")}
+    if _ord:
+        for _o in _ordenes:
+            _k = (_o.get("sku"), _o.get("linea"), str(_o.get("fecha_lanzamiento"))[:10])
+            if _k in _ord and not _o.get("orden_dia"):
+                _o["orden_dia"] = _ord[_k]
     return {
         "disponible": True,
         "plan_id": row["id"],
@@ -970,7 +996,7 @@ def get_plan_vigente():
         "n_ordenes": vista.get("n_ordenes"),
         "n_alertas": vista.get("n_alertas"),
         "stock_info": vista.get("stock_info"),
-        "ordenes": vista.get("ordenes", []),
+        "ordenes": _ordenes,
         "resumen_semanal": vista.get("resumen_semanal"),
         "proyeccion_por_sku": vista.get("proyeccion_por_sku", {}),
     }

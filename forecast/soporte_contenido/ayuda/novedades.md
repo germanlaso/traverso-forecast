@@ -1,11 +1,18 @@
 ---
 titulo: Novedades
 seccion: General
-resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.2.0 (12-11-2026).
+resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.3.0 (16-11-2026).
 orden: 901
-actualizado: 2026-11-12
+actualizado: 2026-11-16
 ---
 La versión vigente aparece en la barra superior; al hacer clic se abre esta página. El número tiene tres partes: la primera cambia cuando cambia la forma de trabajar, la segunda cuando hay pantallas o funciones nuevas y la tercera con correcciones menores.
+
+## Versión 2.3.0 — 16 de noviembre de 2026
+### Siempre sabes qué plan estás viendo
+- **Detalle Producción** muestra el número del plan y cuándo se generó, junto a la fecha del stock.
+- Si se genera un plan nuevo mientras tienes la app abierta, la barra superior muestra **"Hay un plan más nuevo"**. Haz clic para actualizar. La app lo revisa cada 5 minutos y cada vez que vuelves a la pestaña.
+- Para no decidir sobre un plan reemplazado, la app no aprueba una orden si el plan que estás viendo ya no es el vigente: te avisa y actualiza el plan, para que revises la orden antes de aprobarla.
+- Ver [[a:detalle|Detalle Producción]].
 
 ## Versión 2.2.0 — 12 de noviembre de 2026
 ### Análisis de Línea: un análisis vigente por línea

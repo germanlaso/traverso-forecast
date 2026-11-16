@@ -491,6 +491,15 @@ function distribuirOrdenes(ordenesLinea,diasExt,aprobMap,params,linea){
       uAprobDia[fechaIni]=(uAprobDia[fechaIni]||0)+uProd;   // (05-08) unidades fisicas
     }
   });
+  // (v2.3.0) orden de producción dentro del día (Pasada D): si las OFT traen orden_dia, se respeta.
+  // Las que no lo traen (aprobadas, planes sin D) conservan su orden relativo y van primero.
+  Object.keys(mapa).forEach(f=>{
+    if(mapa[f].some(o=>o.orden_dia)){
+      mapa[f]=mapa[f].map((o,i)=>[o,i])
+        .sort((a,b)=>((a[0].orden_dia||0)-(b[0].orden_dia||0))||(a[1]-b[1]))
+        .map(x=>x[0]);
+    }
+  });
   return{mapa,capUsada,capUsadaAprob, uAprobDia};
 }
 

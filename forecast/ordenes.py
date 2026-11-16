@@ -99,6 +99,7 @@ class OrdenAprobar(BaseModel):
     fecha_lanzamiento_real: str   = ""   # F3: fecha real (si el usuario la modifico en el modal)
     fecha_entrada_real:     str   = ""
     numero_of:              str   = ""   # V6.45: identificador para edicion (saltea lookup F3 cuando viene)
+    plan_id:                Optional[int] = None   # v2.3.0: plan que mostraba la app al aprobar
 
 
 def orden_key(sku, semana_necesidad, semana_emision):
@@ -161,6 +162,17 @@ def _calcular_fecha_entrada(fecha_manual, fecha_lanz, cantidad_cj, sku, fallback
 
 @router.post("/aprobar")
 def aprobar_orden(req: OrdenAprobar):
+    # (v2.3.0) Si la app indica el plan que estaba mostrando y ya no es el vigente, no se aprueba:
+    # se estaría decidiendo sobre un plan reemplazado. Sin plan_id (otros clientes), sigue igual.
+    if req.plan_id is not None:
+        from sqlalchemy import text as _sql
+        from db_mrp import SessionLocal
+        with SessionLocal() as _s:
+            _vig = _s.execute(_sql("SELECT id FROM mrp_planes WHERE vigente LIMIT 1")).scalar()
+        if _vig is not None and int(_vig) != int(req.plan_id):
+            raise HTTPException(status_code=409, detail=(
+                f"El plan cambió desde que abriste la página (estabas viendo el #{req.plan_id}; "
+                f"el vigente es el #{_vig}). Se actualizará el plan: revisa la orden antes de aprobar."))
     try:
         _upc = _upc_real(req.sku, req.u_por_caja)   # V6.46
         sn = req.semana_necesidad[:10]

@@ -134,6 +134,14 @@ function parseFechaUTC(v) {
   return Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
 }
 
+// (v2.3.0) "dd-mm hh:mm" en hora local, para el número de plan y el aviso de plan nuevo.
+function fmtGenerado(v) {
+  const t = parseFechaUTC(v);
+  if (isNaN(t)) return '';
+  const d = new Date(t), p = n => String(n).padStart(2, '0');
+  return `${p(d.getDate())}-${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function extractErrorMsg(e) {
   const detail = e?.response?.data?.detail;
   if (!detail) return e?.message || 'Error desconocido';
@@ -409,11 +417,14 @@ function AppInner() {
   // lo muestra por defecto; el boton 'Generar plan' queda deshabilitado (warm
   // start futuro). Si no hay vigente, deja el plan como estaba (cache local).
   const [planFrescura, setPlanFrescura] = useState(null);
-  useEffect(() => {
-    axios.get(`${API}/plan/vigente`)
+  // (v2.3.0) planNuevo: el plan vigente cambió respecto del que muestra la pantalla.
+  const [planNuevo, setPlanNuevo] = useState(null);
+  const cargarPlanVigente = () => {
+    return axios.get(`${API}/plan/vigente`)
       .then(r => {
         if (r.data && r.data.disponible) {
           setPlan(r.data);
+          setPlanNuevo(null);
           // "OF modificadas" se apaga cuando el plan vigente se generó DESPUÉS del último cambio.
           // Marcas antiguas sin fecha (de cuando solo se limpiaba con runPlan) también se apagan.
           if (localStorage.getItem('traverso:planStale') === '1') {
@@ -436,6 +447,25 @@ function AppInner() {
         }
       })
       .catch(() => {});
+  };
+  useEffect(() => { cargarPlanVigente(); }, []);
+  // (v2.3.0) Aviso de plan más nuevo: consulta liviana cada 5 min y al volver a la pestaña. Si el
+  // plan vigente no es el que se muestra, aviso en la barra (sin recarga automática: el usuario
+  // podría estar a mitad de una edición).
+  const planIdRef = useRef(null);
+  useEffect(() => { planIdRef.current = plan?.plan_id ?? null; }, [plan]);
+  useEffect(() => {
+    const chequear = () => {
+      axios.get(`${API}/plan/vigente/meta`).then(r => {
+        const m = r.data;
+        setPlanNuevo(m && m.disponible && m.plan_id !== planIdRef.current ? m : null);
+      }).catch(() => {});
+    };
+    const id = setInterval(chequear, 5 * 60 * 1000);
+    const t0 = setTimeout(chequear, 20000);
+    const onVis = () => { if (document.visibilityState === 'visible') chequear(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); clearTimeout(t0); document.removeEventListener('visibilitychange', onVis); };
   }, []);
 
   useEffect(() => {
@@ -603,6 +633,7 @@ function AppInner() {
         fecha_lanzamiento:      modalOrden.fecha_lanzamiento || modalOrden.semana_emision || '',
         fecha_lanzamiento_real: aprobForm.fecha_lanzamiento_real || '',
         fecha_entrada_real:     aprobForm.fecha_entrada_real     || '',
+        plan_id:                plan?.plan_id ?? null,   // v2.3.0: el backend rechaza (409) si ya no es el vigente
       });
       setOrdenesAprobadas(prev => {
         // Dedup por numero_of (PK estable). Si la orden ya estaba aprobada,
@@ -646,7 +677,14 @@ function AppInner() {
       }
       cerrarModal();
     } catch(e) {
-      alert(`Error: ${e?.response?.data?.detail || e.message}`);
+      if (e?.response?.status === 409) {
+        // v2.3.0: el plan cambió desde que se abrió la página -> se actualiza y no se aprueba
+        alert(e.response.data?.detail || 'El plan cambió. Revisa la orden en el plan actualizado antes de aprobar.');
+        cerrarModal();
+        cargarPlanVigente();
+      } else {
+        alert(`Error: ${e?.response?.data?.detail || e.message}`);
+      }
     } finally {
       setAprobando(false);
     }
@@ -775,6 +813,14 @@ function AppInner() {
           <button onClick={() => setPanelAyuda(true)} title="Ayuda de esta pantalla" aria-label="Ayuda de esta pantalla"
             style={{width:28,height:28,borderRadius:'50%',border:'1.5px solid rgba(255,255,255,.85)',background:'transparent',
               color:'#fff',fontWeight:700,fontSize:14,cursor:'pointer',lineHeight:1}}>?</button>
+          {/* v2.3.0: la pantalla muestra un plan que ya no es el vigente */}
+          {planNuevo && (
+            <span style={{...s.badge(C.dangerLt, '#A32D2D'), fontWeight: 600, cursor: 'pointer'}}
+              onClick={() => cargarPlanVigente()}
+              title="Se generó un plan nuevo después de abrir la página. Lo que ves está desactualizado. Clic para actualizar.">
+              ⟳ Hay un plan más nuevo (#{planNuevo.plan_id}{planNuevo.created_at ? `, ${fmtGenerado(planNuevo.created_at)}` : ''}) · Actualizar
+            </span>
+          )}
           {/* V6.38: badge global de plan desactualizado (visible en todas las pestañas) */}
           {planStale && (
             <span style={{
@@ -1351,6 +1397,7 @@ function AppInner() {
             botón daba la falsa impresión de stock al minuto. Se muestra la fecha del stock en uso. */}
         {activeTab === 'detalle' && (
           <div style={{display:'flex',gap:10,alignItems:'center',justifyContent:'flex-end',flexWrap:'wrap',marginBottom:10}}>
+            {plan?.plan_id && <span style={{fontSize:11,color:C.textMuted}} title="Plan que muestra esta pantalla">Plan #{plan.plan_id}{planFrescura?.createdAt ? ` · generado ${fmtGenerado(planFrescura.createdAt)}` : ''}</span>}
             {stockInfo?.disponible && <span style={{fontSize:11,color:C.textMuted}}>Stock del datalake: {stockInfo.fecha_descarga_info||'—'}</span>}
             {plan?.ordenes?.length > 0 && (
               <button style={s.btn} onClick={descargarPlanCSV}
