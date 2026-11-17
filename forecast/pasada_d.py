@@ -47,14 +47,19 @@ T_CAMBIO_H = json.loads(_e("N2_D_T_CAMBIO_H", "") or "{}") or {
 T_LIMPIEZA_OSCURO_CLARO_H = float(_e("N2_D_T_LIMPIEZA_OC_H", "0.5"))
 T_LIMPIEZA_AJI_H = float(_e("N2_D_T_LIMPIEZA_AJI_H", "1.0"))
 META_OCUP = float(_e("N2_D_META_OCUP", "0.95"))
-TOPE_CRECIMIENTO = float(_e("N2_D_TOPE_CRECIMIENTO", "1.5"))
+TOPE_CRECIMIENTO = float(_e("N2_D_TOPE_CRECIMIENTO", "1.6"))   # 17-11: 50% -> 60%
 N_MAX_SKU_DIA = int(_e("N2_D_N_MAX_SKU_DIA", "4"))
 TL_SEG = float(_e("N2_D_TL_SEG", "20"))
 WORKERS = int(_e("N2_D_WORKERS", "8"))
 W_DIA = 1000            # abrir un día (más 50 por posición en la semana: cerrar el final cuesta menos)
 W_DIA_POS = 50
 W_VIOL = 300            # transición contra regla de orden
-W_ARR_SKU = int(_e("N2_D_W_ARR_SKU", "30"))
+W_ARR_SKU = int(_e("N2_D_W_ARR_SKU", "300"))     # 17-11: 30 -> 300 (una corrida por SKU-semana)
+# 17-11: secuencia SEMANAL. Penaliza, por cada día de traslape, que un SKU que va después en la
+# secuencia (más oscuro, o ají) empiece antes de que termine uno que va antes. Aplica a todas las líneas.
+W_INV_SEMANA = int(_e("N2_D_W_INV_SEMANA", "200"))
+# 17-11: costo por cada OF (SKU-día): empuja a producir cada SKU en la menor cantidad de días de la semana.
+W_OF = int(_e("N2_D_W_OF", "150"))
 W_ARR_EMPAQUE = int(_e("N2_D_W_ARR_EMPAQUE", "80"))
 W_ARR_GRANEL = int(_e("N2_D_W_ARR_GRANEL", "30"))
 W_FALTANTE = 10         # por unidad de tiempo (ESC) bajo la meta en un día abierto
@@ -93,6 +98,11 @@ def atributos(sp: dict) -> dict:
     return A
 
 
+def clave_sec(A, s):
+    """Posición en la secuencia: los ajíes al final; entre los demás, de claro a oscuro."""
+    return (1 if A[s]["aji"] else 0, A[s]["rank"])
+
+
 def t_cambio(A, i, j):
     """(horas, viola_regla) de pasar de i a j dentro del día."""
     a, b = A[i], A[j]
@@ -108,21 +118,26 @@ def t_cambio(A, i, j):
     return h, 0
 
 
-def mejor_orden(A, skus):
-    """Orden intradía de menor costo (primero sin violar reglas). <= 6 SKU: exacto."""
+def mejor_orden(A, skus, primero=None, siguen=frozenset()):
+    """Orden intradía de menor costo. Prioridad: (1) no violar reglas de orden, (2) continuidad
+    con los días vecinos — 'primero' (el último SKU del día anterior) al inicio y un SKU de 'siguen'
+    (continúa al día siguiente) al final —, (3) menos horas de cambio. <= 6 SKU: exacto."""
     skus = list(skus)
     if len(skus) <= 1:
         return skus, 0.0, 0
     perms = itertools.permutations(skus) if len(skus) <= 6 else [sorted(skus, key=lambda s: A[s]["rank"])]
-    best = None
+    best, best_k = None, None
     for p in perms:
         h = v = 0
         for i, j in zip(p, p[1:]):
             hh, vv = t_cambio(A, i, j)
             h += hh
             v += vv
-        if best is None or (v, h) < (best[2], best[1]):
-            best = (list(p), h, v)
+        cont = (1 if primero in skus and p[0] != primero else 0) + \
+               (1 if siguen and any(x in siguen for x in skus) and p[-1] not in siguen else 0)
+        k = (v, cont, h, [clave_sec(A, x) for x in p])
+        if best_k is None or k < best_k:
+            best, best_k = (list(p), h, v), k
     return best
 
 
@@ -226,6 +241,16 @@ def evaluar(D, P, ventana, lineas):
         for k0 in range(0, len(hab), 7):
             dias = [x.isoformat() for x in hab[k0:k0 + 7] if D.cap_h.get((l, x.isoformat()), 0) > 0]
             prev = {"sku": set(), "emb": set(), "gr": set()}
+            dias_sku = defaultdict(list)
+            for f in dias:
+                for s_ in por_ld.get((l, f), {}):
+                    dias_sku[s_].append(dias.index(f))
+            R["sku_semana"] += len(dias_sku)
+            R["of_sku_dia"] += sum(len(v_) for v_ in dias_sku.values())
+            for a_ in dias_sku:
+                for b_ in dias_sku:
+                    if clave_sec(D.A, a_) < clave_sec(D.A, b_) and min(dias_sku[b_]) < max(dias_sku[a_]):
+                        R["inv_semana"] += 1
             for f in dias:
                 skus = por_ld.get((l, f), {})
                 # ocupación de la línea: OFT + cambios + OF aprobadas, sobre la capacidad del día
@@ -258,6 +283,8 @@ def evaluar(D, P, ventana, lineas):
                 R["bajo_ss"] += fin[(s, f)] < v["ss_u"]
                 R["sobre_2ss"] += _d(f).weekday() < 5 and v["ss_u"] > 0 and fin[(s, f)] > 2 * v["ss_u"]
     R["ocup"] = R["ocup_sum"] / R["abiertos"] if R["abiertos"] else 0
+    R["corridas_sku_sem"] = R["arr_sku"] / R["sku_semana"] if R.get("sku_semana") else 0
+    R["of_sku_sem"] = R["of_sku_dia"] / R["sku_semana"] if R.get("sku_semana") else 0
     return dict(R)
 
 
@@ -399,7 +426,26 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
                 m.Add(a >= on - (prev if prev is not None else 0))
                 arr_g.append((w, a))
                 prev = on
+    # secuencia semanal: primer día (fs) y último día (ls) de cada SKU en la semana
+    inv = []
+    claves = {s: clave_sec(D.A, s) for s in S}
+    if len(set(claves.values())) > 1 and len(dias) > 1:
+        nd = len(dias) - 1
+        fs, ls = {}, {}
+        for s in S:
+            fs[s] = m.NewIntVar(0, nd, "")
+            ls[s] = m.NewIntVar(0, nd, "")
+            for k, f in enumerate(dias):
+                m.Add(fs[s] <= k).OnlyEnforceIf(y[(s, f)])
+                m.Add(ls[s] >= k).OnlyEnforceIf(y[(s, f)])
+        for a in S:
+            for b in S:
+                if claves[a] < claves[b]:          # a va antes que b en la secuencia
+                    v = m.NewIntVar(0, nd, "")
+                    m.Add(v >= ls[a] - fs[b])      # días en que b empieza antes de que termine a
+                    inv.append(v)
     obj1 = (sum((W_DIA + W_DIA_POS * k) * open_[f] for k, f in enumerate(dias)) + sum(costo_cambio)
+            + W_INV_SEMANA * sum(inv) + W_OF * sum(y.values())
             + W_VIOL * sum(viol) + W_ARR_SKU * sum(arr) + sum(w * a for w, a in arr_g))
     m.Minimize(obj1)
     sol = cp_model.CpSolver()
@@ -505,7 +551,10 @@ def aplicar_pasada_d(resultado: dict, kw: dict) -> dict:
             "ocup": [round(eC.get("ocup", 0), 3), round(eD.get("ocup", 0), 3)],
             "arr_sku": [eC.get("arr_sku"), eD.get("arr_sku")], "arr_emb": [eC.get("arr_emb"), eD.get("arr_emb")],
             "h_cambio": [round(eC.get("h_cambio", 0), 1), round(eD.get("h_cambio", 0), 1)],
-            "unidades": [eC.get("unidades"), eD.get("unidades")], "aplicada": False}
+            "unidades": [eC.get("unidades"), eD.get("unidades")],
+            "corridas_sku_sem": [round(eC.get("corridas_sku_sem", 0), 2), round(eD.get("corridas_sku_sem", 0), 2)],
+            "of_sku_sem": [round(eC.get("of_sku_sem", 0), 2), round(eD.get("of_sku_sem", 0), 2)],
+            "inv_semana": [eC.get("inv_semana", 0), eD.get("inv_semana", 0)], "aplicada": False}
     for r in log:
         if "se mantiene" in r[2]:
             logger.info(f"[PASADA_D] {r[0]} sem {r[1]}: {r[2]}")
@@ -525,6 +574,8 @@ def aplicar_pasada_d(resultado: dict, kw: dict) -> dict:
                 f"días abiertos {diag['abiertos'][0]:.0f}->{diag['abiertos'][1]:.0f} | ocupación "
                 f"{diag['ocup'][0]:.0%}->{diag['ocup'][1]:.0%} | arranques SKU {diag['arr_sku'][0]:.0f}->"
                 f"{diag['arr_sku'][1]:.0f} | horas cambio {diag['h_cambio'][0]}->{diag['h_cambio'][1]} | "
+                f"OF/SKU-sem {diag['of_sku_sem'][0]}->{diag['of_sku_sem'][1]} | "
+                f"inversiones sem {diag['inv_semana'][0]:.0f}->{diag['inv_semana'][1]:.0f} | "
                 f"quiebres {qc}->{qd} | bajo SS {bc}->{bd} (alertas {ac}->{ad}) | unidades {diag['unidades'][0]:.0f}->{diag['unidades'][1]:.0f}")
     return diag
 
@@ -537,8 +588,12 @@ def _escribir(resultado, D, PD, desde):
     for (s, l, f), u in PD.items():
         if f >= desde and u > 0.5:
             por_ld[(l, f)][s] = u
+    ultimo = {}     # último SKU del día anterior por línea
     for (l, f), skus in sorted(por_ld.items(), key=lambda t: (t[0][1], t[0][0])):
-        orden = mejor_orden(D.A, skus)[0]
+        sig = [g for (ll, g) in por_ld if ll == l and g > f]
+        siguen = frozenset(por_ld.get((l, min(sig)), {})) if sig else frozenset()
+        orden = mejor_orden(D.A, skus, ultimo.get(l), siguen)[0]
+        ultimo[l] = orden[-1] if orden else None
         vel = D.vel(l)
         for pos, s in enumerate(orden):
             sp = D.sp[s]
@@ -648,6 +703,6 @@ if __name__ == "__main__":
     print(f"desde {desde} · {len(log)} línea-semanas · {time.time() - t0:.0f}s · control (quiebres, bajo SS, alertas bajo SS): {_contar(D, PC)} -> {_contar(D, PD)}")
     lineas = sorted(D.L)
     eC, eD = evaluar(D, PC, vent, lineas), evaluar(D, PD, vent, lineas)
-    for k in ("abiertos", "ocup", "ge95", "lt70", "arr_sku", "arr_emb", "arr_gr", "h_cambio", "viol",
+    for k in ("abiertos", "ocup", "ge95", "lt70", "arr_sku", "of_sku_sem", "inv_semana", "arr_emb", "arr_gr", "h_cambio", "viol",
               "unidades", "quiebres", "bajo_ss", "sobre_2ss", "cerrado_0", "cerrado_4"):
         print(f"{k:10} {eC.get(k, 0):12.2f} {eD.get(k, 0):12.2f}")
