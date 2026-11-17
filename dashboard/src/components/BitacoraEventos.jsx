@@ -54,6 +54,17 @@ export default function BitacoraEventos() {
   const [form, setForm] = useState(FORM_VACIO);
   const [eventos, setEventos] = useState([]);
   const [filtroLinea, setFiltroLinea] = useState('');
+  // (17-11-2026) Filtro por fechas de la tabla. Por defecto: últimos 7 días y próximos 30.
+  const rangoDefecto = () => {
+    const base = new Date();
+    const d0 = new Date(base); d0.setDate(base.getDate() - 6);
+    const d1 = new Date(base); d1.setDate(base.getDate() + 30);
+    const f = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { desde: f(d0), hasta: f(d1) };
+  };
+  const [filtroDesde, setFiltroDesde] = useState(() => rangoDefecto().desde);
+  const [filtroHasta, setFiltroHasta] = useState(() => rangoDefecto().hasta);
+  const fmtDMA = (iso) => (iso ? `${String(iso).slice(8, 10)}-${String(iso).slice(5, 7)}-${String(iso).slice(0, 4)}` : '');
   const [msg, setMsg] = useState(null);
   const [guardando, setGuardando] = useState(false);
 
@@ -70,12 +81,13 @@ export default function BitacoraEventos() {
   }, [futuro, catalogos.tipos]);
 
   const cargarEventos = async () => {
+    if (!filtroDesde || !filtroHasta) return;
+    if (filtroDesde > filtroHasta) {
+      setMsg({ tipo: 'error', texto: 'El rango de fechas es inválido: "desde" es posterior a "hasta".' });
+      return;
+    }
     try {
-      const base = new Date();
-      const d0 = new Date(base); d0.setDate(base.getDate() - 6);
-      const d1 = new Date(base); d1.setDate(base.getDate() + 30);
-      const f = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const params = { desde: f(d0), hasta: f(d1), ...(filtroLinea ? { linea: filtroLinea } : {}) };
+      const params = { desde: filtroDesde, hasta: filtroHasta, ...(filtroLinea ? { linea: filtroLinea } : {}) };
       const { data } = await axios.get(`${API}/bitacora/eventos`, { params });
       setEventos(data.eventos || []);
     } catch (e) {
@@ -89,7 +101,7 @@ export default function BitacoraEventos() {
       .catch(() => setMsg({ tipo: 'error', texto: 'No se pudieron cargar líneas y tipos de evento.' }));
   }, []);
 
-  useEffect(() => { cargarEventos(); /* eslint-disable-next-line */ }, [filtroLinea]);
+  useEffect(() => { cargarEventos(); /* eslint-disable-next-line */ }, [filtroLinea, filtroDesde, filtroHasta]);
 
   const set = (campo) => (e) => setForm({ ...form, [campo]: e.target.value });
 
@@ -194,11 +206,21 @@ export default function BitacoraEventos() {
 
       <div style={estilos.card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <strong>Últimos 7 días y planificados (próximos 30)</strong>
+          <strong>Eventos del {fmtDMA(filtroDesde)} al {fmtDMA(filtroHasta)}</strong>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 13 }}>Desde{' '}
+            <input type="date" style={estilos.input} value={filtroDesde} onChange={(e) => setFiltroDesde(e.target.value)} />
+          </label>
+          <label style={{ fontSize: 13 }}>Hasta{' '}
+            <input type="date" style={estilos.input} value={filtroHasta} onChange={(e) => setFiltroHasta(e.target.value)} />
+          </label>
+          <button style={estilos.btnSec} title="Últimos 7 días y próximos 30"
+            onClick={() => { const r = rangoDefecto(); setFiltroDesde(r.desde); setFiltroHasta(r.hasta); }}>Restablecer</button>
           <select style={estilos.input} value={filtroLinea} onChange={(e) => setFiltroLinea(e.target.value)}>
             <option value="">Todas las líneas</option>
             {catalogos.lineas.map((l) => <option key={l.codigo} value={l.codigo}>{l.nombre && l.nombre !== l.codigo ? `${l.codigo} · ${l.nombre}` : l.codigo}</option>)}
           </select>
+          </div>
         </div>
         {eventos.length === 0 ? (
           <p style={{ color: '#57606a', fontSize: 13 }}>No hay eventos registrados en este período.</p>
@@ -215,7 +237,7 @@ export default function BitacoraEventos() {
               <tbody>
                 {eventos.map((ev) => (
                   <tr key={ev.id}>
-                    <td style={estilos.td}>{ev.fecha}</td>
+                    <td style={estilos.td}>{fmtDMA(ev.fecha)}</td>
                     <td style={estilos.td}>{ev.linea}</td>
                     <td style={estilos.td}>{ev.tipo_nombre}</td>
                     <td style={estilos.td}>{ev.duracion_min ?? ''}</td>
