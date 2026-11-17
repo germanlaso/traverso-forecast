@@ -61,13 +61,36 @@ const rangoSemana = (iso) => {
   const dm = (x) => `${String(x.getDate()).padStart(2,'0')}-${String(x.getMonth()+1).padStart(2,'0')}`;
   return `${dm(d)} – ${dm(f)}`;
 };
+// (17-11-2026) Número de semana. Estas semanas van de domingo a sábado: se informa la semana ISO
+// del lunes siguiente (6 de sus 7 días), la misma "Sem N" que usa el resto de la app.
+const numSemana = (iso) => {
+  const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1);
+  const dia = d.getUTCDay() || 7; d.setUTCDate(d.getUTCDate() + 4 - dia);
+  const ini = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d - ini) / 86400000 + 1) / 7);
+};
+const etiquetaSemana = (iso) => `Sem ${numSemana(iso)} · ${rangoSemana(iso)}`;
+// Etiqueta del eje X en dos líneas: rango de fechas y, debajo, "Sem N" (+ nota opcional)
+function TickSemana({ x, y, payload, datos, nota }) {
+  const p = (datos || []).find((q) => q.rango === payload.value);
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text dy={12} textAnchor="middle" fontSize={11} fill={C.textMuted}>{payload.value}</text>
+      {p && p.semana && (
+        <text dy={26} textAnchor="middle" fontSize={10} fontWeight={600} fill={C.teal}>
+          Sem {numSemana(p.semana)}{nota ? nota(p) : ''}
+        </text>
+      )}
+    </g>
+  );
+}
 
 function TooltipSemana({active, payload}) {
   if (!active || !payload?.length) return null;
   const p = payload[0].payload;
   return (
     <div style={{background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:8,padding:'10px 14px',fontSize:12,maxWidth:340}}>
-      <div style={{fontWeight:700,marginBottom:6,color:C.text}}>Semana {p.rango}</div>
+      <div style={{fontWeight:700,marginBottom:6,color:C.text}}>{p.semana ? etiquetaSemana(p.semana) : `Semana ${p.rango}`}</div>
       {p.hueco ? (
         <div style={{color:C.textMuted}}>Sin forecast con esta anticipación (no hubo reentrenamiento en el corte correspondiente).</div>
       ) : (
@@ -94,7 +117,7 @@ function TooltipComparativo({active, payload}) {
   );
   return (
     <div style={{background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:8,padding:'10px 14px',fontSize:12,maxWidth:360}}>
-      <div style={{fontWeight:700,marginBottom:6,color:C.text}}>Semana {p.rango}{estado}</div>
+      <div style={{fontWeight:700,marginBottom:6,color:C.text}}>{p.semana ? etiquetaSemana(p.semana) : `Semana ${p.rango}`}{estado}</div>
       {fila(COLOR_H2, 'Forecast 2 semanas antes', p.fc_h2_cj, vsLy(p.fc_h2_cj))}
       {fila(COLOR_H1, 'Forecast 1 semana antes', p.fc_h1_cj, vsLy(p.fc_h1_cj))}
       {p.estado === 'cerrada'
@@ -293,11 +316,11 @@ export default function PrecisionForecast() {
           <span style={s.label}>Semanas</span>
           <select style={s.input} value={desde} onChange={e => setDesde(e.target.value)}>
             <option value="">desde el inicio</option>
-            {semanasH.map(w => <option key={w} value={w}>{rangoSemana(w)}</option>)}
+            {semanasH.map(w => <option key={w} value={w}>{etiquetaSemana(w)}</option>)}
           </select>
           <select style={s.input} value={hasta} onChange={e => setHasta(e.target.value)}>
             <option value="">hasta la última</option>
-            {semanasH.map(w => <option key={w} value={w}>{rangoSemana(w)}</option>)}
+            {semanasH.map(w => <option key={w} value={w}>{etiquetaSemana(w)}</option>)}
           </select>
           {(categoria || linea || texto || skuSel || desde || hasta) && (
             <button style={s.btn(false)} onClick={() => { setCategoria(''); setLinea(''); setTexto(''); setSkuSel(''); setDesde(''); setHasta(''); }}>
@@ -392,11 +415,8 @@ export default function PrecisionForecast() {
                   <ComposedChart data={serieGrafico} margin={{top:20,right:20,left:0,bottom:5}}
                                  onClick={clicGrafico} style={{cursor:'pointer'}}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                    <XAxis dataKey="rango" tick={{fontSize:11}}
-                           tickFormatter={(v) => {
-                             const p = serieGrafico.find(x => x.rango === v);
-                             return p && p.hueco ? `${v} (sin forecast)` : v;
-                           }} />
+                    <XAxis dataKey="rango" height={38}
+                           tick={<TickSemana datos={serieGrafico} nota={(p) => (p.hueco ? ' · sin forecast' : '')} />} />
                     <YAxis tick={{fontSize:11}} tickFormatter={(v) => `${v}%`} />
                     <Tooltip content={<TooltipSemana />} />
                     <ReferenceLine y={0} stroke={C.gray} strokeWidth={1.5} />
@@ -435,11 +455,8 @@ export default function PrecisionForecast() {
                                      fill={C.grayLt} fillOpacity={0.8} ifOverflow="extendDomain"
                                      label={{value:'Proyección', position:'insideTop', fontSize:11, fill:C.textMuted}} />
                     )}
-                    <XAxis dataKey="rango" tick={{fontSize:11}}
-                           tickFormatter={(v) => {
-                             const p = compData.find(x => x.rango === v);
-                             return p && p.estado === 'en_curso' ? `${v} (en curso)` : v;
-                           }} />
+                    <XAxis dataKey="rango" height={38}
+                           tick={<TickSemana datos={compData} nota={(p) => (p.estado === 'en_curso' ? ' · en curso' : '')} />} />
                     <YAxis tick={{fontSize:11}} tickFormatter={(v) => fmtNum(v)} />
                     <Tooltip content={<TooltipComparativo />} />
                     <Bar dataKey="fc_h2_cj" name="Forecast 2 sem" fill={COLOR_H2} maxBarSize={26}>
@@ -469,7 +486,7 @@ export default function PrecisionForecast() {
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',flexWrap:'wrap',gap:8}}>
               <div style={s.cardTitle}>
                 Detalle por SKU — {semSel && puntoSel
-                  ? `semana ${puntoSel.rango}`
+                  ? etiquetaSemana(puntoSel.semana)
                   : `total de la ventana (${kpi.n_semanas} semana${kpi.n_semanas === 1 ? '' : 's'})`}
               </div>
               <div style={{fontSize:11,color:C.textMuted}}>Clic en una fila para ver su evolución en el gráfico</div>
