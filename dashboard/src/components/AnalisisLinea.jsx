@@ -263,6 +263,13 @@ export default function AnalisisLinea() {
   useEffect(() => { cargar(); }, []);   // eslint-disable-line
 
   const analizar = async (linea) => {
+    // (17-11-2026) Confirmación: generar un análisis nuevo usa la IA y REEMPLAZA al vigente
+    // sin decidir de la línea. Es fácil confundir el botón con "ver más".
+    const vig = vigenteDe(linea);
+    const aviso = vig
+      ? `\n\nLa línea ya tiene el análisis #${vig.id}: el nuevo pasará a ser el vigente y el #${vig.id} quedará en el historial (lo ya decidido se mantiene). Si solo quieres verlo, usa el botón "Análisis #${vig.id}".`
+      : "";
+    if (!window.confirm(`¿Generar un análisis NUEVO de ${linea}?\n\nCalcula el diagnóstico de la línea y pide una recomendación a la IA (toma alrededor de un minuto).${aviso}`)) return;
     let quien = ""; try { quien = localStorage.getItem(KEY_EDITOR) || ""; } catch { /* */ }
     if (!quien) quien = window.prompt("¿Quién solicita el análisis?") || "";
     if (quien.trim().length < 3) return;
@@ -309,7 +316,8 @@ export default function AnalisisLinea() {
                 <td style={{ ...st.td, minWidth: 220 }}><Semanas semanas={l.semanas} demostrada={l.capacidad_demostrada?.top3} /></td>
                 <td style={{ ...st.td, whiteSpace: "nowrap" }}>
                   {l.semaforo !== "verde" && (
-                    <button style={st.btnPri} disabled={!!analizando} onClick={() => analizar(l.linea)}>Analizar</button>)}
+                    <button style={st.btnPri} disabled={!!analizando} onClick={() => analizar(l.linea)}
+                      title="Genera un análisis nuevo con IA (pide confirmación)">Nuevo análisis</button>)}
                   {vigenteDe(l.linea) && (
                     <button style={{ ...st.btn, marginLeft: 6 }} onClick={() => abrirCaso(vigenteDe(l.linea).id)}
                             title="Abrir el análisis vigente de esta línea">
