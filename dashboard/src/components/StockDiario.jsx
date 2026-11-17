@@ -24,7 +24,29 @@ const C = {
 };
 
 const fmtN  = (n) => Math.round(n ?? 0).toLocaleString("es-CL");
-const fmtDs = (ds) => ds?.slice(5, 10) ?? "";   // MM-DD para eje X
+// (17-11-2026) Fechas: dd-mm en el eje (con la semana ISO bajo cada lunes), dd-mm-aaaa en la tabla.
+const fmtDs = (ds) => (ds ? `${String(ds).slice(8, 10)}-${String(ds).slice(5, 7)}` : "");   // dd-mm para eje X
+const fmtFechaLarga = (ds) => (ds ? `${String(ds).slice(8, 10)}-${String(ds).slice(5, 7)}-${String(ds).slice(0, 4)}` : "");
+const DIAS_SEM = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const fechaUTC = (ds) => new Date(Date.UTC(+String(ds).slice(0, 4), +String(ds).slice(5, 7) - 1, +String(ds).slice(8, 10)));
+const semanaIso = (ds) => {   // semana ISO (lunes a domingo), igual que el resto de la app
+  const d = fechaUTC(ds);
+  const dia = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dia);
+  const ini = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d - ini) / 86400000 + 1) / 7);
+};
+// Etiqueta del eje X en dos líneas: dd-mm y, debajo, la semana (solo en los lunes y el primer día)
+function TickFechaSemana({ x, y, payload, mapa, primero }) {
+  const f = mapa?.[payload.value];
+  const conSemana = f && (fechaUTC(f).getUTCDay() === 1 || payload.value === primero);
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <text dy={10} textAnchor="middle" fontSize={10} fill={C.textMuted}>{payload.value}</text>
+      {conSemana && <text dy={22} textAnchor="middle" fontSize={9} fontWeight={600} fill={C.tealMid}>Sem {semanaIso(f)}</text>}
+    </g>
+  );
+}
 
 // ── Tooltip: desglosa forecast / pedidos / demanda(corr) / stock / SS ─────────
 function CustomTooltip({ active, payload, label }) {
@@ -47,7 +69,9 @@ function CustomTooltip({ active, payload, label }) {
   return (
     <div style={{ background: "#fff", border: `0.5px solid ${C.border}`,
       borderRadius: 8, padding: "10px 14px", fontSize: 12, minWidth: 210 }}>
-      <div style={{ fontWeight: 600, marginBottom: 6, color: C.text }}>{label}</div>
+      <div style={{ fontWeight: 600, marginBottom: 6, color: C.text }}>
+        {row.fecha ? `${DIAS_SEM[fechaUTC(row.fecha).getUTCDay()]} ${fmtFechaLarga(row.fecha)} · Sem ${semanaIso(row.fecha)}` : label}
+      </div>
       {line("Forecast", row.forecast_cj, "#F09595")}
       {line("Pedidos (OV)", row.pedidos_cj, C.purple)}
       {line("Demanda (corr.)", row.demanda_corr_cj, C.gray)}
@@ -262,7 +286,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
           <SkuSearch skus={skuList} value={selSku} onChange={setSelSku} />
           {data?.plan_id && (
             <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
-              plan #{data.plan_id} · inicio {data.fecha_inicio} · H {Math.round((data.horizonte_dias||0)/7)} sem
+              plan #{data.plan_id} · inicio {fmtFechaLarga(data.fecha_inicio)} · H {Math.round((data.horizonte_dias||0)/7)} sem
             </span>
           )}
         </div>
@@ -314,8 +338,10 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
               <ComposedChart data={chartData} margin={{ top: 4, right: 12, left: 0, bottom: 4 }}>
                 {renderBandas(bandas)}
                 <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: C.textMuted }}
-                  interval={Math.max(0, Math.floor(chartData.length / 14))} />
+                <XAxis dataKey="name" height={34} interval={0}
+                  ticks={chartData.filter((r, i) => i === 0 || fechaUTC(r.fecha).getUTCDay() === 1).map((r) => r.name)}
+                  tick={<TickFechaSemana primero={chartData[0]?.name}
+                    mapa={Object.fromEntries(chartData.map((r) => [r.name, String(r.fecha).slice(0, 10)]))} />} />
                 <YAxis tick={{ fontSize: 10, fill: C.textMuted }}
                   tickFormatter={(v) => v >= 1000 ? `${Math.round(v / 1000)}k` : v} />
                 <Tooltip content={<CustomTooltip />} />
@@ -366,7 +392,7 @@ export default function StockDiario({ initialSku = "", ordenesAprobadas = [], or
                     return (
                       <tr key={r.fecha} style={{ background: neg ? "#FFF0F0" : bajo ? "#FFFBF0" : i % 2 === 0 ? "#fff" : C.grayLt }}>
                         {/* 1. Fecha */}
-                        <td style={{ ...s.td, color: C.textMuted, textAlign: "left" }}>{r.fecha}</td>
+                        <td style={{ ...s.td, color: C.textMuted, textAlign: "left" }}>{fmtFechaLarga(r.fecha)}</td>
                         {/* 2. N° OFT (número limpio; "—" si no hay orden ese día) */}
                         <td style={{ ...s.td, textAlign: "right" }}>
                           {ofsDia.length > 0
