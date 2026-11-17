@@ -602,6 +602,19 @@ def dashboard(
     linea = linea or None
     categoria = categoria or None
 
+    # (17-11-2026) Tiempo real: el Terminal Report de un día se carga al día siguiente. Si el período
+    # llega a días sin producción cargada, se corta en la última fecha con TR, para que programado,
+    # horas nominales y real cubran los mismos días (si no, el cumplimiento y la ocupación de la
+    # semana en curso salen artificialmente bajos).
+    hasta_solicitado, corte = hasta, None
+    with _engine.connect() as c:
+        ult_tr = c.execute(sa.text(
+            "SELECT MAX(fecha_tr) FROM mrp_of_sap WHERE terminal_report <> ''")).scalar()
+    if ult_tr is not None and hasattr(ult_tr, "hour"):
+        ult_tr = ult_tr.date()
+    if ult_tr is not None and desde <= ult_tr < hasta:
+        hasta = corte = ult_tr
+
     periodo = calcular_periodo(desde, hasta)
     sel = _lineas_sel(periodo, linea, categoria)
     if (linea or categoria) and not sel:
@@ -618,7 +631,7 @@ def dashboard(
     lunes = desde - timedelta(days=desde.weekday())
     while lunes <= hasta:
         domingo = lunes + timedelta(days=6)
-        r = calcular_periodo(lunes, domingo)
+        r = calcular_periodo(lunes, min(domingo, corte) if corte else domingo)
         iso_anio, iso_sem, _ = lunes.isocalendar()
         fila = {"semana": lunes.isoformat(), "semana_iso": iso_sem, "anio_iso": iso_anio,
                 "parcial": lunes < desde or domingo > hasta or domingo >= date.today()}
@@ -640,7 +653,10 @@ def dashboard(
             if not hay_filtro or (x["clase"] == "LINEA" and x["linea_atribuida"] in sel)]
 
     return {
-        "periodo": {"desde": desde.isoformat(), "hasta": hasta.isoformat()},
+        "periodo": {"desde": desde.isoformat(), "hasta": hasta.isoformat(),
+                    "hasta_solicitado": hasta_solicitado.isoformat(),
+                    "corte_datos": corte.isoformat() if corte else None,
+                    "ultima_fecha_tr": ult_tr.isoformat() if ult_tr else None},
         "filtros": {"linea": linea, "categoria": categoria},
         "opciones": {
             "lineas": [{"codigo": x["linea"], "categoria": x["categoria"]} for x in periodo["lineas"]],

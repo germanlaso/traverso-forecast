@@ -1,11 +1,14 @@
 ---
 titulo: Novedades
 seccion: General
-resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.3.0 (16-11-2026).
+resumen: Lo nuevo que puedes hacer con la app, versión por versión. Versión actual 2.3.1 (17-11-2026).
 orden: 901
-actualizado: 2026-11-16
+actualizado: 2026-11-17
 ---
 La versión vigente aparece en la barra superior; al hacer clic se abre esta página. El número tiene tres partes: la primera cambia cuando cambia la forma de trabajar, la segunda cuando hay pantallas o funciones nuevas y la tercera con correcciones menores.
+
+## Versión 2.3.1 — 17 de noviembre de 2026
+- **Rendimiento en tiempo real.** Nuevo acceso **"Semana en curso"**. Cuando el período incluye días cuya producción todavía no está cargada en SAP (el Terminal Report de cada día llega al día siguiente), la pantalla se corta en el último día con producción y lo avisa. Así el cumplimiento y la ocupación comparan los mismos días y no aparecen artificialmente bajos a mitad de semana.
 
 ## Versión 2.3.0 — 16 de noviembre de 2026
 ### Siempre sabes qué plan estás viendo

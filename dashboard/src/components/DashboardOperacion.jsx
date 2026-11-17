@@ -343,7 +343,10 @@ export default function DashboardOperacion() {
 
   const aplicarPreset = (n) => {
     setPreset(n);
-    const r = rangoSemanas(n);
+    // (17-11-2026) 'curso' = semana en curso: lunes de esta semana a hoy
+    const hoy = new Date();
+    const lun = new Date(hoy); lun.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
+    const r = n === 'curso' ? { desde: iso(lun), hasta: iso(hoy) } : rangoSemanas(n);
     const f = { ...filtros, ...r };
     setFiltros(f);
     setAplicados(f);
@@ -394,6 +397,8 @@ export default function DashboardOperacion() {
             {cargando ? 'Calculando…' : 'Aplicar'}
           </button>
           <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+            <span style={s.chip(preset === 'curso')} onClick={() => aplicarPreset('curso')}
+              title="De lunes a hoy, hasta el último día con producción cargada en SAP">Semana en curso</span>
             {[1, 4, 8, 13, 26].map((n) => (
               <span key={n} style={s.chip(preset === n)} onClick={() => aplicarPreset(n)}>
                 {n === 1 ? 'Última semana' : `${n} sem`}
@@ -413,6 +418,13 @@ export default function DashboardOperacion() {
             <strong>{etiquetaSemana(lunesDe(data.periodo.hasta))}</strong>{' '}
             ({ddmm(data.periodo.desde)} al {ddmm(data.periodo.hasta)}){aplicados.linea ? ` · Línea ${aplicados.linea}` : ''}{aplicados.categoria ? ` · ${aplicados.categoria}` : ''}
           </div>
+          {data.periodo.corte_datos && (
+            <div style={s.aviso}>
+              Producción real cargada hasta el <strong>{ddmm(data.periodo.corte_datos)}</strong>: el Terminal Report de cada día
+              llega a SAP al día siguiente. Por eso el período se muestra hasta esa fecha (pediste hasta
+              el {ddmm(data.periodo.hasta_solicitado)}), para comparar programado, horas y producción de los mismos días.
+            </div>
+          )}
           {r.lineas_con_bitacora < r.n_lineas && (
             <div style={s.aviso}>
               {r.lineas_con_bitacora} de {r.n_lineas} líneas tienen eventos en la bitácora para este período.
