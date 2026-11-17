@@ -54,6 +54,9 @@ export default function BitacoraEventos() {
   const [form, setForm] = useState(FORM_VACIO);
   const [eventos, setEventos] = useState([]);
   const [filtroLinea, setFiltroLinea] = useState('');
+  // (17-11-2026) Filtro por tipo de evento, selección múltiple. Vacío = todos los tipos.
+  const [filtroTipos, setFiltroTipos] = useState([]);
+  const toggleTipo = (cod) => setFiltroTipos((xs) => (xs.includes(cod) ? xs.filter((x) => x !== cod) : [...xs, cod]));
   // (17-11-2026) Filtro por fechas de la tabla. Por defecto: últimos 7 días y próximos 30.
   const rangoDefecto = () => {
     const base = new Date();
@@ -216,13 +219,36 @@ export default function BitacoraEventos() {
           </label>
           <button style={estilos.btnSec} title="Últimos 7 días y próximos 30"
             onClick={() => { const r = rangoDefecto(); setFiltroDesde(r.desde); setFiltroHasta(r.hasta); }}>Restablecer</button>
+          <details style={{ position: 'relative' }}>
+            <summary style={{ ...estilos.input, cursor: 'pointer', listStyle: 'none', userSelect: 'none' }}>
+              Tipos: {filtroTipos.length === 0 ? 'todos' : filtroTipos.length === 1
+                ? (catalogos.tipos.find((t) => t.codigo === filtroTipos[0])?.nombre || filtroTipos[0])
+                : `${filtroTipos.length} seleccionados`} ▾
+            </summary>
+            <div style={{ position: 'absolute', right: 0, zIndex: 10, background: '#fff', border: '1px solid #c7cdd4',
+              borderRadius: 6, padding: 10, marginTop: 4, minWidth: 260, maxHeight: 320, overflowY: 'auto',
+              boxShadow: '0 4px 12px rgba(0,0,0,.12)' }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <button style={estilos.btnSec} onClick={() => setFiltroTipos(catalogos.tipos.map((t) => t.codigo))}>Todos</button>
+                <button style={estilos.btnSec} onClick={() => setFiltroTipos([])}>Limpiar</button>
+              </div>
+              {catalogos.tipos.map((t) => (
+                <label key={t.codigo} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '3px 0', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={filtroTipos.includes(t.codigo)} onChange={() => toggleTipo(t.codigo)} />
+                  {t.nombre}
+                </label>
+              ))}
+            </div>
+          </details>
           <select style={estilos.input} value={filtroLinea} onChange={(e) => setFiltroLinea(e.target.value)}>
             <option value="">Todas las líneas</option>
             {catalogos.lineas.map((l) => <option key={l.codigo} value={l.codigo}>{l.nombre && l.nombre !== l.codigo ? `${l.codigo} · ${l.nombre}` : l.codigo}</option>)}
           </select>
           </div>
         </div>
-        {eventos.length === 0 ? (
+        {(() => {
+          const lista = filtroTipos.length ? eventos.filter((ev) => filtroTipos.includes(ev.tipo)) : eventos;
+          return lista.length === 0 ? (
           <p style={{ color: '#57606a', fontSize: 13 }}>No hay eventos registrados en este período.</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -235,7 +261,7 @@ export default function BitacoraEventos() {
                 </tr>
               </thead>
               <tbody>
-                {eventos.map((ev) => (
+                {lista.map((ev) => (
                   <tr key={ev.id}>
                     <td style={estilos.td}>{fmtDMA(ev.fecha)}</td>
                     <td style={estilos.td}>{ev.linea}</td>
@@ -251,8 +277,14 @@ export default function BitacoraEventos() {
                 ))}
               </tbody>
             </table>
+            {filtroTipos.length > 0 && (
+              <p style={{ color: '#57606a', fontSize: 12, margin: '6px 0 0' }}>
+                {lista.length} de {eventos.length} eventos (filtrados por tipo).
+              </p>
+            )}
           </div>
-        )}
+        );
+        })()}
       </div>
     </div>
   );
