@@ -60,6 +60,12 @@ W_ARR_SKU = int(_e("N2_D_W_ARR_SKU", "300"))     # 17-11: 30 -> 300 (una corrida
 W_INV_SEMANA = int(_e("N2_D_W_INV_SEMANA", "200"))
 # 17-11: costo por cada OF (SKU-día): empuja a producir cada SKU en la menor cantidad de días de la semana.
 W_OF = int(_e("N2_D_W_OF", "150"))
+# 18-11: incentivo para ADELANTAR la producción de SKU que están bajo su SS (D antes solo garantizaba
+# no empeorarlo). Puntos por cada 1.000 u·día de déficit bajo el SS dentro de la semana.
+W_BAJO_SS_KUD = int(_e("N2_D_W_BAJO_SS_KUD", "20"))
+# 18-11: si "1", el llenado no puede crear OF nuevas (solo agrandar). Probado sobre el plan 348: no baja
+# las OF por SKU-semana (1,38 en ambos casos) y empeora días abiertos (+5) y días bajo SS (+35): apagado.
+LLENADO_SIN_OF_NUEVAS = _e("N2_D_LLENADO_SIN_OF_NUEVAS", "0") == "1"
 W_ARR_EMPAQUE = int(_e("N2_D_W_ARR_EMPAQUE", "80"))
 W_ARR_GRANEL = int(_e("N2_D_W_ARR_GRANEL", "30"))
 W_FALTANTE = 10         # por unidad de tiempo (ESC) bajo la meta en un día abierto
@@ -337,6 +343,7 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
             m.AddHint(y[(s, f)], cur[(s, f)] > 0.5)
         m.Add(sum(x[(s, f)] for f in dias) * upc <= int(TOPE_CRECIMIENTO * totC[s]) + upc)
     # barreras Q*/S* y bodega, en la semana y hacia adelante
+    bajo_ss = []
     for s in S:
         upc = D.A[s]["upc"]
         acum_cur, fijo, acum_new = 0.0, 0.0, []
@@ -351,6 +358,13 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
             expr = sum(acum_new) * upc if acum_new else 0
             base = delta[s].get(f, 0.0) - acum_cur + fijo
             m.Add(expr >= int(-(-(LB[(s, f)] - base) // 1)))
+            # déficit bajo SS con D: max(0, SS − (stock_fin_C + Δ)), Δ = expr + base
+            if W_BAJO_SS_KUD and acum_new and f in D.dd.get(s, {}):
+                falta_c = float(D.dd[s][f]["ss_u"] or 0) - float(finC.get((s, f), 0))
+                if falta_c > 0:
+                    dk = m.NewIntVar(0, int(falta_c // 1000) + 2, "")
+                    m.Add(dk * 1000 >= int(falta_c - base) - expr)
+                    bajo_ss.append(dk)
             if UB[(s, f)] < 1e11:
                 m.Add(expr <= int((UB[(s, f)] - base) // 1))
         dfin = sum(x[(s, f)] for f in dias) * upc + int(round(fijo)) - int(round(acum_cur))
@@ -446,6 +460,7 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
                     inv.append(v)
     obj1 = (sum((W_DIA + W_DIA_POS * k) * open_[f] for k, f in enumerate(dias)) + sum(costo_cambio)
             + W_INV_SEMANA * sum(inv) + W_OF * sum(y.values())
+            + W_BAJO_SS_KUD * sum(bajo_ss)
             + W_VIOL * sum(viol) + W_ARR_SKU * sum(arr) + sum(w * a for w, a in arr_g))
     m.Minimize(obj1)
     sol = cp_model.CpSolver()
@@ -459,6 +474,11 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
     # etapa 2: estructura fija; llenar con criterio de cobertura / absorción
     for f in dias:
         m.Add(open_[f] == int(sol.Value(open_[f])))
+    # 18-11: el llenado solo AGRANDA las OF que dejó la etapa 1; nunca agrega una OF nueva
+    if LLENADO_SIN_OF_NUEVAS:
+        for k, v in y.items():
+            if not sol.Value(v):
+                m.Add(v == 0)
     m.Add(obj1 <= int(sol.ObjectiveValue() * 1.03) + 50)
     m.ClearHints()
     for v in list(x.values()) + list(y.values()):
