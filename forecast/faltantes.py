@@ -84,6 +84,7 @@ SKU_EXCLUIDOS = {
     "260033175",                         # MOSTAZA CUISINE &CO 12x500 DOYPACK - descontinuado hasta nuevo aviso glaso 29-10-2026
     "270024110",                         # descontinuado, maquila (fuera de MRP). glaso 06-11-2026
     "641071256",                         # CAFE MELITTA 250, unitario (EXTRAFUERTE engaña la regla sin x). glaso 18-11-2026
+    "164010176",                         # unitario (la regla sin x no lo detecta). glaso 23-11-2026
 }
 
 # Clientes excluidos del informe: sus OV NO cuentan como faltante.
