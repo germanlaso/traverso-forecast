@@ -72,6 +72,12 @@ W_FALTANTE = 10         # por unidad de tiempo (ESC) bajo la meta en un día abi
 K_COBERTURA = float(_e("N2_D_K_COBERTURA", "2.0"))
 F_ABSORBE = float(_e("N2_D_F_ABSORBE", "0.3"))
 TOPE_W_CRECER = 20
+# (23-11-2026) Secuencia v2 (criterio Produccion 19/20-11). OFF por default -> D identica.
+SEQ_V2 = _e("N2_D_SEQ_V2", "0") == "1"
+T_LAVADO_FAMILIA_H = float(_e("N2_D_T_LAVADO_FAM_H", "0.5"))   # lavado limon<->vinagre
+W_LAVADO_TURNO = int(_e("N2_D_W_LAVADO_TURNO", "150"))        # por lavado dentro del turno
+W_CAMBIO_FIN_TURNO = int(_e("N2_D_W_CAMBIO_FIN_TURNO", "60"))  # cambio de familia entre dias
+FAMILIA_RANK = {1: "VINAGRE", 2: "VINAGRE", 3: "VINAGRE", 4: "VINAGRE", 5: "LIMON", 6: "LIMON"}
 RANK = [  # (patrón en granel/descripción, rango): primero que calce. PROVISIONAL.
     (r"INCOLORO", 1), (r"VINAGRE.*BLANCO|VINAGRE_BLANCO|BALSAMICO BLANCO", 2),
     (r"MANZANA|VINAGRE_MANZANA", 3), (r"ROSADO|VINAGRE_ROSADO", 4),
@@ -100,13 +106,20 @@ def atributos(sp: dict) -> dict:
                 rank = r
                 break
         A[s] = dict(formato=str(x.get("formato") or ""), upc=int(x.get("u_por_caja") or 1),
-                    granel=gr, etiq=etiq, rank=rank, aji=bool(re.search(r"AJ[IÍ]", desc)))
+                    granel=gr, etiq=etiq, rank=rank, aji=bool(re.search(r"AJ[IÍ]", desc)),
+                    fam=FAMILIA_RANK.get(rank))
     return A
 
 
 def clave_sec(A, s):
     """Posición en la secuencia: los ajíes al final; entre los demás, de claro a oscuro."""
     return (1 if A[s]["aji"] else 0, A[s]["rank"])
+
+
+def _fam_distinta(A, i, j) -> bool:
+    """(23-11) True si i y j son de familias definidas y distintas (limon vs vinagre)."""
+    fi, fj = A.get(i, {}).get("fam"), A.get(j, {}).get("fam")
+    return bool(fi and fj and fi != fj)
 
 
 def t_cambio(A, i, j):
@@ -119,6 +132,8 @@ def t_cambio(A, i, j):
     if a["etiq"] != b["etiq"]: h = max(h, T_CAMBIO_H["etiqueta"])
     if a["aji"] and not b["aji"]:
         return h + T_LIMPIEZA_AJI_H, 1
+    if SEQ_V2 and _fam_distinta(A, i, j):
+        return h + T_LAVADO_FAMILIA_H, 0   # (23-11) lavado: cualquier sentido, sin violacion
     if a["granel"] != b["granel"] and b["rank"] < a["rank"] and not (a["aji"] or b["aji"]):
         return h + T_LIMPIEZA_OSCURO_CLARO_H, 1
     return h, 0
@@ -141,6 +156,8 @@ def mejor_orden(A, skus, primero=None, siguen=frozenset()):
             v += vv
         cont = (1 if primero in skus and p[0] != primero else 0) + \
                (1 if siguen and any(x in siguen for x in skus) and p[-1] not in siguen else 0)
+        if SEQ_V2 and primero in A and _fam_distinta(A, primero, p[0]):
+            cont += 1   # (23-11) continuidad de familia con el dia anterior
         k = (v, cont, h, [clave_sec(A, x) for x in p])
         if best_k is None or k < best_k:
             best, best_k = (list(p), h, v), k
@@ -247,6 +264,7 @@ def evaluar(D, P, ventana, lineas):
         for k0 in range(0, len(hab), 7):
             dias = [x.isoformat() for x in hab[k0:k0 + 7] if D.cap_h.get((l, x.isoformat()), 0) > 0]
             prev = {"sku": set(), "emb": set(), "gr": set()}
+            prev_ult = None   # (23-11) ultimo SKU del dia abierto anterior
             dias_sku = defaultdict(list)
             for f in dias:
                 for s_ in por_ld.get((l, f), {}):
@@ -255,7 +273,8 @@ def evaluar(D, P, ventana, lineas):
             R["of_sku_dia"] += sum(len(v_) for v_ in dias_sku.values())
             for a_ in dias_sku:
                 for b_ in dias_sku:
-                    if clave_sec(D.A, a_) < clave_sec(D.A, b_) and min(dias_sku[b_]) < max(dias_sku[a_]):
+                    if clave_sec(D.A, a_) < clave_sec(D.A, b_) and min(dias_sku[b_]) < max(dias_sku[a_]) \
+                            and not (SEQ_V2 and _fam_distinta(D.A, a_, b_)):
                         R["inv_semana"] += 1
             for f in dias:
                 skus = por_ld.get((l, f), {})
@@ -264,7 +283,12 @@ def evaluar(D, P, ventana, lineas):
                 # cociente se disparaba)
                 cap = D.cap_h[(l, f)]
                 hp = sum(D.horas_prod(s, l, u) for s, u in skus.items()) + D.ap_h[(l, f)]
-                _, hc, viol = mejor_orden(D.A, skus)
+                ordn, hc, viol = mejor_orden(D.A, skus)
+                if skus:   # (23-11) metricas de familias
+                    R["lavados"] += sum(_fam_distinta(D.A, i_, j_) for i_, j_ in zip(ordn, ordn[1:]))
+                    if prev_ult is not None and _fam_distinta(D.A, prev_ult, ordn[0]):
+                        R["cambio_fam_fin"] += 1
+                    prev_ult = ordn[-1]
                 if skus:
                     R["abiertos"] += 1
                     R["ocup_sum"] += (hp + hc) / cap
@@ -376,6 +400,7 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
             m.Add(dfin <= int(ubf // 1))
     # días: secuencia (circuito), capacidad, apertura, faltante bajo la meta
     open_, costo_cambio, viol, falt = {}, [], [], []
+    starts_all, ends_all, lav = {}, {}, []   # (23-11) secuencia v2
     for f in dias:
         o = m.NewBoolVar("")
         open_[f] = o
@@ -388,13 +413,17 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
             arcs.append((i, i, y[(si, f)].Not()))
             st_ = m.NewBoolVar("")
             starts[si] = st_
-            arcs += [(0, i, st_), (i, 0, m.NewBoolVar(""))]
+            en_ = m.NewBoolVar("")
+            starts_all[(si, f)], ends_all[(si, f)] = st_, en_
+            arcs += [(0, i, st_), (i, 0, en_)]
             for j, sj in enumerate(S, 1):
                 if i != j:
                     a = m.NewBoolVar("")
                     arcs.append((i, j, a))
                     h, v = t_cambio(D.A, si, sj)
                     cc.append((a, int(round(h * 60 * ESC)), v))
+                    if SEQ_V2 and _fam_distinta(D.A, si, sj):
+                        lav.append(a)
         m.AddCircuit(arcs)
         prod = sum(coef[s] * x[(s, f)] for s in S)
         chg = sum(c * a for a, c, v in cc)
@@ -422,7 +451,13 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
     for s in S:
         for k, f in enumerate(dias):
             a = m.NewBoolVar("")
-            m.Add(a >= y[(s, f)] - (y[(s, dias[k - 1])] if k else 0))
+            if SEQ_V2 and k:
+                c_ = m.NewBoolVar("")   # (23-11) continua: termina el dia anterior y empieza este
+                m.Add(c_ <= ends_all[(s, dias[k - 1])])
+                m.Add(c_ <= starts_all[(s, f)])
+                m.Add(a >= y[(s, f)] - c_)
+            else:
+                m.Add(a >= y[(s, f)] - (y[(s, dias[k - 1])] if k else 0))
             arr.append(a)
     arr_g = []
     for key, w in ((lambda s: D.A[s]["upc"], W_ARR_EMPAQUE), (lambda s: D.A[s]["granel"], W_ARR_GRANEL)):
@@ -454,14 +489,24 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
                 m.Add(ls[s] >= k).OnlyEnforceIf(y[(s, f)])
         for a in S:
             for b in S:
-                if claves[a] < claves[b]:          # a va antes que b en la secuencia
+                if claves[a] < claves[b] and not (SEQ_V2 and _fam_distinta(D.A, a, b)):   # a antes que b
                     v = m.NewIntVar(0, nd, "")
                     m.Add(v >= ls[a] - fs[b])      # días en que b empieza antes de que termine a
                     inv.append(v)
+    cfin = []   # (23-11) cambio de familia entre el ultimo SKU de un dia y el primero del siguiente
+    if SEQ_V2 and W_CAMBIO_FIN_TURNO:
+        for k in range(1, len(dias)):
+            for si in S:
+                for sj in S:
+                    if _fam_distinta(D.A, si, sj):
+                        b_ = m.NewBoolVar("")
+                        m.Add(b_ >= ends_all[(si, dias[k - 1])] + starts_all[(sj, dias[k])] - 1)
+                        cfin.append(b_)
     obj1 = (sum((W_DIA + W_DIA_POS * k) * open_[f] for k, f in enumerate(dias)) + sum(costo_cambio)
             + W_INV_SEMANA * sum(inv) + W_OF * sum(y.values())
             + W_BAJO_SS_KUD * sum(bajo_ss)
-            + W_VIOL * sum(viol) + W_ARR_SKU * sum(arr) + sum(w * a for w, a in arr_g))
+            + W_VIOL * sum(viol) + W_ARR_SKU * sum(arr) + sum(w * a for w, a in arr_g)
+            + W_LAVADO_TURNO * sum(lav) + W_CAMBIO_FIN_TURNO * sum(cfin))
     m.Minimize(obj1)
     sol = cp_model.CpSolver()
     sol.parameters.max_time_in_seconds = TL_SEG
@@ -724,5 +769,6 @@ if __name__ == "__main__":
     lineas = sorted(D.L)
     eC, eD = evaluar(D, PC, vent, lineas), evaluar(D, PD, vent, lineas)
     for k in ("abiertos", "ocup", "ge95", "lt70", "arr_sku", "of_sku_sem", "inv_semana", "arr_emb", "arr_gr", "h_cambio", "viol",
-              "unidades", "quiebres", "bajo_ss", "sobre_2ss", "cerrado_0", "cerrado_4"):
+              "unidades", "quiebres", "bajo_ss", "sobre_2ss", "cerrado_0", "cerrado_4",
+              "lavados", "cambio_fam_fin"):
         print(f"{k:10} {eC.get(k, 0):12.2f} {eD.get(k, 0):12.2f}")
