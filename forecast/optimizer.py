@@ -290,6 +290,15 @@ N2_TL_C = int(_os.environ.get("N2_TL_C", "1800"))  # calibrable: probar 600-900
 # diagnostico -> NUNCA en el cron. No cambia el plan resultante cuando esta OFF.
 N2_DIAG_NUCLEO = _os.environ.get("N2_DIAG_NUCLEO", "0") == "1"
 
+# (19-11-2026) WARM START de la Pasada C: la solucion de la A se entrega a la C
+# como hint (AddHint) sobre las variables de decision. La barrera Q* se construye
+# desde la A, asi que la solucion de la A es factible para C: C parte con una
+# solucion en vez de buscarla desde cero (incidente 19-11: TIMEOUT_SIN_SOLUCION).
+# El hint es sugerencia, no restriccion. OFF por default -> cron identico.
+N2_HINT_C = _os.environ.get("N2_HINT_C", "0") == "1"
+_N2_HINT_A = None  # {grupo: {clave: valor}} capturado al terminar la A
+_HINT_GRUPOS = ("cajas", "asig", "inicio", "stock_u", "granel", "formato")
+
 # (06-08) DIAGNOSTICO: excluir SKU(s) del modelo (lista separada por comas). Reusa
 # el filtro V6.12-mini. Para probar si un SKU concreto es el que vuelve C
 # infactible: si al excluirlo C pasa a factible, es (parte de) la causa. Vacio por
@@ -852,6 +861,12 @@ def optimizar_plan_v12_rich(
         solver.parameters.log_search_progress = True
         solver.parameters.log_subsolver_statistics = True
         solver.log_callback = _diag_log_lines.append
+    if N2_HINT_C and cotas_qstar:
+        if _N2_HINT_A:
+            _aplicar_hint_n2(m, _N2_HINT_A)
+        else:
+            logger.warning("[N2 HINT] C: N2_HINT_C=1 pero no hay hint de la A "
+                           "(C busca desde cero)")
     status = solver.Solve(m.model)
     status_name = solver.StatusName(status)
     solver_time = solver.WallTime()
@@ -937,6 +952,9 @@ def optimizar_plan_v12_rich(
             f"Probar un horizonte menor o subir el time-limit.",
             status="TIMEOUT_SIN_SOLUCION", solver_time_sec=solver_time,
         )
+
+    if N2_HINT_C and not cotas_qstar:
+        _capturar_hint_n2(m, solver)
 
     # ─── 8. Post-procesar a OFTs y stock visible ─────────────────────────────
     resultado = _post_procesar(
@@ -2409,6 +2427,49 @@ def _post_procesar(
 # NO toca el termino de quiebre viejo (fidelidad con la validacion en scratchpad:
 # A=C=280 dias-SKU, -641 colchon). Salva/restaura los globals del modulo.
 
+def _capturar_hint_n2(m, solver) -> None:
+    """(19-11-2026) Guarda los valores de la solucion de la A por grupo y clave."""
+    global _N2_HINT_A
+    vals, n = {}, 0
+    for g in _HINT_GRUPOS:
+        sub = {}
+        for k, v in (getattr(m, g, None) or {}).items():
+            if isinstance(v, int):
+                continue
+            try:
+                sub[k] = int(solver.Value(v))
+            except Exception:
+                pass
+        vals[g] = sub
+        n += len(sub)
+    _N2_HINT_A = vals
+    _det = ", ".join(g + "=" + str(len(vals[g])) for g in _HINT_GRUPOS)
+    logger.info(f"[N2 HINT] A: capturados {n} valores ({_det})")
+
+
+def _aplicar_hint_n2(m, hint: dict) -> int:
+    """(19-11-2026) AddHint en C con los valores de la A, por grupo y clave.
+    Registra cuantas variables de C quedaron sin valor (falla silenciosa visible)."""
+    n_ok, n_falta, det = 0, 0, {}
+    for g in _HINT_GRUPOS:
+        src = hint.get(g) or {}
+        c = 0
+        for k, v in (getattr(m, g, None) or {}).items():
+            if isinstance(v, int):
+                continue
+            if k in src:
+                m.model.AddHint(v, src[k])
+                c += 1
+            else:
+                n_falta += 1
+        det[g] = c
+        n_ok += c
+    _det = ", ".join(g + "=" + str(det[g]) for g in _HINT_GRUPOS)
+    logger.info(f"[N2 HINT] C: {n_ok} hints aplicados, {n_falta} variables de C "
+                f"sin valor en A ({_det})")
+    return n_ok
+
+
 def _build_qstar(resultado: dict) -> tuple[dict, int]:
     """Q*[(sku, dia_iso)] = piso del dia, crudo y sin clamp.
 
@@ -2472,6 +2533,8 @@ def _correr_dos_pasadas(**rich_kwargs) -> dict:
     Salva/restaura globals del modulo."""
     global W_DEF_LEVE, W_DEF_GRAVE, W_EXC_LEVE, W_EXC_ALTO
     global SOLVER_NUM_WORKERS, SOLVER_RANDOM_SEED, SS_COBERTURA
+    global _N2_HINT_A
+    _N2_HINT_A = None  # (19-11-2026) nunca reutilizar el hint de otra corrida
 
     _save = (W_DEF_LEVE, W_DEF_GRAVE, W_EXC_LEVE, W_EXC_ALTO,
              SOLVER_NUM_WORKERS, SOLVER_RANDOM_SEED, SS_COBERTURA)
