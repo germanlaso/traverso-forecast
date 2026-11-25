@@ -2,7 +2,8 @@
 """comparar_d_seq.py (24-11-2026) - SOLO LECTURA. Corre la Pasada D en modo standalone sobre
 un plan extraido (extraer_comparacion_planes.py) e imprime metricas y la secuencia de una linea.
 
-La version de la D la decide la variable de entorno N2_D_SEQ_V2 (0 = actual, 1 = secuencia v2).
+La version de la D la deciden N2_D_SEQ_V2 (secuencia v2) y N2_D_SEQ_V21 (v2.1: bloques de familia
+semanales; implica v2). Peso de los bloques: N2_D_W_BLOQUE_FAM.
 Correrlo dos veces (0 y 1) sobre el mismo archivo para comparar. No persiste nada.
 
 Uso (dentro del container):
@@ -30,14 +31,15 @@ D = P.Datos.desde_cmp(a.cmp, a.cual)
 PC = {k: v for k, v in D.prodC.items() if v > 0.5}
 t0 = time.time()
 PD, log, desde, vent = P.optimizar(D)
-print(f"== Pasada D {'v2 (N2_D_SEQ_V2=1)' if P.SEQ_V2 else 'ACTUAL (N2_D_SEQ_V2=0)'} | desde {desde} | "
+ver = ("v2.1 (N2_D_SEQ_V21=1, W_BLOQUE_FAM=%d)" % P.W_BLOQUE_FAM) if P.SEQ_V21 else ("v2 (N2_D_SEQ_V2=1)" if P.SEQ_V2 else "ACTUAL")
+print(f"== Pasada D {ver} | desde {desde} | "
       f"{len(log)} linea-semanas | {time.time() - t0:.0f}s")
 print(f"control (quiebres, bajo SS, alertas): {P._contar(D, PC)} -> {P._contar(D, PD)}")
 lineas = sorted(D.L)
 eC, eD = P.evaluar(D, PC, vent, lineas), P.evaluar(D, PD, vent, lineas)
 print(f"{'metrica':14} {'entrada':>10} {'D':>10}")
 for k in ("abiertos", "ocup", "arr_sku", "of_sku_sem", "inv_semana", "h_cambio", "viol", "lavados",
-          "cambio_fam_fin", "quiebres", "bajo_ss", "unidades"):
+          "cambio_fam_fin", "semanas_2fam", "bloques_fam", "dias_mixtos", "quiebres", "bajo_ss", "unidades"):
     print(f"{k:14} {eC.get(k, 0):10.2f} {eD.get(k, 0):10.2f}")
 
 # Secuencia de la linea pedida (mismo orden intradia que usa la D al escribir las OF)

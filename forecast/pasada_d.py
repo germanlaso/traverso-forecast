@@ -77,6 +77,12 @@ SEQ_V2 = _e("N2_D_SEQ_V2", "0") == "1"
 T_LAVADO_FAMILIA_H = float(_e("N2_D_T_LAVADO_FAM_H", "0.5"))   # lavado limon<->vinagre
 W_LAVADO_TURNO = int(_e("N2_D_W_LAVADO_TURNO", "150"))        # por lavado dentro del turno
 W_CAMBIO_FIN_TURNO = int(_e("N2_D_W_CAMBIO_FIN_TURNO", "60"))  # cambio de familia entre dias
+# (25-11-2026) Secuencia v2.1: BLOQUES DE FAMILIA SEMANALES. En cada linea-semana, idealmente un bloque
+# de limon y uno de vinagre; en lineas con aji, uno de no-aji y uno de aji. Implica la v2. OFF por default.
+SEQ_V21 = _e("N2_D_SEQ_V21", "0") == "1"
+if SEQ_V21:
+    SEQ_V2 = True
+W_BLOQUE_FAM = int(_e("N2_D_W_BLOQUE_FAM", "1000"))   # por bloque de familia y por dia mixto en la semana
 FAMILIA_RANK = {1: "VINAGRE", 2: "VINAGRE", 3: "VINAGRE", 4: "VINAGRE", 5: "LIMON", 6: "LIMON"}
 RANK = [  # (patrón en granel/descripción, rango): primero que calce. PROVISIONAL.
     (r"INCOLORO", 1), (r"VINAGRE.*BLANCO|VINAGRE_BLANCO|BALSAMICO BLANCO", 2),
@@ -122,6 +128,16 @@ def _fam_distinta(A, i, j) -> bool:
     return bool(fi and fj and fi != fj)
 
 
+def _fam_bloque(A, s, con_aji) -> str:
+    """(25-11) Familia para los bloques semanales: limon/vinagre si aplica; en lineas con aji, AJI / NO_AJI."""
+    f = A.get(s, {}).get("fam")
+    if f:
+        return f
+    if con_aji and s in A:
+        return "AJI" if A[s]["aji"] else "NO_AJI"
+    return None
+
+
 def t_cambio(A, i, j):
     """(horas, viola_regla) de pasar de i a j dentro del día."""
     a, b = A[i], A[j]
@@ -147,6 +163,7 @@ def mejor_orden(A, skus, primero=None, siguen=frozenset()):
     if len(skus) <= 1:
         return skus, 0.0, 0
     perms = itertools.permutations(skus) if len(skus) <= 6 else [sorted(skus, key=lambda s: A[s]["rank"])]
+    con_aji = SEQ_V21 and any(A[s]["aji"] for s in skus)
     best, best_k = None, None
     for p in perms:
         h = v = 0
@@ -158,7 +175,11 @@ def mejor_orden(A, skus, primero=None, siguen=frozenset()):
                (1 if siguen and any(x in siguen for x in skus) and p[-1] not in siguen else 0)
         if SEQ_V2 and primero in A and _fam_distinta(A, primero, p[0]):
             cont += 1   # (23-11) continuidad de familia con el dia anterior
-        k = (v, cont, h, [clave_sec(A, x) for x in p])
+        sw = 0
+        if SEQ_V21:   # (25-11) familias en bloque dentro del dia: pesa mas que la continuidad de SKU
+            fb = [_fam_bloque(A, x, con_aji) for x in p]
+            sw = sum(1 for a_, b_ in zip(fb, fb[1:]) if a_ and b_ and a_ != b_)
+        k = (v, sw, cont, h, [clave_sec(A, x) for x in p])
         if best_k is None or k < best_k:
             best, best_k = (list(p), h, v), k
     return best
@@ -270,6 +291,16 @@ def evaluar(D, P, ventana, lineas):
                 for s_ in por_ld.get((l, f), {}):
                     dias_sku[s_].append(dias.index(f))
             R["sku_semana"] += len(dias_sku)
+            con_aji = any(D.A[s_]["aji"] for s_ in dias_sku)   # (25-11) bloques de familia en la semana
+            if len({_fam_bloque(D.A, s_, con_aji) for s_ in dias_sku} - {None}) >= 2:
+                R["semanas_2fam"] += 1
+                prev_f = set()
+                for f in dias:
+                    fd = {_fam_bloque(D.A, s_, con_aji) for s_ in por_ld.get((l, f), {})} - {None}
+                    if fd:
+                        R["bloques_fam"] += len(fd - prev_f)
+                        R["dias_mixtos"] += len(fd) > 1
+                        prev_f = fd
             R["of_sku_dia"] += sum(len(v_) for v_ in dias_sku.values())
             for a_ in dias_sku:
                 for b_ in dias_sku:
@@ -401,6 +432,7 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
     # días: secuencia (circuito), capacidad, apertura, faltante bajo la meta
     open_, costo_cambio, viol, falt = {}, [], [], []
     starts_all, ends_all, lav = {}, {}, []   # (23-11) secuencia v2
+    con_aji_l = SEQ_V21 and any(D.A[s]["aji"] for s in S)   # (25-11) v2.1
     for f in dias:
         o = m.NewBoolVar("")
         open_[f] = o
@@ -408,7 +440,7 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
             m.AddImplication(y[(s, f)], o)
         m.Add(sum(y[(s, f)] for s in S) >= 1).OnlyEnforceIf(o)
         m.Add(sum(y[(s, f)] for s in S) <= max(0, N_MAX_SKU_DIA - D.ap_n[(l, f)]))
-        arcs, cc, starts = [(0, 0, o.Not())], [], {}
+        arcs, cc, starts, sw_dia = [(0, 0, o.Not())], [], {}, []
         for i, si in enumerate(S, 1):
             arcs.append((i, i, y[(si, f)].Not()))
             st_ = m.NewBoolVar("")
@@ -424,7 +456,13 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
                     cc.append((a, int(round(h * 60 * ESC)), v))
                     if SEQ_V2 and _fam_distinta(D.A, si, sj):
                         lav.append(a)
+                    if SEQ_V21:
+                        fi_, fj_ = _fam_bloque(D.A, si, con_aji_l), _fam_bloque(D.A, sj, con_aji_l)
+                        if fi_ and fj_ and fi_ != fj_:
+                            sw_dia.append(a)
         m.AddCircuit(arcs)
+        if sw_dia:   # (25-11) cada familia en un solo bloque dentro del dia
+            m.Add(sum(sw_dia) <= 1)
         prod = sum(coef[s] * x[(s, f)] for s in S)
         chg = sum(c * a for a, c, v in cc)
         cap = int((D.cap_h[(l, f)] - D.ap_h[(l, f)]) * 60 * ESC)
@@ -502,11 +540,38 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
                         b_ = m.NewBoolVar("")
                         m.Add(b_ >= ends_all[(si, dias[k - 1])] + starts_all[(sj, dias[k])] - 1)
                         cfin.append(b_)
+    bloques = []   # (25-11) v2.1: bloques (rachas de dias) de cada familia + dias con 2 familias
+    if SEQ_V21 and W_BLOQUE_FAM and len(dias) > 1:
+        fams = defaultdict(list)
+        for s in S:
+            fb = _fam_bloque(D.A, s, con_aji_l)
+            if fb:
+                fams[fb].append(s)
+        if len(fams) >= 2:
+            on_d = defaultdict(list)
+            for sg in fams.values():
+                prev = None
+                for f in dias:
+                    on = m.NewBoolVar("")
+                    m.AddMaxEquality(on, [y[(s, f)] for s in sg])
+                    on_d[f].append(on)
+                    ef = m.NewBoolVar("")   # familia activa; un dia cerrado no corta el bloque
+                    m.Add(ef == on).OnlyEnforceIf(open_[f])
+                    m.Add(ef == (prev if prev is not None else 0)).OnlyEnforceIf(open_[f].Not())
+                    r = m.NewBoolVar("")
+                    m.Add(r >= ef - (prev if prev is not None else 0))
+                    bloques.append(r)
+                    prev = ef
+            for f in dias:
+                mx = m.NewIntVar(0, len(fams), "")
+                m.Add(mx >= sum(on_d[f]) - 1)
+                bloques.append(mx)
     obj1 = (sum((W_DIA + W_DIA_POS * k) * open_[f] for k, f in enumerate(dias)) + sum(costo_cambio)
             + W_INV_SEMANA * sum(inv) + W_OF * sum(y.values())
             + W_BAJO_SS_KUD * sum(bajo_ss)
             + W_VIOL * sum(viol) + W_ARR_SKU * sum(arr) + sum(w * a for w, a in arr_g)
-            + W_LAVADO_TURNO * sum(lav) + W_CAMBIO_FIN_TURNO * sum(cfin))
+            + W_LAVADO_TURNO * sum(lav) + W_CAMBIO_FIN_TURNO * sum(cfin)
+            + W_BLOQUE_FAM * sum(bloques))
     m.Minimize(obj1)
     sol = cp_model.CpSolver()
     sol.parameters.max_time_in_seconds = TL_SEG
@@ -770,5 +835,5 @@ if __name__ == "__main__":
     eC, eD = evaluar(D, PC, vent, lineas), evaluar(D, PD, vent, lineas)
     for k in ("abiertos", "ocup", "ge95", "lt70", "arr_sku", "of_sku_sem", "inv_semana", "arr_emb", "arr_gr", "h_cambio", "viol",
               "unidades", "quiebres", "bajo_ss", "sobre_2ss", "cerrado_0", "cerrado_4",
-              "lavados", "cambio_fam_fin"):
+              "lavados", "cambio_fam_fin", "semanas_2fam", "bloques_fam", "dias_mixtos"):
         print(f"{k:10} {eC.get(k, 0):12.2f} {eD.get(k, 0):12.2f}")
