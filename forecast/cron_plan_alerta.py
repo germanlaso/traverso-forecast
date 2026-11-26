@@ -225,8 +225,14 @@ def prevuelo(imprimir_solo=False) -> int:
         r = subprocess.run(cmd, env=env, capture_output=True, text=True,
                            timeout=1200, cwd="/app")
         salida = (r.stdout or "") + (r.stderr or "")
-        ok = (r.returncode == 0) and ("Traceback" not in salida)
+        # (26-11-2026) La Pasada D atrapa sus propias excepciones (loguea "[PASADA_D] FALLÓ" y sigue con
+        # el plan de C): sin este chequeo, un error de la D pasaba el pre-vuelo como OK. Falla silenciosa.
+        fallo_d = "[PASADA_D] FALLÓ" in salida
+        ok = (r.returncode == 0) and ("Traceback" not in salida) and not fallo_d
         rc = r.returncode
+        for linea in salida.splitlines():   # (26-11) deja rastro de la D en traverso_prevuelo.log
+            if "[PASADA_D]" in linea:
+                logger.info("  %s", linea.strip()[-400:])
     except subprocess.TimeoutExpired:
         salida, ok, rc = "El pre-vuelo excedió los 20 minutos.", False, -1
     except Exception as e:
