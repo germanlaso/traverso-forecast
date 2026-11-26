@@ -82,7 +82,14 @@ W_CAMBIO_FIN_TURNO = int(_e("N2_D_W_CAMBIO_FIN_TURNO", "60"))  # cambio de famil
 SEQ_V21 = _e("N2_D_SEQ_V21", "0") == "1"
 if SEQ_V21:
     SEQ_V2 = True
-W_BLOQUE_FAM = int(_e("N2_D_W_BLOQUE_FAM", "1000"))   # por bloque de familia y por dia mixto en la semana
+W_BLOQUE_FAM = int(_e("N2_D_W_BLOQUE_FAM", "1000"))
+# (26-11-2026) ATRASO acotado: la barrera S* era estricta (bajo el SS, el stock de D no podia quedar bajo
+# el de C ningun dia), lo que obligaba a producir a diario y partia los bloques. Con N2_D_ATRASO_DIAS > 0,
+# D puede quedar hasta N dias de demanda bajo el stock de C, con dos resguardos: (1) Q* duro: nunca stock
+# negativo donde C no lo tenia (ni al cierre ni en el disponible del dia siguiente); (2) el deficit bajo SS
+# de la linea-semana (u*dia) no puede superar el de C en mas de N2_D_ATRASO_TOL_SS. 0 = identico a hoy.
+ATRASO_DIAS = float(_e("N2_D_ATRASO_DIAS", "0"))
+ATRASO_TOL_SS = float(_e("N2_D_ATRASO_TOL_SS", "0.10"))   # por bloque de familia y por dia mixto en la semana
 FAMILIA_RANK = {1: "VINAGRE", 2: "VINAGRE", 3: "VINAGRE", 4: "VINAGRE", 5: "LIMON", 6: "LIMON"}
 RANK = [  # (patrón en granel/descripción, rango): primero que calce. PROVISIONAL.
     (r"INCOLORO", 1), (r"VINAGRE.*BLANCO|VINAGRE_BLANCO|BALSAMICO BLANCO", 2),
@@ -342,6 +349,7 @@ def evaluar(D, P, ventana, lineas):
             if lun0 <= _d(f) < lunf:
                 R["quiebres"] += disp[(s, f)] < 0
                 R["bajo_ss"] += fin[(s, f)] < v["ss_u"]
+                R["deficit_ss_kud"] += max(0.0, float(v["ss_u"] or 0) - fin[(s, f)]) / 1000
                 R["sobre_2ss"] += _d(f).weekday() < 5 and v["ss_u"] > 0 and fin[(s, f)] > 2 * v["ss_u"]
     R["ocup"] = R["ocup_sum"] / R["abiertos"] if R["abiertos"] else 0
     R["corridas_sku_sem"] = R["arr_sku"] / R["sku_semana"] if R.get("sku_semana") else 0
@@ -356,6 +364,7 @@ def _limites(D):
     for s, serie in D.dd.items():
         fs = sorted(serie)
         cb = float(D.sp.get(s, {}).get("cap_bodega_u") or 0)
+        dem = [float(serie[g].get("demanda_corr_u") or 0) for g in fs]
         for k, f in enumerate(fs):
             v = serie[f]
             lb = min(0.0, v["ss_u"] - v["stock_fin_u"])                                  # S* (cierre)
@@ -364,6 +373,13 @@ def _limites(D):
                 # QUIEBRE_INTRADIA_SOLVER): no crea quiebres ni alertas BAJO_SS nuevas
                 vn = serie[fs[k + 1]]
                 lb = max(lb, min(0.0, max(vn.get("ss_u") or 0, 0) - vn["stock_disp_u"]))
+            if ATRASO_DIAS > 0:   # (26-11) atraso acotado, sin crear quiebres
+                w_ = dem[k:k + 7]
+                dprom = sum(w_) / len(w_) if w_ else 0.0
+                lbq = -max(float(v["stock_fin_u"]), 0.0)
+                if k + 1 < len(fs):
+                    lbq = max(lbq, -max(float(serie[fs[k + 1]]["stock_disp_u"]), 0.0))
+                lb = min(lb, max(lb - ATRASO_DIAS * dprom, lbq))
             LB[(s, f)] = lb
             UB[(s, f)] = max(0.0, cb - v["stock_fin_u"]) if cb > 0 else 1e12
     return LB, UB
@@ -398,7 +414,7 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
             m.AddHint(y[(s, f)], cur[(s, f)] > 0.5)
         m.Add(sum(x[(s, f)] for f in dias) * upc <= int(TOPE_CRECIMIENTO * totC[s]) + upc)
     # barreras Q*/S* y bodega, en la semana y hacia adelante
-    bajo_ss = []
+    bajo_ss, def_c = [], 0   # def_c: deficit bajo SS de C en la misma base (k u*dia, redondeo arriba)
     for s in S:
         upc = D.A[s]["upc"]
         acum_cur, fijo, acum_new = 0.0, 0.0, []
@@ -414,12 +430,15 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
             base = delta[s].get(f, 0.0) - acum_cur + fijo
             m.Add(expr >= int(-(-(LB[(s, f)] - base) // 1)))
             # déficit bajo SS con D: max(0, SS − (stock_fin_C + Δ)), Δ = expr + base
-            if W_BAJO_SS_KUD and acum_new and f in D.dd.get(s, {}):
-                falta_c = float(D.dd[s][f]["ss_u"] or 0) - float(finC.get((s, f), 0))
-                if falta_c > 0:
-                    dk = m.NewIntVar(0, int(falta_c // 1000) + 2, "")
+            if (W_BAJO_SS_KUD or ATRASO_DIAS > 0) and acum_new and f in D.dd.get(s, {}):
+                ss_ = float(D.dd[s][f]["ss_u"] or 0)
+                falta_c = ss_ - float(finC.get((s, f), 0))
+                if falta_c > 0 or (ATRASO_DIAS > 0 and ss_ > 0):
+                    tope_dk = int(max(falta_c, 0.0) // 1000) + 2 if ATRASO_DIAS <= 0 else int(ss_ // 1000) + 2
+                    dk = m.NewIntVar(0, tope_dk, "")
                     m.Add(dk * 1000 >= int(falta_c - base) - expr)
                     bajo_ss.append(dk)
+                    def_c += -(-int(max(falta_c, 0.0)) // 1000)
             if UB[(s, f)] < 1e11:
                 m.Add(expr <= int((UB[(s, f)] - base) // 1))
         dfin = sum(x[(s, f)] for f in dias) * upc + int(round(fijo)) - int(round(acum_cur))
@@ -429,6 +448,8 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
             m.Add(dfin >= int(-(-lbf // 1)))
         if ubf < 1e11:
             m.Add(dfin <= int(ubf // 1))
+    if ATRASO_DIAS > 0 and bajo_ss:   # (26-11) resguardo: el deficit bajo SS de la semana no empeora > TOL
+        m.Add(sum(bajo_ss) <= int((1 + ATRASO_TOL_SS) * def_c) + 1)
     # días: secuencia (circuito), capacidad, apertura, faltante bajo la meta
     open_, costo_cambio, viol, falt = {}, [], [], []
     starts_all, ends_all, lav = {}, {}, []   # (23-11) secuencia v2
@@ -568,7 +589,7 @@ def _resolver(D, P, delta, LB, UB, l, dias_sem, fut, desde, finC, log):
                 bloques.append(mx)
     obj1 = (sum((W_DIA + W_DIA_POS * k) * open_[f] for k, f in enumerate(dias)) + sum(costo_cambio)
             + W_INV_SEMANA * sum(inv) + W_OF * sum(y.values())
-            + W_BAJO_SS_KUD * sum(bajo_ss)
+            + max(W_BAJO_SS_KUD, 0) * sum(bajo_ss)
             + W_VIOL * sum(viol) + W_ARR_SKU * sum(arr) + sum(w * a for w, a in arr_g)
             + W_LAVADO_TURNO * sum(lav) + W_CAMBIO_FIN_TURNO * sum(cfin)
             + W_BLOQUE_FAM * sum(bloques))
@@ -835,5 +856,5 @@ if __name__ == "__main__":
     eC, eD = evaluar(D, PC, vent, lineas), evaluar(D, PD, vent, lineas)
     for k in ("abiertos", "ocup", "ge95", "lt70", "arr_sku", "of_sku_sem", "inv_semana", "arr_emb", "arr_gr", "h_cambio", "viol",
               "unidades", "quiebres", "bajo_ss", "sobre_2ss", "cerrado_0", "cerrado_4",
-              "lavados", "cambio_fam_fin", "semanas_2fam", "bloques_fam", "dias_mixtos"):
+              "lavados", "cambio_fam_fin", "semanas_2fam", "bloques_fam", "dias_mixtos", "deficit_ss_kud"):
         print(f"{k:10} {eC.get(k, 0):12.2f} {eD.get(k, 0):12.2f}")
