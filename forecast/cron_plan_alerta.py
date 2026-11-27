@@ -206,8 +206,8 @@ def prevuelo(imprimir_solo=False) -> int:
     que hay que detectar es justamente que cron_plan CRASHEE. Si el aviso viviera
     adentro, un traceback impediría que se ejecute — exactamente lo del 12-08.
 
-    Corre con los TL del solver en 5 s: no interesa la calidad del plan, solo que
-    el ciclo NO SE ROMPA. Tarda ~2 min en vez de ~90.
+    Corre con los TL del solver en 60 s: no interesa la calidad del plan, solo que
+    el ciclo NO SE ROMPA (incluida la Pasada D). Tarda ~5 min en vez de ~90.
     """
     import os
     import subprocess
@@ -215,8 +215,11 @@ def prevuelo(imprimir_solo=False) -> int:
     env = dict(os.environ)
     # TL cortos: el pre-vuelo mide que no crashee, no que el plan sea bueno.
     # OJO: el TL de la Pasada A lo controla N2_TL_A, NO --time-limit.
-    env["N2_TL_A"] = "5"
-    env["N2_TL_C"] = "5"
+    # (27-11-2026) A y C con 60 s: con 5 s la C quedaba sin solucion y la Pasada D nunca se ejercitaba
+    # (y fallaba con KeyError). 60 s alcanzan para una solucion factible (la C parte del hint de la A),
+    # asi el pre-vuelo prueba el ciclo completo con la D. Tarda ~5 min en vez de ~3.
+    env["N2_TL_A"] = "60"
+    env["N2_TL_C"] = "60"
     cmd = [sys.executable, "/app/cron_plan.py", "--dry-run", "--skip-refresh",
            "--no-promote", "--horizonte", "8", "--time-limit", "5"]
 

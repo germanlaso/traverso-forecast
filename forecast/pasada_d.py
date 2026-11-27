@@ -688,6 +688,11 @@ def aplicar_pasada_d(resultado: dict, kw: dict) -> dict:
     """Aplica D sobre el resultado de C, EN SU LUGAR. Devuelve un diagnóstico.
     Si D empeora quiebres o días bajo SS (control final), no modifica nada."""
     t0 = time.time()
+    if not (resultado or {}).get("detalle_diario"):
+        # (27-11-2026) C sin solucion (p.ej. pre-vuelo con TL de 5 s): no hay plan que reordenar.
+        # Antes reventaba con KeyError('detalle_diario') y el pre-vuelo lo reportaba como falla de la D.
+        logger.warning("[PASADA_D] OMITIDA: el resultado de C no trae detalle_diario (C sin solucion); queda C")
+        return {"omitida": True}
     D = Datos.desde_resultado(resultado, kw)
     PC = {k: v for k, v in D.prodC.items() if v > 0.5}
     PD, log, desde, vent = optimizar(D)
